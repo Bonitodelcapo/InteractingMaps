@@ -1,5 +1,7 @@
 .claude
 data/shapes_rotation/events.txt
+data/shapes_rotation/groundtruth.txt
+data/shapes_rotation/imu.txt
 
 ###################################
 # Python.gitignore

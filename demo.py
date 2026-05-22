@@ -61,7 +61,7 @@ def make_real_source():
         CALIB_FILE,
         H=H, W=W,
         frame_duration=FRAME_DURATION,
-        t_start=0.5,
+        t_start=8.6,
         n_frames=N_FRAMES,
     )
     focal_length = seq.calib.fx
@@ -104,6 +104,18 @@ C = compute_calibration(H, W, focal_length)
 net = InteractingMaps(H=H, W=W, f=focal_length, **NET_PARAMS)
 net.reset(scale=0.01)
 
+initial_R = np.array([0.0, 0.0, 0.026])
+ 
+USE_THESIS_VERSION = True
+
+if USE_THESIS_VERSION:
+    from interacting_maps.network_dissertation import InteractingMapsThesis
+    net = InteractingMapsThesis(H=H, W=W, f=focal_length, **NET_PARAMS)
+    net.q_R.value = initial_R
+else:
+    from interacting_maps.network import InteractingMaps
+    net = InteractingMaps(H=H, W=W, f=focal_length, **NET_PARAMS)
+    net.R = initial_R
 
 # ---------------------------------------------------------------------------
 # Visualisation helpers
