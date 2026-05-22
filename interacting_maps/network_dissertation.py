@@ -63,10 +63,10 @@ class Cost_OFCE(Cost):
         g_mag_sq = np.sum(g**2, axis=-1)
         
         # Multiply the gradient by delta_VFG before sending!
-        grad_F = (error / (1.0 + g_mag_sq))[..., np.newaxis] * g  
+        grad_F = 2.0 * (error / (1.0 + g_mag_sq))[..., np.newaxis] * g  
         self.q['F'].add_gradient(grad_F * self.delta_VFG)
         
-        grad_G = (error / (1.0 + f_mag_sq))[..., np.newaxis] * f  
+        grad_G = 2.0 * (error / (1.0 + f_mag_sq))[..., np.newaxis] * f  
         self.q['G'].add_gradient(grad_G * self.delta_VFG)
 
 
@@ -153,7 +153,7 @@ class InteractingMapsThesis:
         # Initialize Costs WITH THEIR SPECIFIC DELTAS
         q_dict = {'V': self.q_V, 'I': self.q_I, 'G': self.q_G, 'F': self.q_F, 'R': self.q_R, 'C': self.q_C}
         self.costs = [
-            Cost_OFCE(q_dict, delta_VFG), 
+            Cost_OFCE(q_dict, delta_VFG*2.5), 
             Cost_Spatial(q_dict, delta_IG, delta_GI), 
             Cost_Kinematics(q_dict, delta_RF, delta_FR)
         ]
