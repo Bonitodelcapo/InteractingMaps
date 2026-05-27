@@ -3,24 +3,31 @@ InteractingMaps — Cook et al., IJCNN 2011.
 
 Six maps: V (input), I, G, F, C (constant), R.
 Three constraints:
-    1.  -V  = F · G                  (optical flow constraint, Eq. 1)
+    1.  V + F · G = 0               (optical flow constraint, Eq. 1)
     2.   G  = ∇I                     (gradient definition,     Eq. 2)
-    3.   F  = m32(R × C)             (rotation → flow,         Eq. 3)
+    3.   F  = C_mat @ R              (rotation → flow,         Eq. 3)
 
 Each update rule takes a small relaxation step (delta) towards satisfying
 its constraint, while leaving all other maps unchanged.
+
+Update strategy: Sequential (Gauss-Seidel) — each map is updated immediately,
+so subsequent updates see the latest values. This is the key difference from
+the thesis version (network_dissertation.py) which uses simultaneous updates.
 """
 
 import numpy as np
-from .camera import compute_calibration, m32, m23
+from .camera import compute_calibration, build_kinematic_matrix
 
 
 class InteractingMaps:
     def __init__(
         self,
-        H: int = 128,
-        W: int = 128,
-        f: float = 64.0,
+        H: int,
+        W: int,
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float,
         delta_VFG: float = 0.1,
         delta_IG: float = 0.1,
         delta_GI: float = 0.1,
@@ -29,7 +36,10 @@ class InteractingMaps:
     ):
         self.H = H
         self.W = W
-        self.f = f
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
 
         # Relaxation step sizes
         self.delta_VFG = delta_VFG  # optical flow constraint (updates F and G)
@@ -38,8 +48,11 @@ class InteractingMaps:
         self.delta_RF = delta_RF    # F from R,C (Eq. 10)
         self.delta_FR = delta_FR    # R from F,C (Eq. 13)
 
-        # Constant calibration map
-        self.C = compute_calibration(H, W, f)  # (H, W, 3)
+        # Constant calibration map (unit direction per pixel)
+        self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3)
+
+        # Precompute the perspective-correct kinematic matrix (Thesis Eq. 6.37)
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)  # (H, W, 2, 3)
 
         # Mutable maps — initialised by reset()
         self.I = np.zeros((H + 1, W + 1), dtype=np.float64)
@@ -47,8 +60,8 @@ class InteractingMaps:
         self.F = np.zeros((H, W, 2), dtype=np.float64)
         self.R = np.zeros(3, dtype=np.float64)
 
-        # Pre-build the least-squares A matrix for the R update (constant)
-        self._build_R_lsq_matrix()
+        # Pre-build the normal equations matrix for the R least-squares update
+        self._build_R_normal_equations()
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -63,7 +76,7 @@ class InteractingMaps:
         self.R = np.zeros(3, dtype=np.float64)
 
     # ------------------------------------------------------------------
-    # Constraint 1:  -V = F · G  (Eq. 1 / Eq. 5)
+    # Constraint 1:  V + F · G = 0  (Eq. 1 / Eq. 5)
     # ------------------------------------------------------------------
 
     def update_F_from_VG(self, V: np.ndarray) -> None:
@@ -87,9 +100,17 @@ class InteractingMaps:
     # ------------------------------------------------------------------
 
     def _grad_I(self) -> np.ndarray:
-        """Forward-difference gradient of I, size (H, W, 2)."""
-        dIx = self.I[:self.H, 1:self.W + 1] - self.I[:self.H, :self.W]
-        dIy = self.I[1:self.H + 1, :self.W] - self.I[:self.H, :self.W]
+        """
+        Forward-difference gradient of I, size (H, W, 2).
+
+        Convention:
+            G[..., 0] = dI/dx  (horizontal, along columns)
+            G[..., 1] = dI/dy  (vertical, along rows)
+
+        I is (H+1, W+1) so forward differences yield a full (H, W) map.
+        """
+        dIx = self.I[:self.H, 1:self.W + 1] - self.I[:self.H, :self.W]  # horizontal
+        dIy = self.I[1:self.H + 1, :self.W] - self.I[:self.H, :self.W]  # vertical
         return np.stack([dIx, dIy], axis=-1)  # (H, W, 2)
 
     def update_G_from_I(self) -> None:
@@ -110,75 +131,68 @@ class InteractingMaps:
         """
         Psi = self.G - self._grad_I()  # (H, W, 2)
 
-        Psi_x = Psi[..., 0]  # (H, W)
-        Psi_y = Psi[..., 1]
+        Psi_x = Psi[..., 0]  # (H, W) — horizontal component
+        Psi_y = Psi[..., 1]  # (H, W) — vertical component
 
-        # Ψ̂_x[v, u] = Ψ_x[v, u] − Ψ_x[v, u-1]   (Eq. 8, out-of-bounds = 0)
+        # Ψ̂_x[v, u] = Ψ_x[v, u] − Ψ_x[v, u-1]   (Eq. 8, boundary = 0)
         Psi_hat_x = np.zeros((self.H, self.W), dtype=np.float64)
         Psi_hat_x[:, 0] = Psi_x[:, 0]
         Psi_hat_x[:, 1:] = Psi_x[:, 1:] - Psi_x[:, :-1]
 
+        # Ψ̂_y[v, u] = Ψ_y[v, u] − Ψ_y[v-1, u]
         Psi_hat_y = np.zeros((self.H, self.W), dtype=np.float64)
         Psi_hat_y[0, :] = Psi_y[0, :]
         Psi_hat_y[1:, :] = Psi_y[1:, :] - Psi_y[:-1, :]
 
-        self.I[:self.H, :self.W] = (
-            (1.0 - self.delta_GI) * self.I[:self.H, :self.W]
-            + self.delta_GI * (
-                self.I[:self.H, :self.W] - Psi_hat_x - Psi_hat_y
-            )
-        )
+        # I[v,u] ← I[v,u] - δ·(Ψ̂_x + Ψ̂_y)
+        self.I[:self.H, :self.W] -= self.delta_GI * (Psi_hat_x + Psi_hat_y)
 
     # ------------------------------------------------------------------
-    # Constraint 3:  F = m32(R × C)  (Eqs. 3, 10-13)
+    # Constraint 3:  F = C_mat @ R  (Eqs. 3, 10-13)
     # ------------------------------------------------------------------
 
     def update_F_from_RC(self) -> None:
         """
-        Relaxation step: F ← (1-δ)·F + δ·m32(R×C)  (Eq. 10).
+        Relaxation step: F ← (1-δ)·F + δ·(C_mat @ R)  (Eq. 10).
+
+        Uses the perspective-correct kinematic matrix instead of m32(R×C).
         """
-        R_bc = np.broadcast_to(self.R, (self.H, self.W, 3))  # (H,W,3)
-        RxC = np.cross(R_bc, self.C)                          # (H,W,3)
-        F_candidate = m32(RxC, self.C, self.f)                # (H,W,2)
+        F_candidate = np.einsum('hwij,j->hwi', self._C_mat, self.R)  # (H,W,2)
         self.F = (1.0 - self.delta_RF) * self.F + self.delta_RF * F_candidate
 
-    def _build_R_lsq_matrix(self) -> None:
+    def _build_R_normal_equations(self) -> None:
         """
-        Pre-build the constant part of the linear system for the R update.
+        Pre-build the constant (C_mat^T @ C_mat) matrix for the R update.
 
-        R × C = F3d  is linear in R.  Writing it out component-wise:
-            (R × C)_x = Ry*Cz - Rz*Cy = [0,  Cz, -Cy] · R = F3d_x
-            (R × C)_y = Rz*Cx - Rx*Cz = [-Cz, 0,  Cx] · R = F3d_y
+        The least-squares problem is:
+            argmin_R  Σ_{x,y} || F[x,y] - C_mat[x,y] @ R ||²
 
-        A_lsq has shape (2·H·W, 3) and is constant (depends only on C).
+        Normal equations: (Σ C_mat^T C_mat) R = Σ C_mat^T F
+
+        The left-hand side matrix M = Σ C_mat^T @ C_mat is constant (3x3).
         """
-        C_flat = self.C.reshape(-1, 3)            # (N, 3)
-        cx, cy, cz = C_flat[:, 0], C_flat[:, 1], C_flat[:, 2]
-        N = C_flat.shape[0]
-        zeros = np.zeros(N, dtype=np.float64)
-
-        # Row for x-component: [0, Cz, -Cy]
-        A_row_x = np.stack([zeros, cz, -cy], axis=-1)    # (N, 3)
-        # Row for y-component: [-Cz, 0, Cx]
-        A_row_y = np.stack([-cz, zeros, cx], axis=-1)    # (N, 3)
-
-        self._A_lsq = np.vstack([A_row_x, A_row_y])      # (2N, 3)
-        self._N_pixels = N
+        # C_mat is (H, W, 2, 3)
+        # M = Σ C_mat[h,w]^T @ C_mat[h,w]  → sum of (3,2)@(2,3) = (3,3)
+        self._M_normal = np.einsum('hwji,hwjk->ik', self._C_mat, self._C_mat)  # (3, 3)
+        self._M_inv = np.linalg.inv(self._M_normal)  # (3, 3)
 
     def update_R_from_FC(self) -> None:
         """
-        Least-squares estimate of R from all optical-flow vectors  (Eq. 13).
+        Least-squares estimate of R from all optical-flow vectors (Eq. 13).
 
-        R × C = F3d  →  A_lsq · R = b
+        Normal equations:  M @ R_new = Σ C_mat^T @ F
         R ← (1-δ)·R + δ·R_new
         """
-        F3d = m23(self.F, self.C, self.f)               # (H,W,3)
-        F3d_flat = F3d.reshape(-1, 3)                   # (N, 3)
+        # Right-hand side: v = Σ C_mat^T @ F  → (3,)
+        # C_mat is (H,W,2,3):  subscript 'hwji' → j=flow(2), i=rot(3)
+        # F is (H,W,2):        subscript 'hwj'  → j=flow(2)
+        # Contract over h,w,j; output i → (3,)
+        v = np.einsum('hwji,hwj->i', self._C_mat, self.F)  # ← FIX: 'hwi->j' → 'hwj->i'
 
-        # Right-hand side: stacked x then y components of F3d
-        b = np.concatenate([F3d_flat[:, 0], F3d_flat[:, 1]])  # (2N,)
+        # Solve: R_new = M^{-1} @ v
+        R_new = self._M_inv @ v
 
-        R_new, _, _, _ = np.linalg.lstsq(self._A_lsq, b, rcond=None)
+        # Blend toward new estimate
         self.R = (1.0 - self.delta_FR) * self.R + self.delta_FR * R_new
 
     # ------------------------------------------------------------------
@@ -188,6 +202,9 @@ class InteractingMaps:
     def step(self, V: np.ndarray, n_iters: int = 20) -> None:
         """
         Process one input frame V by running n_iters relaxation cycles.
+
+        Uses sequential (Gauss-Seidel) updates: each map update immediately
+        sees the latest values from previous updates in the same iteration.
 
         Parameters
         ----------
@@ -207,7 +224,7 @@ class InteractingMaps:
     # ------------------------------------------------------------------
 
     def residual_VFG(self, V: np.ndarray) -> float:
-        """Mean absolute residual of the optical flow constraint -V = F·G."""
+        """Mean absolute residual of the optical flow constraint V + F·G = 0."""
         return float(
             np.mean(np.abs(V + np.einsum('hwk,hwk->hw', self.F, self.G)))
         )

@@ -1,16 +1,6 @@
 """
-Demo for the Interacting Maps network (Cook et al., IJCNN 2011).
-
-Modes
------
-1. Real event-camera data (default if data/shapes_rotation/ exists):
-   Uses the RPG shapes_rotation dataset (DAVIS 240C sensor, 128×128 crop).
-   Download: http://rpg.ifi.uzh.ch/datasets/davis/shapes_rotation.zip
-   Extract events.txt and calib.txt to  data/shapes_rotation/
-
-2. Synthetic fallback:
-   A smooth natural-looking image rotated in front of a virtual DVS sensor.
-
+Demo for the Interacting Maps network (Cook et al., IJCNN 2011)
+If USE_THESIS = True, uses the energy-based network from Martel 2019 Thesis (Chapter 6)).
 Run:
     python demo.py
 """
@@ -23,99 +13,105 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 
-from interacting_maps import InteractingMaps
 from interacting_maps.camera import compute_calibration
+from interacting_maps.network_dissertation import InteractingMapsThesis
+from interacting_maps.network import InteractingMaps
+
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration — DATASET SPECIFIC
 # ---------------------------------------------------------------------------
 
-DATA_DIR       = os.path.join(os.path.dirname(__file__), 'data', 'shapes_rotation')
-EVENTS_FILE    = os.path.join(DATA_DIR, 'events.txt')
-CALIB_FILE     = os.path.join(DATA_DIR, 'calib.txt')
+# Choose your dataset:
+DATASET = 'poster_rotation'   # or 'boxes_rotation', 'dynamic_rotation', etc.
 
-H, W          = 128, 128          # crop / output resolution
-N_FRAMES      = 40
-ITERS_PER_FRAME = 30
-FRAME_DURATION  = 0.020           # seconds per frame for real data
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', DATASET)
+EVENTS_FILE = os.path.join(DATA_DIR, 'events.txt')
+CALIB_FILE = os.path.join(DATA_DIR, 'calib.txt')
+IMU_FILE = os.path.join(DATA_DIR, 'imu.txt')
+GT_FILE = os.path.join(DATA_DIR, 'groundtruth.txt')
 
-# Network step sizes
-NET_PARAMS = dict(
-    delta_VFG=0.08,
-    delta_IG=0.12,
-    delta_GI=0.08,
-    delta_RF=0.10,
-    delta_FR=0.50,
-)
+# Per-dataset configurations (from find_segments.py output):
+DATASET_CONFIGS = {
+    'shapes_rotation': {
+        't_start': 2.416,       
+        'frame_duration': 0.020,
+        'n_frames': 25,
+        'initial_R':  np.array([0.00079, -0.01494, 0.00237]),
+        'expected_omega': np.array([0.040, -0.747, 0.118]),
+    },
+    'boxes_rotation': {
+        't_start': 10.872,
+        'frame_duration': 0.020,
+        'n_frames': 25,
+        'initial_R': np.array([0.00308, 0.00203, -0.02959]),
+        'expected_omega': np.array([0.154, 0.102, -1.479]),
+    },
+    'poster_rotation':{
+        't_start':  8.816,
+        'frame_duration': 0.020,
+        'n_frames': 25,
+        'initial_R': np.array([0.02242, 0.00101, 0.00055]),
+        'expected_omega': np.array([1.121, 0.051, 0.027]),
+    }
+}
 
+# Load config for chosen dataset
+cfg = DATASET_CONFIGS[DATASET]
+t_start = cfg['t_start']
+frame_duration = cfg['frame_duration']
+n_frames = cfg['n_frames']
+initial_R = cfg['initial_R']
+
+ITERS_PER_FRAME = 75
+USE_THESIS_VERSION = False
 
 # ---------------------------------------------------------------------------
 # Choose data source
 # ---------------------------------------------------------------------------
 
 def make_real_source():
-    """Load the RPG shapes_rotation dataset and return a frame iterator."""
     from data_loader import EventFrameSequence
     seq = EventFrameSequence(
-        EVENTS_FILE,
-        CALIB_FILE,
-        H=H, W=W,
-        frame_duration=FRAME_DURATION,
-        t_start=8.6,
-        n_frames=N_FRAMES,
+        EVENTS_FILE, CALIB_FILE,
+        frame_duration=cfg['frame_duration'],
+        t_start=cfg['t_start'],        
+        n_frames=cfg['n_frames'],
+        clip_value=10.0,
     )
-    focal_length = seq.calib.fx
-    frames = list(seq)          # (V, t) pairs
-    return frames, focal_length
-
-
-def make_synthetic_source():
-    """Generate synthetic event frames from a natural-looking image."""
-    from simulation import DVSSimulator
-    R_true = np.array([0.008, 0.015, 0.003])
-    sim = DVSSimulator(
-        H=H, W=W, f=64.0,
-        image_kind='random',
-        noise_std=0.003,
-        rng_seed=42,
-    )
-    frames = [(sim.frame_from_rotation(R_true), None) for _ in range(N_FRAMES)]
-    return frames, 64.0
-
+    return list(seq), seq.calib, seq.H, seq.W
 
 use_real = os.path.isfile(EVENTS_FILE) and os.path.isfile(CALIB_FILE)
-if use_real:
-    print("Using real event-camera data (shapes_rotation dataset).")
-    frames, focal_length = make_real_source()
-else:
-    print("Real data not found. Using synthetic simulation.")
-    print(f"  To use real data: download shapes_rotation.zip from")
-    print(f"  http://rpg.ifi.uzh.ch/datasets/davis/shapes_rotation.zip")
-    print(f"  and extract events.txt + calib.txt to  {DATA_DIR}/")
-    frames, focal_length = make_synthetic_source()
-
-C = compute_calibration(H, W, focal_length)
+print(f"Using real event-camera data ({DATA_DIR} dataset).")
+frames, calib, H, W = make_real_source()
+fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 
 
 # ---------------------------------------------------------------------------
 # Build network
 # ---------------------------------------------------------------------------
 
-net = InteractingMaps(H=H, W=W, f=focal_length, **NET_PARAMS)
-net.reset(scale=0.01)
-
-initial_R = np.array([0.0, 0.0, 0.026])
- 
-USE_THESIS_VERSION = True
-
 if USE_THESIS_VERSION:
-    from interacting_maps.network_dissertation import InteractingMapsThesis
-    net = InteractingMapsThesis(H=H, W=W, f=focal_length, **NET_PARAMS)
-    net.q_R.value = initial_R
+    NET_PARAMS = dict(
+        delta_VFG=0.20,    # OFCE: strong (must compete with kinematics) 0.15
+        delta_IG=0.10,     # G from I: moderate
+        delta_GI=0.05,     # I from G: gentle (Poisson step, needs stability)
+        delta_RF=0.01,     # F from R: WEAK (let OFCE build local structure) 0.03
+        delta_FR=0.80,     # R from F: strong (global aggregate, stable)  0.50
+    )
+
+    ITERS_PER_FRAME = 50   # Thesis uses 50-75 (Section 6.8)
+    net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
+    net.initialize_from_rotation(initial_R)
+
 else:
-    from interacting_maps.network import InteractingMaps
-    net = InteractingMaps(H=H, W=W, f=focal_length, **NET_PARAMS)
-    net.R = initial_R
+    NET_PARAMS = dict(
+            delta_VFG=0.08, delta_IG=0.12, delta_GI=0.08,
+            delta_RF=0.10, delta_FR=0.50,
+        )
+    net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
+    net.reset(scale=0.01)
+    net.R = initial_R.copy()
 
 # ---------------------------------------------------------------------------
 # Visualisation helpers
@@ -192,7 +188,7 @@ line_GI,  = ax_res.semilogy([], [], 'r-', lw=1.5, label='|G − ∇I|   (gradien
 ax_res.set_title('Constraint residuals over frames', fontsize=8)
 ax_res.set_xlabel('Frame')
 ax_res.legend(fontsize=7)
-ax_res.set_xlim(0, N_FRAMES)
+ax_res.set_xlim(0, n_frames)
 ax_res.set_ylim(1e-5, 2)
 
 frame_idx = [0]
@@ -245,7 +241,7 @@ def update(_):
 
     sparsity = np.mean(V == 0) * 100
     print(
-        f'Frame {t+1:3d}/{N_FRAMES}  '
+        f'Frame {t+1:3d}/{n_frames}  '
         f'res_VFG={res_VFG_hist[-1]:.4f}  '
         f'res_GI={res_GI_hist[-1]:.5f}  '
         f'V_sparsity={sparsity:.0f}%  '
@@ -261,7 +257,7 @@ def update(_):
 
 ani = animation.FuncAnimation(
     fig, update,
-    frames=N_FRAMES,
+    frames=n_frames,
     interval=100,
     blit=False,
     repeat=False,

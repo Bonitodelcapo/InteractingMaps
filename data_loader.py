@@ -194,80 +194,53 @@ def events_to_vframe(
 # ---------------------------------------------------------------------------
 # Frame sequence builder
 # ---------------------------------------------------------------------------
-
 class EventFrameSequence:
-    """
-    Iterates over a sequence of V frames built from a loaded events array.
-
-    Usage
-    -----
-    seq = EventFrameSequence('data/shapes_rotation/events.txt',
-                             calib_path='data/shapes_rotation/calib.txt',
-                             H=128, W=128)
-    for V, t in seq:
-        # feed V into the network
-    """
-
     def __init__(
         self,
         events_txt: str,
         calib_path: str,
-        H: int = 128,
-        W: int = 128,
-        frame_duration: float = 0.020,   # seconds per frame (≈ 50 fps)
-        t_start: float = 0.5,            # skip first 0.5 s (sensor settling)
+        frame_duration: float = 0.020,
+        t_start: float = 0.5,
         n_frames: int = 50,
         clip_value: float = 3.0,
     ):
-        self.H = H
-        self.W = W
+        # Load real calibration — no modification
+        self.calib = CameraCalibration(calib_path)
+
+        # Use FULL sensor size from calibration (no crop!)
+        self.H = int(round(self.calib.cy * 2))
+        self.W = int(round(self.calib.cx * 2))
+
+        # No offset — we use the entire sensor
+        self.x_offset = 0
+        self.y_offset = 0
+
         self.frame_duration = frame_duration
         self.clip_value = clip_value
 
-        calib_raw = CameraCalibration(calib_path)
-        H_sensor, W_sensor = calib_raw.sensor_size()
-
-        # Centre crop to (H, W)
-        self.x_offset = max(0, int(calib_raw.cx) - W // 2)
-        self.y_offset = max(0, int(calib_raw.cy) - H // 2)
-        self.calib = calib_raw.crop_calibration(self.x_offset, self.y_offset)
-
-        print(f"Loading events from {events_txt} …")
-        print(f"  Sensor: {W_sensor}×{H_sensor}, crop offset: ({self.x_offset}, {self.y_offset})")
-        print(f"  Output frame: {W}×{H},  {n_frames} frames × {frame_duration*1000:.0f} ms")
+        print(f"Using calib.txt directly: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
+              f"cx={self.calib.cx:.1f} cy={self.calib.cy:.1f}")
+        print(f"Full sensor: {self.W}×{self.H} — no crop")
 
         t_end = t_start + n_frames * frame_duration + 0.1
-        all_events = load_events_fast(events_txt, t_start=t_start, duration=t_end - t_start)
-        self._events = all_events
+        self._events = load_events_fast(events_txt, t_start=t_start, duration=t_end - t_start)
         self._t_start = t_start
         self._n_frames = n_frames
-
-        print(f"  Loaded {len(all_events):,} events covering "
-              f"{all_events[-1, 0] - all_events[0, 0]:.3f} s")
+        self._dt = frame_duration
 
     def __iter__(self):
-        """Yield (V_frame, frame_midtime) for each time bin."""
         events = self._events
-        t0 = self._t_start
-        dt = self.frame_duration
         for k in range(self._n_frames):
-            t_lo = t0 + k * dt
-            t_hi = t_lo + dt
+            t_lo = self._t_start + k * self._dt
+            t_hi = t_lo + self._dt
             mask = (events[:, 0] >= t_lo) & (events[:, 0] < t_hi)
             V = events_to_vframe(
-                events[mask],
-                self.H, self.W,
-                x_offset=self.x_offset,
-                y_offset=self.y_offset,
-                clip_value=self.clip_value,
-                normalise=True,
+                events[mask], self.H, self.W,
+                x_offset=0, y_offset=0,  # no crop
+                clip_value=self.clip_value, normalise=True,
             )
             yield V, (t_lo + t_hi) / 2
 
     def __len__(self) -> int:
         return self._n_frames
 
-    def calibration_matrix(self) -> np.ndarray:
-        """Return the (H, W, 3) unit-vector calibration map C for this crop."""
-        from interacting_maps.camera import compute_calibration
-        return compute_calibration(self.H, self.W, self.calib.fx)

@@ -1,11 +1,24 @@
 """
-InteractingMaps — Message Passing (Energy-Based) Version based on Martel's 2019 Thesis.
-Phase 1: Compute all gradients (messages) based on the current state.
-Phase 2: Simultaneously update all maps.
+InteractingMaps — Energy-Based Message Passing, Martel 2019 Thesis (Chapter 6).
+
+Faithfully implements Algorithm 6.5 with:
+- BLEND updates for linear relations (Eq. 6.140-6.141):
+    q ← (1-η)q + η·target  =  q - η·(q - target)
+- GRADIENT updates for nonlinear relations (Eq. 6.12-6.14):
+    q ← q - η·∂C/∂q
+
+Phase 1: All costs compute "gradients" (messages) from current state.
+Phase 2: All quantities update simultaneously.
+
+Key implementation detail:
+    The simultaneous (Jacobi) update requires quantities to start in a
+    MUTUALLY CONSISTENT state. If R is known, F must be initialized as
+    F = C·R (not zero), otherwise the kinematic cost crushes R to zero
+    before OFCE can develop structure.
 """
 
 import numpy as np
-from .camera import compute_calibration
+from .camera import compute_calibration, build_kinematic_matrix
 
 # ---------------------------------------------------------------------------
 # 1. THE CORE ARCHITECTURE
@@ -18,147 +31,189 @@ class Quantity:
         self.shape = shape
         self.value = np.zeros(shape, dtype=np.float64)
         self.gradient_accumulator = np.zeros(shape, dtype=np.float64)
-        
+
     def reset_gradient(self):
-        """Phase 1 prep: Clear out old messages."""
         self.gradient_accumulator.fill(0)
-        
+
     def add_gradient(self, grad):
-        """Phase 1 action: Costs push their errors here."""
         self.gradient_accumulator += grad
-        
+
     def update(self, learning_rate):
-        """Phase 2 action: Step in the opposite direction of the gradient."""
         self.value -= learning_rate * self.gradient_accumulator
 
 
 class Cost:
-    """Base class for mathematical relations."""
+    """Base class for relations between quantities."""
     def __init__(self, quantities_dict):
         self.q = quantities_dict
-        
+
     def compute_and_send_gradients(self):
         raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
-# 2. THE MATHEMATICAL RELATIONS (COSTS)
+# 2. THE COSTS (Thesis Table 6.1, Section 6.4.2)
 # ---------------------------------------------------------------------------
+
 class Cost_OFCE(Cost):
-    """Optical Flow Constraint: V + F * G = 0"""
-    def __init__(self, quantities_dict, delta_VFG):
+    """
+    Optical Flow Constraint: V + F·G = 0  (Thesis Eq. 6.54-6.55, Table 6.1)
+
+    Cost C₂ = Σ (V + F·G)²
+
+    NONLINEAR relation → gradient descent updates:
+        ∂C₂/∂F = 2(V+F·G)·G
+        ∂C₂/∂G = 2(V+F·G)·F
+
+    Per-pixel gradient clipping prevents the cubic instability that arises
+    when |F| and |G| are both large.
+    """
+    def __init__(self, quantities_dict, delta_VFG, max_grad=5.0):
         super().__init__(quantities_dict)
         self.delta_VFG = delta_VFG
+        self.max_grad = max_grad
 
     def compute_and_send_gradients(self):
-        v = self.q['V'].value
-        f = self.q['F'].value
-        g = self.q['G'].value
+        v = self.q['V'].value   # (H, W)
+        f = self.q['F'].value   # (H, W, 2)
+        g = self.q['G'].value   # (H, W, 2)
 
-        # THE MISSING THESIS DETAIL: Gradient Normalization
-        # To prevent the cubic NaN explosion, we divide the error 
-        # by the squared magnitude of the interacting maps.
-        error = v + np.sum(f * g, axis=-1) 
-        f_mag_sq = np.sum(f**2, axis=-1)
-        g_mag_sq = np.sum(g**2, axis=-1)
-        
-        # Multiply the gradient by delta_VFG before sending!
-        grad_F = 2.0 * (error / (1.0 + g_mag_sq))[..., np.newaxis] * g  
+        # Constraint residual (scalar per pixel)
+        error = v + np.sum(f * g, axis=-1)  # (H, W)
+
+        # Raw gradients from Table 6.1
+        grad_F = 2.0 * error[..., np.newaxis] * g  # (H, W, 2)
+        grad_G = 2.0 * error[..., np.newaxis] * f  # (H, W, 2)
+
+        # Per-pixel clip to bound cubic growth
+        grad_F = np.clip(grad_F, -self.max_grad, self.max_grad)
+        grad_G = np.clip(grad_G, -self.max_grad, self.max_grad)
+
         self.q['F'].add_gradient(grad_F * self.delta_VFG)
-        
-        grad_G = 2.0 * (error / (1.0 + f_mag_sq))[..., np.newaxis] * f  
         self.q['G'].add_gradient(grad_G * self.delta_VFG)
 
 
 class Cost_Spatial(Cost):
-    """Spatial Gradient constraint: G = Gradient(I)"""
+    """
+    Spatial Gradient Relation: G = ∇I  (Thesis Eq. 6.56-6.65)
+
+    LINEAR relation → BLEND updates (Eq. 6.141):
+        G: blend toward ∇I
+        I: iterative PDE step (Eq. 6.61)
+
+    Convention:
+        G[..., 0] = dI/dx  (horizontal, along columns)
+        G[..., 1] = dI/dy  (vertical, along rows)
+    """
     def __init__(self, quantities_dict, delta_IG, delta_GI):
         super().__init__(quantities_dict)
         self.delta_IG = delta_IG
         self.delta_GI = delta_GI
 
     def compute_and_send_gradients(self):
-        i = self.q['I'].value
-        g = self.q['G'].value
-        
-        # Compute math gradient of I using Forward Difference
-        grad_I_x = np.zeros_like(i)
-        grad_I_y = np.zeros_like(i)
-        grad_I_x[:-1, :] = i[1:, :] - i[:-1, :] 
-        grad_I_y[:, :-1] = i[:, 1:] - i[:, :-1] 
+        i_map = self.q['I'].value   # (H, W)
+        g = self.q['G'].value       # (H, W, 2)
+
+        # Compute ∇I using forward differences
+        grad_I_x = np.zeros_like(i_map)
+        grad_I_x[:, :-1] = i_map[:, 1:] - i_map[:, :-1]
+
+        grad_I_y = np.zeros_like(i_map)
+        grad_I_y[:-1, :] = i_map[1:, :] - i_map[:-1, :]
+
         grad_I_stack = np.stack([grad_I_x, grad_I_y], axis=-1)
-        
-        error = g - grad_I_stack
-        
-        # Multiply by respective deltas
+        error = g - grad_I_stack  # (H, W, 2)
+
+        # G: blend toward ∇I (Eq. 6.57)
         self.q['G'].add_gradient(error * self.delta_IG)
-        
-        # Gradient w.r.t I (Negative divergence)
-        grad_I_update = np.zeros_like(i)
-        grad_I_update[1:, :] -= error[:-1, :, 0]
-        grad_I_update[:, 1:] -= error[:, :-1, 1]
+
+        # I: negative divergence (Eq. 6.61)
+        grad_I_update = np.zeros_like(i_map)
         grad_I_update += error[:, :, 0] + error[:, :, 1]
-        
+        grad_I_update[:, 1:] -= error[:, :-1, 0]
+        grad_I_update[1:, :] -= error[:-1, :, 1]
+
         self.q['I'].add_gradient(grad_I_update * self.delta_GI)
 
 
 class Cost_Kinematics(Cost):
-    """Camera Kinematics constraint: F = R x C"""
-    def __init__(self, quantities_dict, delta_RF, delta_FR):
+    """
+    Camera Kinematics: F = C·Ω  (Thesis Eq. 6.36-6.50)
+
+    LINEAR relation → BLEND updates:
+        F: blend toward C·Ω (Eq. 6.40)
+        Ω: blend toward Ω* = M⁻¹v (Eq. 6.50)
+
+    The Ω update uses the thesis's RECOMMENDED approach (Eq. 6.50, footnote 18):
+    precompute M⁻¹ and blend toward the closed-form optimal Ω*.
+    """
+    def __init__(self, quantities_dict, delta_RF, delta_FR, C_mat):
         super().__init__(quantities_dict)
         self.delta_RF = delta_RF
         self.delta_FR = delta_FR
+        self.C_mat = C_mat  # (H, W, 2, 3)
+
+        # Precompute M = Σ C^T·C and M⁻¹ (Eq. 6.48, footnote 18)
+        self._M = np.einsum('hwji,hwjk->ik', C_mat, C_mat)  # (3, 3)
+        self._M_inv = np.linalg.inv(self._M)  # (3, 3)
 
     def compute_and_send_gradients(self):
-        f = self.q['F'].value
-        r = self.q['R'].value
-        c = self.q['C'].value
+        f = self.q['F'].value   # (H, W, 2)
+        r = self.q['R'].value   # (3,)
 
-        # Target Flow (Cross product projected to 2D)
-        r_cross_c = np.cross(r, c) 
-        f_target = r_cross_c[..., :2] 
-        error = f - f_target
-        
-        # F is influenced by Kinematics according to delta_RF!
-        self.q['F'].add_gradient(error * self.delta_RF)
-        
-        # Gradient w.r.t R (Global Rotation requires summing over all pixels)
-        error_3d = np.pad(error, ((0,0), (0,0), (0,1))) 
-        grad_r_map = np.cross(error_3d, c) 
-        grad_r_global = np.mean(grad_r_map, axis=(0, 1))
-        
-        self.q['R'].add_gradient(grad_r_global * self.delta_FR)
+        # Target flow from current R
+        f_target = np.einsum('hwij,j->hwi', self.C_mat, r)  # (H, W, 2)
+
+        # F: blend toward C·Ω (Eq. 6.40)
+        error_F = f - f_target
+        self.q['F'].add_gradient(error_F * self.delta_RF)
+
+        # Ω: blend toward Ω* = M⁻¹·v (Eq. 6.49-6.50)
+        v = np.einsum('hwji,hwj->i', self.C_mat, f)  # (3,)
+        R_target = self._M_inv @ v  # (3,)
+        error_R = r - R_target
+        self.q['R'].add_gradient(error_R * self.delta_FR)
+
 
 # ---------------------------------------------------------------------------
-# 3. THE API WRAPPER (To match your colleague's demo.py)
+# 3. THE API WRAPPER
 # ---------------------------------------------------------------------------
 
 class InteractingMapsThesis:
-    def __init__(self, H=128, W=128, f=64.0, 
-                 delta_VFG=0.08, delta_IG=0.12, delta_GI=0.08, delta_RF=0.10, delta_FR=0.50):
+    """
+    Energy-Based Graphical Model for 3-DoF rotation estimation.
+    Implements Algorithm 6.5 (two-phase simultaneous message passing).
+    """
+    def __init__(self, H, W, fx, fy, cx, cy,
+                 delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
+                 delta_RF=0.03, delta_FR=0.50):
         self.H = H
         self.W = W
-        self.f = f
-        
+        self.fx, self.fy = fx, fy
+        self.cx, self.cy = cx, cy
+
+        # Build kinematic matrix from real intrinsics (Eq. 6.38)
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)
+
         # Initialize Quantities
         self.q_V = Quantity((H, W), "Input_V")
         self.q_I = Quantity((H, W), "Intensity")
         self.q_G = Quantity((H, W, 2), "Spatial_Gradient")
         self.q_F = Quantity((H, W, 2), "Optic_Flow")
         self.q_R = Quantity((3,), "Rotation")
-        self.q_C = Quantity((H, W, 3), "Camera")
-        
-        self.q_C.value = compute_calibration(H, W, f)
-        
-        # Initialize Costs WITH THEIR SPECIFIC DELTAS
-        q_dict = {'V': self.q_V, 'I': self.q_I, 'G': self.q_G, 'F': self.q_F, 'R': self.q_R, 'C': self.q_C}
+
+        # Initialize Costs (Table 6.1)
+        q_dict = {
+            'V': self.q_V, 'I': self.q_I, 'G': self.q_G,
+            'F': self.q_F, 'R': self.q_R,
+        }
         self.costs = [
-            Cost_OFCE(q_dict, delta_VFG*2.5), 
-            Cost_Spatial(q_dict, delta_IG, delta_GI), 
-            Cost_Kinematics(q_dict, delta_RF, delta_FR)
+            Cost_OFCE(q_dict, delta_VFG, max_grad=5.0),
+            Cost_Spatial(q_dict, delta_IG, delta_GI),
+            Cost_Kinematics(q_dict, delta_RF, delta_FR, self._C_mat),
         ]
 
-    # Provide Properties to match demo.py visualization API
+    # Properties for demo.py
     @property
     def I(self): return self.q_I.value
     @property
@@ -168,49 +223,80 @@ class InteractingMapsThesis:
     @property
     def R(self): return self.q_R.value
 
+    def initialize_from_rotation(self, R_init: np.ndarray) -> None:
+        """
+        Set R and initialize F = C·R for a mutually consistent starting state.
+
+        This is ESSENTIAL for the Jacobi (simultaneous) update scheme:
+        without it, the kinematic cost sees F=0 and crushes R to zero
+        before OFCE can develop any structure.
+
+        Also initializes I with small noise so that ∇I provides initial
+        gradient structure for G to bootstrap from.
+        """
+        # Set rotation
+        self.q_R.value = R_init.copy()
+
+        # Set F = C·R (mutually consistent with R)
+        self.q_F.value = np.einsum('hwij,j->hwi', self._C_mat, R_init)
+
+        # Small random noise for I (provides initial ∇I for G bootstrap)
+        rng = np.random.default_rng(42)
+        self.q_I.value = rng.standard_normal((self.H, self.W)) * 0.01
+
+        # G and other quantities start at zero — they'll develop from OFCE
+
     def reset(self, scale=0.01):
-        """Randomly initialise all inferred maps."""
+        """Randomly initialise all inferred maps (without R/F consistency)."""
         rng = np.random.default_rng()
         self.q_I.value = rng.standard_normal((self.H, self.W)) * scale
         self.q_G.value = rng.standard_normal((self.H, self.W, 2)) * scale
         self.q_F.value = rng.standard_normal((self.H, self.W, 2)) * scale
         self.q_R.value = np.zeros(3, dtype=np.float64)
 
-    def step(self, V: np.ndarray, n_iters: int = 20):
-        """The Two-Phase Message Passing Loop."""
-        self.q_V.value = V
+    def step(self, V: np.ndarray, n_iters: int = 50):
+        """
+        Two-Phase Message Passing (Algorithm 6.5) with inter-frame flow decay.
+        Thesis uses 50-75 iterations per time-slice (Section 6.8).
+
+        The decay breaks the kinematic-flow feedback lock that
+        prevents the network from tracking time-varying rotations.
         
+        """
+        self.q_V.value = V
+
         for _ in range(n_iters):
-            # PHASE 1: Reset accumulators & compute all gradients
+            # PHASE 1: All costs compute gradients
             for q in [self.q_I, self.q_G, self.q_F, self.q_R]:
                 q.reset_gradient()
-                
             for cost in self.costs:
                 cost.compute_and_send_gradients()
-                
-            # PHASE 2: Apply updates simultaneously
-            # The deltas are already baked into the gradient accumulators!
-            # So we just tell the maps to apply the accumulated changes (learning rate = 1.0).
+
+            # PHASE 2: All quantities update simultaneously
             self.q_I.update(1.0)
             self.q_G.update(1.0)
             self.q_F.update(1.0)
             self.q_R.update(1.0)
-            
-            # Stabilization (Clipping)
-            self.q_F.value = np.clip(self.q_F.value, -5.0, 5.0)
-            self.q_G.value = np.clip(self.q_G.value, -5.0, 5.0)
-            self.q_R.value = np.clip(self.q_R.value, -0.5, 0.5)
-            self.q_I.value = np.clip(self.q_I.value, -5.0, 5.0) # Added safety clip for Image!
 
-    # Diagnostics to match demo.py graph
+            # Stability clipping
+            self.q_I.value = np.clip(self.q_I.value, -10.0, 10.0)
+            self.q_G.value = np.clip(self.q_G.value, -5.0, 5.0)
+            self.q_F.value = np.clip(self.q_F.value, -10.0, 10.0)
+            self.q_R.value = np.clip(self.q_R.value, -1.0, 1.0)
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
     def residual_VFG(self, V: np.ndarray) -> float:
-        return float(np.mean(np.abs(V + np.einsum('hwk,hwk->hw', self.F, self.G))))
+        return float(np.mean(np.abs(
+            V + np.einsum('hwk,hwk->hw', self.F, self.G)
+        )))
 
     def residual_GI(self) -> float:
-        # Match colleague's forward-difference check
         dIx = np.zeros_like(self.I)
         dIy = np.zeros_like(self.I)
-        dIx[:-1, :] = self.I[1:, :] - self.I[:-1, :]
-        dIy[:, :-1] = self.I[:, 1:] - self.I[:, :-1]
+        dIx[:, :-1] = self.I[:, 1:] - self.I[:, :-1]
+        dIy[:-1, :] = self.I[1:, :] - self.I[:-1, :]
         grad_I = np.stack([dIx, dIy], axis=-1)
         return float(np.mean(np.abs(self.G - grad_I)))

@@ -3,6 +3,21 @@ data/shapes_rotation/events.txt
 data/shapes_rotation/groundtruth.txt
 data/shapes_rotation/imu.txt
 
+data/boxes_rotation/events.txt
+data/boxes_rotation/groundtruth.txt
+data/boxes_rotation/imu.txt
+data/boxes_rotation/images
+data/boxes_rotation/images.txt
+data/boxes_rotation/calib.txt
+
+data/poster_rotation/events.txt
+data/poster_rotation/groundtruth.txt
+data/poster_rotation/imu.txt
+data/poster_rotation/images
+data/poster_rotation/images.txt
+data/poster_rotation/calib.txt
+
+
 ###################################
 # Python.gitignore
 
