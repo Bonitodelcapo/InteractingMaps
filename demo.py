@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths
+from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, F_DECAY, G_DECAY, get_dataset_paths
 from interacting_maps.camera import compute_calibration
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.network import InteractingMaps
@@ -39,22 +39,6 @@ FRAME_DURATION = cfg['frame_duration']
 N_FRAMES = cfg['n_frames']
 initial_R = cfg['initial_R']
 
-# ---------------------------------------------------------------------------
-# Derived configuration (automatic from config.py)
-# ---------------------------------------------------------------------------
-
-cfg = DATASET_CONFIGS[DATASET]
-paths = get_dataset_paths(DATASET)
-
-EVENTS_FILE = paths['events']
-CALIB_FILE = paths['calib']
-IMU_FILE = paths['imu']
-GT_FILE = paths['groundtruth']
-
-T_START = cfg['t_start']
-FRAME_DURATION = cfg['frame_duration']
-N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
 
 # ---------------------------------------------------------------------------
 # Choose data source
@@ -185,7 +169,7 @@ def update(_):
     V, _ = frames[t]
     frame_idx[0] += 1
 
-    net.step(V, n_iters=ITERS_PER_FRAME)
+    net.step(V, n_iters=ITERS_PER_FRAME, f_decay=F_DECAY, g_decay=G_DECAY)
 
     # V display
     im_V.set_data(V)

@@ -55,6 +55,24 @@ COOK_PARAMS = dict(
 ITERS_PER_FRAME = 75
 
 # ---------------------------------------------------------------------------
+# Inter-frame decay parameters (break the β-scale ambiguity)
+#
+# These are passed to net.step(V, ..., f_decay=F_DECAY, g_decay=G_DECAY).
+#
+# F_DECAY  (0–1): fraction by which F is pulled toward C·R each new frame.
+#   0.0 → no re-anchoring (original flat-line behaviour).
+#   0.5 → blend 50% toward kinematic prediction (recommended starting point).
+#   1.0 → full reset: F = C·R at the start of every frame.
+#
+# G_DECAY  (0–1): multiplicative decay applied to G each new frame.
+#   1.0 → no decay (G carries over unchanged — β-ambiguity can persist).
+#   0.7 → reduce G by 30% each frame (OFCE rebuilds at correct scale).
+#   0.0 → full reset: G = 0 at the start of every frame.
+# ---------------------------------------------------------------------------
+F_DECAY = 0.5
+G_DECAY = 0.7
+
+# ---------------------------------------------------------------------------
 # Helper: resolve paths for a dataset
 # ---------------------------------------------------------------------------
 

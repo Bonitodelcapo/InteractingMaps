@@ -254,16 +254,48 @@ class InteractingMapsThesis:
         self.q_F.value = rng.standard_normal((self.H, self.W, 2)) * scale
         self.q_R.value = np.zeros(3, dtype=np.float64)
 
-    def step(self, V: np.ndarray, n_iters: int = 50):
+    def step(self, V: np.ndarray, n_iters: int = 50,
+             f_decay: float = 0.5, g_decay: float = 0.7):
         """
-        Two-Phase Message Passing (Algorithm 6.5) with inter-frame flow decay.
-        Thesis uses 50-75 iterations per time-slice (Section 6.8).
+        Two-Phase Message Passing (Algorithm 6.5) — Thesis Section 6.8.
 
-        The decay breaks the kinematic-flow feedback lock that
-        prevents the network from tracking time-varying rotations.
-        
+        Between-frame state management (before the iteration loop)
+        ----------------------------------------------------------
+        The β-scale ambiguity means ALL three constraints are satisfied
+        simultaneously by (G→βG, I→βI, F→F/β, R→R/β) for any β.
+        Once the network locks into a β≠1 fixed point, the kinematics
+        gradient for R becomes zero (error_R = R − M⁻¹ΣC^T·F = 0 when
+        F = C·R at any scale), so R never updates.
+
+        Two decay operations break this lock BETWEEN frames:
+
+        f_decay (0–1):
+            Pull F back toward C·R (the kinematic prediction from current R).
+            F = (1 − f_decay)·F_prev + f_decay·C·R
+            With f_decay=0.5, F starts each frame halfway between where OFCE
+            left it and the kinematically-correct scale.  This forces OFCE to
+            see a non-zero residual and rebuild F/G at the correct scale.
+
+        g_decay (0–1):
+            Multiply G by g_decay each frame.
+            When G ≈ 0 and F = C·R, OFCE sees residual V + F·0 = V ≠ 0
+            and drives G toward −V/(C·R) = G_true (the correct scale).
+            Without this, stale β·G_true from a previous frame prevents
+            OFCE from correcting the scale.
+
+        Set f_decay=0, g_decay=1.0 to disable both (original behaviour).
         """
         self.q_V.value = V
+
+        # --- Inter-frame decay (between-packet state management) ---
+        if f_decay > 0.0:
+            # Re-anchor F toward kinematic prediction C·R
+            F_kin = np.einsum('hwij,j->hwi', self._C_mat, self.q_R.value)
+            self.q_F.value = (1.0 - f_decay) * self.q_F.value + f_decay * F_kin
+
+        if g_decay < 1.0:
+            # Decay G so OFCE rebuilds it at the correct scale this frame
+            self.q_G.value *= g_decay
 
         for _ in range(n_iters):
             # PHASE 1: All costs compute gradients

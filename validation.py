@@ -1,13 +1,32 @@
 """
-Validate estimated angular velocity against ground truth.
+Quantitative validation: estimated ω vs IMU gyro ω vs ground-truth ω.
 
-Data files:
-  imu.txt:         timestamp ax ay az gx gy gz
-  groundtruth.txt: timestamp px py pz qx qy qz qw
+Two reference sources
+---------------------
+1. groundtruth.txt  [timestamp  tx ty tz  qx qy qz qw]
+   External motion capture (Vicon/OptiTrack) — absolute, drift-free pose.
+   Angular velocity DERIVED by differencing successive quaternions.
+   Advantage: drift-free.  Drawback: finite-difference noise over short windows.
 
-The network estimates R in rad/frame.
-IMU gyroscope reports angular velocity in rad/s.
-Conversion: R_network / frame_duration = omega_rad_s
+2. imu.txt  [timestamp  ax ay az  gx gy gz]
+   On-board IMU — gyroscope DIRECTLY measures ω in the camera body frame.
+   Advantage: instantaneous, ~1 kHz, good short-term accuracy.
+   Drawback: has sensor noise and a slow bias drift.
+
+Both references measure the same quantity; showing them together reveals
+which oscillations are real motion vs. measurement noise.
+
+Angular velocity in camera body frame (what the network estimates)
+------------------------------------------------------------------
+Given two successive GT poses R1=R_wc(t1) and R2=R_wc(t2):
+
+    dR_body = R1.T @ R2        ← right-invariant (body frame)
+    dR_body ≈ expm([ω_body × Δt])  →  extract axis-angle  →  ω_body
+
+Note: R2 @ R1.T gives world-frame angular velocity — wrong here.
+
+Run:
+    python validation.py
 """
 
 import os
@@ -15,302 +34,294 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths
-from data_loader import EventFrameSequence, CameraCalibration
+from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, F_DECAY, G_DECAY, get_dataset_paths
+from data_loader import EventFrameSequence
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
-from interacting_maps.camera import build_kinematic_matrix
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration  (change DATASET here to switch datasets)
 # ---------------------------------------------------------------------------
 
-DATASET = 'boxes_rotation'
+DATASET           = 'shapes_rotation'
 USE_THESIS_VERSION = True
 
-cfg = DATASET_CONFIGS[DATASET]
+cfg   = DATASET_CONFIGS[DATASET]
 paths = get_dataset_paths(DATASET)
 
-EVENTS_FILE = paths['events']
-CALIB_FILE = paths['calib']
-IMU_FILE = paths['imu']
-GT_FILE = paths['groundtruth']
-
-T_START = cfg['t_start']
+T_START        = cfg['t_start']
 FRAME_DURATION = cfg['frame_duration']
-N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
+N_FRAMES       = cfg['n_frames']
+initial_R      = cfg['initial_R']
+
+print(f"Validation: dataset='{DATASET}',  t_start={T_START:.3f}s,  "
+      f"{N_FRAMES} frames × {FRAME_DURATION*1000:.0f}ms")
 
 # ---------------------------------------------------------------------------
-# Derived configuration (automatic from config.py)
-# ---------------------------------------------------------------------------
-
-cfg = DATASET_CONFIGS[DATASET]
-paths = get_dataset_paths(DATASET)
-
-EVENTS_FILE = paths['events']
-CALIB_FILE = paths['calib']
-IMU_FILE = paths['imu']
-GT_FILE = paths['groundtruth']
-
-T_START = cfg['t_start']
-FRAME_DURATION = cfg['frame_duration']
-N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
-
-# ---------------------------------------------------------------------------
-# Load IMU data
-# ---------------------------------------------------------------------------
-
-def load_imu(path: str) -> np.ndarray:
-    """
-    Load IMU data: timestamp ax ay az gx gy gz
-    Returns (N, 7) array.
-    """
-    data = np.loadtxt(path, dtype=np.float64)
-    print(f"Loaded {len(data)} IMU measurements")
-    print(f"  Time range: {data[0,0]:.3f} – {data[-1,0]:.3f} s")
-    return data
-
-
-def get_gyro_for_frame(imu_data: np.ndarray, t_lo: float, t_hi: float) -> np.ndarray:
-    """
-    Average gyroscope readings within a time window.
-    Returns (3,) angular velocity in rad/s.
-    """
-    mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
-    if np.sum(mask) == 0:
-        # No IMU data in this window — interpolate from nearest
-        idx = np.argmin(np.abs(imu_data[:, 0] - (t_lo + t_hi) / 2))
-        return imu_data[idx, 4:7]
-    return np.mean(imu_data[mask, 4:7], axis=0)
-
-
-# ---------------------------------------------------------------------------
-# Load Ground Truth
+# Ground-truth helpers
 # ---------------------------------------------------------------------------
 
 def load_groundtruth(path: str) -> np.ndarray:
     """
-    Load ground truth: timestamp px py pz qx qy qz qw
-    Returns (N, 8) array.
+    Load groundtruth.txt.
+    Each row: [timestamp, tx, ty, tz, qx, qy, qz, qw]
+    Returns (N, 8) float64.
     """
     data = np.loadtxt(path, dtype=np.float64)
-    print(f"Loaded {len(data)} ground truth poses")
-    print(f"  Time range: {data[0,0]:.3f} – {data[-1,0]:.3f} s")
+    print(f"  GT:  {len(data)} poses,  "
+          f"t = [{data[0,0]:.3f}, {data[-1,0]:.3f}] s")
     return data
 
 
-def quaternion_to_rotation_matrix(q: np.ndarray) -> np.ndarray:
-    """Convert quaternion (qx, qy, qz, qw) to 3x3 rotation matrix."""
-    qx, qy, qz, qw = q
-    R = np.array([
-        [1 - 2*(qy**2 + qz**2), 2*(qx*qy - qz*qw), 2*(qx*qz + qy*qw)],
-        [2*(qx*qy + qz*qw), 1 - 2*(qx**2 + qz**2), 2*(qy*qz - qx*qw)],
-        [2*(qx*qz - qy*qw), 2*(qy*qz + qx*qw), 1 - 2*(qx**2 + qy**2)],
+def quat_to_rotmat(q: np.ndarray) -> np.ndarray:
+    """
+    Quaternion (qx, qy, qz, qw) → 3×3 rotation matrix R_wc
+    (camera-to-world, active rotation convention).
+    """
+    qx, qy, qz, qw = q / np.linalg.norm(q)   # normalise for safety
+    return np.array([
+        [1 - 2*(qy**2 + qz**2),  2*(qx*qy - qz*qw),  2*(qx*qz + qy*qw)],
+        [    2*(qx*qy + qz*qw),  1 - 2*(qx**2 + qz**2),  2*(qy*qz - qx*qw)],
+        [    2*(qx*qz - qy*qw),      2*(qy*qz + qx*qw),  1 - 2*(qx**2 + qy**2)],
     ])
-    return R
 
 
-def rotation_matrix_to_angular_velocity(R1, R2, dt):
+def rotmat_to_axisangle(R: np.ndarray):
     """
-    Compute angular velocity from two rotation matrices separated by dt.
-    Uses: dR = R2 @ R1^T, then log map to get omega.
+    Extract axis-angle (angle ≥ 0, axis unit-vector) from a rotation matrix.
+    Returns (angle_rad, axis_vec3).
     """
-    dR = R2 @ R1.T
-
-    # Log map of SO(3): extract angular velocity
-    cos_angle = (np.trace(dR) - 1) / 2
-    cos_angle = np.clip(cos_angle, -1.0, 1.0)
-    angle = np.arccos(cos_angle)
-
+    cos_a = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+    angle = np.arccos(cos_a)
     if abs(angle) < 1e-10:
+        return 0.0, np.array([0.0, 0.0, 1.0])
+    skew = (R - R.T) / (2.0 * np.sin(angle) + 1e-15)
+    axis = np.array([skew[2, 1], skew[0, 2], skew[1, 0]])
+    return angle, axis
+
+
+def gt_omega_body(gt_data: np.ndarray, t_mid: float, dt: float) -> np.ndarray:
+    """
+    Compute ground-truth angular velocity in the CAMERA BODY FRAME.
+
+    Finds the two GT poses that bracket [t_mid - dt/2, t_mid + dt/2],
+    computes the incremental rotation in the camera's own frame, and
+    divides by the actual time difference.
+
+    Returns
+    -------
+    omega : (3,) rad/s  — angular velocity in camera body frame
+    """
+    t_lo = t_mid - dt / 2.0
+    t_hi = t_mid + dt / 2.0
+
+    idx1 = int(np.argmin(np.abs(gt_data[:, 0] - t_lo)))
+    idx2 = int(np.argmin(np.abs(gt_data[:, 0] - t_hi)))
+
+    if idx1 == idx2:
+        idx2 = min(idx1 + 1, len(gt_data) - 1)
+    if idx1 == idx2:
         return np.zeros(3)
 
-    # Axis from skew-symmetric part
-    skew = (dR - dR.T) / (2 * np.sin(angle) + 1e-15)
-    omega = np.array([skew[2, 1], skew[0, 2], skew[1, 0]])  # (wx, wy, wz)
-    omega *= angle / dt
-
-    return omega
-
-
-def get_gt_omega_for_frame(gt_data: np.ndarray, t_center: float, dt: float) -> np.ndarray:
-    """
-    Compute angular velocity from ground truth quaternions at t_center.
-    Uses finite differences on the closest poses.
-    """
-    # Find two poses bracketing t_center
-    t_lo = t_center - dt / 2
-    t_hi = t_center + dt / 2
-
-    idx_lo = np.argmin(np.abs(gt_data[:, 0] - t_lo))
-    idx_hi = np.argmin(np.abs(gt_data[:, 0] - t_hi))
-
-    if idx_lo == idx_hi:
-        idx_hi = min(idx_lo + 1, len(gt_data) - 1)
-
-    t1 = gt_data[idx_lo, 0]
-    t2 = gt_data[idx_hi, 0]
-    actual_dt = t2 - t1
-
+    actual_dt = gt_data[idx2, 0] - gt_data[idx1, 0]
     if abs(actual_dt) < 1e-10:
         return np.zeros(3)
 
-    q1 = gt_data[idx_lo, 4:8]  # qx, qy, qz, qw
-    q2 = gt_data[idx_hi, 4:8]
+    R1 = quat_to_rotmat(gt_data[idx1, 4:8])   # R_wc at t1
+    R2 = quat_to_rotmat(gt_data[idx2, 4:8])   # R_wc at t2
 
-    R1 = quaternion_to_rotation_matrix(q1)
-    R2 = quaternion_to_rotation_matrix(q2)
+    # Body-frame incremental rotation: R1.T @ R2
+    # (NOT R2 @ R1.T, which would give world-frame angular velocity)
+    dR_body = R1.T @ R2
 
-    omega = rotation_matrix_to_angular_velocity(R1, R2, actual_dt)
-    return omega
+    angle, axis = rotmat_to_axisangle(dR_body)
+    return axis * angle / actual_dt            # rad/s in camera body frame
 
 
 # ---------------------------------------------------------------------------
-# Run the network and collect estimates
+# IMU helpers
 # ---------------------------------------------------------------------------
 
-def run_validation():
+def load_imu(path: str) -> np.ndarray:
+    """
+    Load imu.txt.
+    Each row: [timestamp, ax, ay, az, gx, gy, gz]
+    Returns (N, 7) float64.
+    """
+    data = np.loadtxt(path, dtype=np.float64)
+    print(f"  IMU: {len(data)} samples,  "
+          f"t = [{data[0,0]:.3f}, {data[-1,0]:.3f}] s")
+    return data
+
+
+def imu_omega(imu_data: np.ndarray, t_lo: float, t_hi: float) -> np.ndarray:
+    """
+    Average gyroscope readings (gx, gy, gz) within [t_lo, t_hi].
+    Falls back to nearest sample if the window is empty.
+    Returns (3,) rad/s in camera body frame.
+    """
+    mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
+    if np.sum(mask) == 0:
+        idx = int(np.argmin(np.abs(imu_data[:, 0] - (t_lo + t_hi) / 2.0)))
+        return imu_data[idx, 4:7].copy()
+    return np.mean(imu_data[mask, 4:7], axis=0)
+
+
+# ---------------------------------------------------------------------------
+# Network runner
+# ---------------------------------------------------------------------------
+
+def run_validation(gt_data: np.ndarray, imu_data: np.ndarray | None = None):
+    """Run the network on N_FRAMES event packets and collect results."""
+
     seq = EventFrameSequence(
-        EVENTS_FILE, CALIB_FILE,
+        paths['events'], paths['calib'],
         frame_duration=FRAME_DURATION,
         t_start=T_START,
         n_frames=N_FRAMES,
         clip_value=10.0,
     )
-    fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
-    H, W = seq.H, seq.W
-
-    imu_data = load_imu(IMU_FILE)
-    gt_data = load_groundtruth(GT_FILE)
+    fx, fy = seq.calib.fx, seq.calib.fy
+    cx, cy = seq.calib.cx, seq.calib.cy
+    H, W   = seq.H, seq.W
 
     if USE_THESIS_VERSION:
-        net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **THESIS_PARAMS)
+        net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+                                   **THESIS_PARAMS)
         net.initialize_from_rotation(initial_R)
+        label = 'Thesis (Martel 2019)'
     else:
-        net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **COOK_PARAMS)
+        net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+                              **COOK_PARAMS)
         net.reset(scale=0.01)
         net.R = initial_R.copy()
+        label = 'Cook et al. 2011'
 
-    # Storage for results
-    times = []
-    R_estimated = []      # rad/frame
-    omega_estimated = []  # rad/s (= R / dt)
-    omega_imu = []        # rad/s from gyroscope
-    omega_gt = []         # rad/s from ground truth
+    have_imu = imu_data is not None
+    print(f"\n  Network: {label},  {ITERS_PER_FRAME} iters/frame")
+    hdr = (f"\n{'Frame':>5}  {'t_mid':>7}  "
+           f"{'Est ωx':>8} {'Est ωy':>8} {'Est ωz':>8}  |  "
+           f"{'GT  ωx':>8} {'GT  ωy':>8} {'GT  ωz':>8}  |  ")
+    if have_imu:
+        hdr += f"{'IMU ωx':>8} {'IMU ωy':>8} {'IMU ωz':>8}  |  "
+    hdr += f"{'Err°/s':>7}"
+    print(hdr)
+    print("-" * (85 + (30 if have_imu else 0)))
 
-    print(f"\n{'='*70}")
-    print(f"{'Frame':>5} | {'t':>7} | {'Est ωx':>8} {'Est ωy':>8} {'Est ωz':>8} | "
-          f"{'IMU ωx':>8} {'IMU ωy':>8} {'IMU ωz':>8} | "
-          f"{'Err°':>6}")
-    print(f"{'-'*70}")
+    times          = []
+    omega_est_all  = []
+    omega_gt_all   = []
+    omega_imu_all  = []
 
     for k, (V, t_mid) in enumerate(seq):
-        # Run inference
-        net.step(V, n_iters=ITERS_PER_FRAME)
+        net.step(V, n_iters=ITERS_PER_FRAME, f_decay=F_DECAY, g_decay=G_DECAY)
 
-        # Get estimated angular velocity in rad/s
-        if USE_THESIS_VERSION:
-            R_est = net.R.copy()
-        else:
-            R_est = net.R.copy()
+        omega_est = net.R / FRAME_DURATION
+        omega_ref = gt_omega_body(gt_data, t_mid, FRAME_DURATION)
 
-        omega_est = R_est / FRAME_DURATION  # rad/frame → rad/s
-
-        # Get IMU gyro for this frame
         t_lo = T_START + k * FRAME_DURATION
         t_hi = t_lo + FRAME_DURATION
-        t_center = (t_lo + t_hi) / 2
-        gyro = get_gyro_for_frame(imu_data, t_lo, t_hi)
+        omega_imu_k = imu_omega(imu_data, t_lo, t_hi) if have_imu else np.zeros(3)
 
-        # Get ground truth angular velocity
-        gt_omega = get_gt_omega_for_frame(gt_data, t_center, FRAME_DURATION)
+        times.append(t_mid)
+        omega_est_all.append(omega_est.copy())
+        omega_gt_all.append(omega_ref.copy())
+        omega_imu_all.append(omega_imu_k.copy())
 
-        # Store
-        times.append(t_center)
-        R_estimated.append(R_est.copy())
-        omega_estimated.append(omega_est.copy())
-        omega_imu.append(gyro.copy())
-        omega_gt.append(gt_omega.copy())
+        err_gt  = np.degrees(np.linalg.norm(omega_est - omega_ref))
+        row = (f"{k+1:5d}  {t_mid:7.3f}  "
+               f"{omega_est[0]:+8.4f} {omega_est[1]:+8.4f} {omega_est[2]:+8.4f}  |  "
+               f"{omega_ref[0]:+8.4f} {omega_ref[1]:+8.4f} {omega_ref[2]:+8.4f}  |  ")
+        if have_imu:
+            row += (f"{omega_imu_k[0]:+8.4f} {omega_imu_k[1]:+8.4f} {omega_imu_k[2]:+8.4f}  |  ")
+        row += f"{err_gt:7.2f}"
+        print(row)
 
-        # Angular error vs IMU (in degrees)
-        err_vec = omega_est - gyro
-        err_deg = np.linalg.norm(err_vec) * 180 / np.pi
-
-        print(
-            f"{k+1:5d} | {t_center:7.3f} | "
-            f"{omega_est[0]:8.4f} {omega_est[1]:8.4f} {omega_est[2]:8.4f} | "
-            f"{gyro[0]:8.4f} {gyro[1]:8.4f} {gyro[2]:8.4f} | "
-            f"{err_deg:6.2f}°"
-        )
-
-    # Convert to arrays
-    times = np.array(times)
-    omega_estimated = np.array(omega_estimated)
-    omega_imu = np.array(omega_imu)
-    omega_gt = np.array(omega_gt)
-
-    return times, omega_estimated, omega_imu, omega_gt
+    return (np.array(times),
+            np.array(omega_est_all),
+            np.array(omega_gt_all),
+            np.array(omega_imu_all) if have_imu else None,
+            label)
 
 
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
-def plot_results(times, omega_est, omega_imu, omega_gt):
-    """Plot estimated vs ground truth angular velocity."""
+def plot_results(times, omega_est, omega_gt, omega_imu, label):
+    """4-panel figure: one row per ω component + angular error vs both references."""
 
-    fig = plt.figure(figsize=(14, 10))
-    fig.suptitle('Angular Velocity Validation\n'
-                 f'{"Thesis" if USE_THESIS_VERSION else "Cook"} version, '
-                 f'{FRAME_DURATION*1000:.0f}ms frames, {ITERS_PER_FRAME} iters/frame',
-                 fontsize=12)
+    fig = plt.figure(figsize=(13, 10))
+    fig.suptitle(
+        f'Angular Velocity Validation — {label}\n'
+        f'Dataset: {DATASET}   '
+        f'{FRAME_DURATION*1000:.0f} ms frames   '
+        f'{ITERS_PER_FRAME} iters/frame',
+        fontsize=11,
+    )
 
-    gs = GridSpec(4, 1, figure=fig, hspace=0.4)
-
-    labels = ['ω_x (rad/s)', 'ω_y (rad/s)', 'ω_z (rad/s)']
-    colors = ['#4e79a7', '#f28e2b', '#e15759']
+    have_imu = omega_imu is not None
+    gs     = GridSpec(4, 1, figure=fig, hspace=0.45)
+    ylabels = ['ω_x  (rad/s)', 'ω_y  (rad/s)', 'ω_z  (rad/s)']
+    colors  = ['#4e79a7', '#f28e2b', '#e15759']
 
     for i in range(3):
         ax = fig.add_subplot(gs[i])
-        ax.plot(times, omega_imu[:, i], 'k-', lw=1.5, alpha=0.7, label='IMU (gyro)')
-        ax.plot(times, omega_gt[:, i], 'g--', lw=1.0, alpha=0.7, label='GT (quaternion diff)')
-        ax.plot(times, omega_est[:, i], color=colors[i], lw=2.0, label='Estimated')
-        ax.set_ylabel(labels[i])
-        ax.legend(loc='upper right', fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.axhline(0, color='k', linewidth=0.3)
+        # GT: external motion capture, derived by quaternion differencing
+        ax.plot(times, omega_gt[:, i], 'k-', lw=1.5, alpha=0.8,
+                label='GT (quaternion diff, body frame)')
+        # IMU: direct gyroscope measurement in camera body frame
+        if have_imu:
+            ax.plot(times, omega_imu[:, i], color='#59a14f', lw=1.5, alpha=0.8,
+                    label='IMU gyroscope (direct measurement)')
+        # Network estimate
+        ax.plot(times, omega_est[:, i], color=colors[i], lw=2.0, ls='--',
+                label='Network estimate')
+        ax.set_ylabel(ylabels[i], fontsize=8)
+        ax.grid(True, alpha=0.25)
+        ax.axhline(0, color='k', lw=0.4)
+        if i == 0:
+            ax.legend(fontsize=7, loc='upper right')
 
-    # Error plot
+    # Angular error panel — compare estimate vs both references
     ax_err = fig.add_subplot(gs[3])
-    err_imu = np.linalg.norm(omega_est - omega_imu, axis=1) * 180 / np.pi
-    err_gt = np.linalg.norm(omega_est - omega_gt, axis=1) * 180 / np.pi
-    ax_err.plot(times, err_imu, 'b-', lw=1.5, label='Error vs IMU (°/s)')
-    ax_err.plot(times, err_gt, 'g-', lw=1.5, label='Error vs GT (°/s)')
-    ax_err.set_ylabel('Angular error (°/s)')
-    ax_err.set_xlabel('Time (s)')
-    ax_err.legend(fontsize=8)
-    ax_err.grid(True, alpha=0.3)
+    err_gt = np.degrees(np.linalg.norm(omega_est - omega_gt, axis=1))
+    ax_err.plot(times, err_gt, color='purple', lw=2.0, label='Error vs GT')
+    ax_err.fill_between(times, 0, err_gt, alpha=0.12, color='purple')
+    if have_imu:
+        err_imu = np.degrees(np.linalg.norm(omega_est - omega_imu, axis=1))
+        ax_err.plot(times, err_imu, color='#59a14f', lw=1.5, ls='--',
+                    label='Error vs IMU')
 
-    # Summary statistics
-    mean_err_imu = np.mean(err_imu)
-    mean_err_gt = np.mean(err_gt)
-    median_err_imu = np.median(err_imu)
+    ax_err.set_ylabel('Angular error  (°/s)', fontsize=8)
+    ax_err.set_xlabel('Time  (s)', fontsize=8)
+    ax_err.grid(True, alpha=0.25)
+    ax_err.set_ylim(bottom=0)
 
-    print(f"\n{'='*50}")
-    print(f"VALIDATION SUMMARY")
-    print(f"{'='*50}")
-    print(f"Mean angular error vs IMU:   {mean_err_imu:.2f} °/s")
-    print(f"Median angular error vs IMU: {median_err_imu:.2f} °/s")
-    print(f"Mean angular error vs GT:    {mean_err_gt:.2f} °/s")
-    print(f"")
-    print(f"Mean estimated |ω|: {np.mean(np.linalg.norm(omega_est, axis=1)):.4f} rad/s")
-    print(f"Mean IMU |ω|:       {np.mean(np.linalg.norm(omega_imu, axis=1)):.4f} rad/s")
-    print(f"Mean GT |ω|:        {np.mean(np.linalg.norm(omega_gt, axis=1)):.4f} rad/s")
+    mean_e_gt   = np.mean(err_gt)
+    median_e_gt = np.median(err_gt)
+    ax_err.axhline(mean_e_gt, color='purple', ls=':', lw=1.2,
+                   label=f'Mean vs GT  {mean_e_gt:.1f}°/s')
+    if have_imu:
+        mean_e_imu = np.mean(err_imu)
+        ax_err.axhline(mean_e_imu, color='#59a14f', ls=':', lw=1.2,
+                       label=f'Mean vs IMU {mean_e_imu:.1f}°/s')
+    ax_err.legend(fontsize=7)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
-    #plt.savefig('validation_result.png', dpi=150)
+    # Print summary
+    print(f'\n{"="*55}')
+    print('VALIDATION SUMMARY')
+    print(f'{"="*55}')
+    print(f'  Mean   angular error vs GT  : {mean_e_gt:.2f} °/s')
+    print(f'  Median angular error vs GT  : {median_e_gt:.2f} °/s')
+    if have_imu:
+        print(f'  Mean   angular error vs IMU : {mean_e_imu:.2f} °/s')
+        print(f'  Mean   |ω_IMU|  : {np.mean(np.linalg.norm(omega_imu, axis=1)):.4f} rad/s')
+    print(f'  Mean   |ω_est|  : {np.mean(np.linalg.norm(omega_est, axis=1)):.4f} rad/s')
+    print(f'  Mean   |ω_GT|   : {np.mean(np.linalg.norm(omega_gt,  axis=1)):.4f} rad/s')
+    print(f'  Expected ω      : {cfg["expected_omega"]}  rad/s')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     plt.show()
 
 
@@ -319,5 +330,20 @@ def plot_results(times, omega_est, omega_imu, omega_gt):
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    times, omega_est, omega_imu, omega_gt = run_validation()
-    plot_results(times, omega_est, omega_imu, omega_gt)
+    if not os.path.isfile(paths['events']):
+        raise FileNotFoundError(
+            f"events.txt not found at {paths['events']}\n"
+            f"Download shapes_rotation.zip from "
+            f"http://rpg.ifi.uzh.ch/datasets/davis/shapes_rotation.zip"
+        )
+    if not os.path.isfile(paths['groundtruth']):
+        raise FileNotFoundError(
+            f"groundtruth.txt not found at {paths['groundtruth']}\n"
+            f"Expected: {paths['groundtruth']}"
+        )
+
+    gt_data  = load_groundtruth(paths['groundtruth'])
+    imu_data = load_imu(paths['imu']) if os.path.isfile(paths['imu']) else None
+
+    times, omega_est, omega_gt, omega_imu, label = run_validation(gt_data, imu_data)
+    plot_results(times, omega_est, omega_gt, omega_imu, label)
