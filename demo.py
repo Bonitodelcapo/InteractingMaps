@@ -13,11 +13,10 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths
+from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths, get_initial_R_from_imu
 from interacting_maps.camera import compute_calibration
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.network import InteractingMaps
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -25,8 +24,13 @@ from interacting_maps.network import InteractingMaps
 
 DATASET = 'poster_rotation'
 USE_THESIS_VERSION = True
+USE_IMU = True  # Only applies when USE_THESIS_VERSION = True
 
 cfg = DATASET_CONFIGS[DATASET]
+initial_R = cfg['initial_R']
+if initial_R is None:
+    initial_R = get_initial_R_from_imu(DATASET)
+    print(f"Auto-initialized R from IMU: {initial_R}")
 paths = get_dataset_paths(DATASET)
 
 EVENTS_FILE = paths['events']
@@ -37,24 +41,6 @@ GT_FILE = paths['groundtruth']
 T_START = cfg['t_start']
 FRAME_DURATION = cfg['frame_duration']
 N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
-
-# ---------------------------------------------------------------------------
-# Derived configuration (automatic from config.py)
-# ---------------------------------------------------------------------------
-
-cfg = DATASET_CONFIGS[DATASET]
-paths = get_dataset_paths(DATASET)
-
-EVENTS_FILE = paths['events']
-CALIB_FILE = paths['calib']
-IMU_FILE = paths['imu']
-GT_FILE = paths['groundtruth']
-
-T_START = cfg['t_start']
-FRAME_DURATION = cfg['frame_duration']
-N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
 
 # ---------------------------------------------------------------------------
 # Choose data source
@@ -68,6 +54,7 @@ def make_real_source():
         t_start=cfg['t_start'],        
         n_frames=cfg['n_frames'],
         clip_value=10.0,
+        sensor_size=cfg.get('sensor_size', None),
     )
     return list(seq), seq.calib, seq.H, seq.W
 
@@ -88,9 +75,14 @@ if USE_THESIS_VERSION:
 else:
     NET_PARAMS = COOK_PARAMS.copy()
     net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
-    net.reset(scale=0.01)
+    net.reset(scale=0.5)
     net.R = initial_R.copy()
+    # Initialize F = C·R so OFCE has something to work with
+    net.F = np.einsum('hwij,j->hwi', net._C_mat, initial_R)
 
+if USE_THESIS_VERSION and USE_IMU:
+    from archive_.validation_convergence import load_imu, get_gyro_for_frame
+    imu_data = load_imu(IMU_FILE)
 
 # ---------------------------------------------------------------------------
 # Visualisation helpers
@@ -185,7 +177,14 @@ def update(_):
     V, _ = frames[t]
     frame_idx[0] += 1
 
-    net.step(V, n_iters=ITERS_PER_FRAME)
+    if USE_THESIS_VERSION and USE_IMU:
+        t_lo = T_START + t * FRAME_DURATION
+        t_hi = t_lo + FRAME_DURATION
+        omega_imu = get_gyro_for_frame(imu_data, t_lo, t_hi)
+        net.step(V, n_iters=ITERS_PER_FRAME, omega_imu=omega_imu)
+    else:
+        net.step(V, n_iters=ITERS_PER_FRAME)
+
 
     # V display
     im_V.set_data(V)

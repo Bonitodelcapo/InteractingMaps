@@ -15,7 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths
+from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths, get_initial_R_from_imu
 from data_loader import EventFrameSequence, CameraCalibration
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
@@ -29,6 +29,10 @@ DATASET = 'boxes_rotation'
 USE_THESIS_VERSION = True
 
 cfg = DATASET_CONFIGS[DATASET]
+initial_R = cfg['initial_R']
+if initial_R is None:
+    initial_R = get_initial_R_from_imu(DATASET)
+    print(f"Auto-initialized R from IMU: {initial_R}")
 paths = get_dataset_paths(DATASET)
 
 EVENTS_FILE = paths['events']
@@ -39,24 +43,6 @@ GT_FILE = paths['groundtruth']
 T_START = cfg['t_start']
 FRAME_DURATION = cfg['frame_duration']
 N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
-
-# ---------------------------------------------------------------------------
-# Derived configuration (automatic from config.py)
-# ---------------------------------------------------------------------------
-
-cfg = DATASET_CONFIGS[DATASET]
-paths = get_dataset_paths(DATASET)
-
-EVENTS_FILE = paths['events']
-CALIB_FILE = paths['calib']
-IMU_FILE = paths['imu']
-GT_FILE = paths['groundtruth']
-
-T_START = cfg['t_start']
-FRAME_DURATION = cfg['frame_duration']
-N_FRAMES = cfg['n_frames']
-initial_R = cfg['initial_R']
 
 # ---------------------------------------------------------------------------
 # Load IMU data

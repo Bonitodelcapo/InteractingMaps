@@ -212,12 +212,33 @@ class InteractingMaps:
         n_iters : number of update cycles per frame
         """
         for _ in range(n_iters):
+            # FIRST: R reads current F (which was moved by OFCE last iteration)
+            self.update_R_from_FC()
+            
+            # THEN: OFCE develops F and G from new V
             self.update_F_from_VG(V)
             self.update_G_from_VF(V)
+            
+            # Spatial consistency
             self.update_G_from_I()
             self.update_I_from_G()
+            
+            # LAST: Kinematics gently pulls F toward new R
             self.update_F_from_RC()
-            self.update_R_from_FC()
+        
+            #self.update_F_from_VG(V)
+            #self.update_G_from_VF(V)
+            #self.update_G_from_I()
+            #self.update_I_from_G()
+            #self.update_F_from_RC()
+            #self.update_R_from_FC()
+        
+            # Value bounds — prevents runaway feedback
+            # In a well-behaved system these are never hit
+            np.clip(self.F, -10.0, 10.0, out=self.F)
+            np.clip(self.G, -5.0, 5.0, out=self.G)
+            np.clip(self.I[:self.H, :self.W], -10.0, 10.0,
+                    out=self.I[:self.H, :self.W])
 
     # ------------------------------------------------------------------
     # Diagnostics

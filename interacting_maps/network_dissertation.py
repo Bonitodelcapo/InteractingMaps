@@ -174,6 +174,27 @@ class Cost_Kinematics(Cost):
         error_R = r - R_target
         self.q['R'].add_gradient(error_R * self.delta_FR)
 
+class Cost_IMU(Cost):
+    """
+    IMU Soft Constraint (Thesis Section 6.8.3).
+    
+    Gently pulls R toward the IMU gyroscope reading each frame.
+    This provides the "tracking signal" that pure OFCE at short dt
+    cannot supply — the visual signal is too weak to detect 0.05 pixel
+    flow changes between frames.
+    
+    With delta_IMU=0.3, the IMU provides the coarse tracking while
+    OFCE refines the estimate (correcting IMU drift/bias).
+    """
+    def __init__(self, quantities_dict, delta_IMU):
+        super().__init__(quantities_dict)
+        self.delta_IMU = delta_IMU
+        self.R_imu = np.zeros(3)  # Set externally each frame (in rad/frame units)
+
+    def compute_and_send_gradients(self):
+        r = self.q['R'].value
+        error_R = r - self.R_imu
+        self.q['R'].add_gradient(error_R * self.delta_IMU)
 
 # ---------------------------------------------------------------------------
 # 3. THE API WRAPPER
@@ -184,13 +205,16 @@ class InteractingMapsThesis:
     Energy-Based Graphical Model for 3-DoF rotation estimation.
     Implements Algorithm 6.5 (two-phase simultaneous message passing).
     """
-    def __init__(self, H, W, fx, fy, cx, cy,
+    def __init__(self, H, W, fx, fy, cx, cy, frame_duration=0.005,
                  delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
-                 delta_RF=0.03, delta_FR=0.50):
+                 delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3):
         self.H = H
         self.W = W
         self.fx, self.fy = fx, fy
         self.cx, self.cy = cx, cy
+
+        self.frame_duration = frame_duration
+
 
         # Build kinematic matrix from real intrinsics (Eq. 6.38)
         self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)
@@ -212,6 +236,8 @@ class InteractingMapsThesis:
             Cost_Spatial(q_dict, delta_IG, delta_GI),
             Cost_Kinematics(q_dict, delta_RF, delta_FR, self._C_mat),
         ]
+        self.cost_imu = Cost_IMU(q_dict, delta_IMU)
+        self.costs.append(self.cost_imu)
 
     # Properties for demo.py
     @property
@@ -254,7 +280,7 @@ class InteractingMapsThesis:
         self.q_F.value = rng.standard_normal((self.H, self.W, 2)) * scale
         self.q_R.value = np.zeros(3, dtype=np.float64)
 
-    def step(self, V: np.ndarray, n_iters: int = 50):
+    def step(self, V: np.ndarray, n_iters: int = 50, omega_imu: np.ndarray = None):
         """
         Two-Phase Message Passing (Algorithm 6.5) with inter-frame flow decay.
         Thesis uses 50-75 iterations per time-slice (Section 6.8).
@@ -265,11 +291,20 @@ class InteractingMapsThesis:
         """
         self.q_V.value = V
 
+        # Set IMU target
+        if omega_imu is not None:
+            self.cost_imu.R_imu = omega_imu * self.frame_duration
+            self._use_imu = True
+        else:
+            self._use_imu = False
+            
         for _ in range(n_iters):
             # PHASE 1: All costs compute gradients
             for q in [self.q_I, self.q_G, self.q_F, self.q_R]:
                 q.reset_gradient()
             for cost in self.costs:
+                if cost is self.cost_imu and not self._use_imu:
+                    continue  # ← SKIP IMU cost entirely when no IMU
                 cost.compute_and_send_gradients()
 
             # PHASE 2: All quantities update simultaneously

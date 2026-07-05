@@ -13,7 +13,7 @@ Reference dataset:
 import os
 import numpy as np
 from pathlib import Path
-
+import cv2
 
 # ---------------------------------------------------------------------------
 # Calibration
@@ -132,6 +132,40 @@ def load_events_fast(
     mask = chunk[:, 0] < t_end
     return chunk[mask]
 
+import cv2
+
+def undistort_events(events: np.ndarray, calib: 'CameraCalibration') -> np.ndarray:
+    """
+    Undistort event (x, y) coordinates using the radial/tangential distortion model.
+    
+    Parameters
+    ----------
+    events : (N, 4) [t, x, y, pol]
+    calib  : CameraCalibration with fx, fy, cx, cy, dist
+    
+    Returns
+    -------
+    events_undist : (N, 4) with corrected x, y (float coords)
+    """
+    if len(events) == 0:
+        return events
+    
+    # Build intrinsic matrix and distortion vector
+    K = np.array([[calib.fx, 0, calib.cx],
+                  [0, calib.fy, calib.cy],
+                  [0, 0, 1]], dtype=np.float64)
+    dist_coeffs = calib.dist.astype(np.float64)  # [k1, k2, p1, p2, k3]
+    
+    # Event pixel coords → (N, 1, 2) for cv2
+    pts = events[:, 1:3].astype(np.float64).reshape(-1, 1, 2)
+    
+    # Undistort points (keeps them in pixel space, same K)
+    pts_undist = cv2.undistortPoints(pts, K, dist_coeffs, P=K)
+    
+    events_out = events.copy()
+    events_out[:, 1] = pts_undist[:, 0, 0]
+    events_out[:, 2] = pts_undist[:, 0, 1]
+    return events_out
 
 # ---------------------------------------------------------------------------
 # Event-to-V frame conversion
@@ -203,24 +237,24 @@ class EventFrameSequence:
         t_start: float = 0.5,
         n_frames: int = 50,
         clip_value: float = 3.0,
+        sensor_size: tuple = None,
     ):
-        # Load real calibration — no modification
         self.calib = CameraCalibration(calib_path)
 
-        # Use FULL sensor size from calibration (no crop!)
-        self.H = int(round(self.calib.cy * 2))
-        self.W = int(round(self.calib.cx * 2))
+        self.H, self.W = sensor_size
 
-        # No offset — we use the entire sensor
         self.x_offset = 0
         self.y_offset = 0
 
         self.frame_duration = frame_duration
         self.clip_value = clip_value
 
-        print(f"Using calib.txt directly: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
+        print(f"Using calib.txt: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
               f"cx={self.calib.cx:.1f} cy={self.calib.cy:.1f}")
-        print(f"Full sensor: {self.W}×{self.H} — no crop")
+        print(f"Sensor size: {self.W}×{self.H}")
+        print(f"Principal point offset from center: "
+              f"Δx={self.calib.cx - self.W/2:.1f}px, "
+              f"Δy={self.calib.cy - self.H/2:.1f}px")
 
         t_end = t_start + n_frames * frame_duration + 0.1
         self._events = load_events_fast(events_txt, t_start=t_start, duration=t_end - t_start)
@@ -234,8 +268,11 @@ class EventFrameSequence:
             t_lo = self._t_start + k * self._dt
             t_hi = t_lo + self._dt
             mask = (events[:, 0] >= t_lo) & (events[:, 0] < t_hi)
+
+            frame_events = undistort_events(events[mask], self.calib)
+
             V = events_to_vframe(
-                events[mask], self.H, self.W,
+                frame_events, self.H, self.W,
                 x_offset=0, y_offset=0,  # no crop
                 clip_value=self.clip_value, normalise=True,
             )

@@ -11,48 +11,195 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Dataset Configurations (from find_segments.py)
 # ---------------------------------------------------------------------------
-# Per-dataset configurations (from find_segments.py output):
+DATASET_SEGMENTS = {
+    'boxes_rotation': [
+    {  # quality=10.5, |ω|=1.491 rad/s
+        'id': 'seg_A',
+        't_start': 10.872,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.154, 0.102, -1.479]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=6.3, |ω|=0.869 rad/s
+        'id': 'seg_B',
+        't_start': 6.472,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([-0.868, -0.006, -0.052]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=4.9, |ω|=0.574 rad/s
+        'id': 'seg_C',
+        't_start': 1.922,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([-0.014, 0.572, -0.048]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=3.5, |ω|=0.358 rad/s
+        'id': 'seg_D',
+        't_start': 0.622,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.039, -0.354, 0.040]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=3.2, |ω|=0.418 rad/s
+        'id': 'seg_E',
+        't_start': 3.522,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.015, -0.415, 0.048]),
+        'sensor_size': (180, 240),
+    },
+    ],
+    'shapes_rotation': [
+        {  # quality=7.2, |ω|=0.757 rad/s
+        'id': 'seg_A',
+        't_start': 2.416,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.040, -0.747, 0.118]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=7.2, |ω|=0.925 rad/s
+        'id': 'seg_B',
+        't_start': 6.216,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([-0.924, -0.046, -0.018]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=6.2, |ω|=0.646 rad/s
+        'id': 'seg_C',
+        't_start': 1.616,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.083, 0.634, -0.094]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=1.2, |ω|=0.066 rad/s
+        'id': 'seg_D',
+        't_start': 0.166,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.064, -0.013, 0.009]),
+        'sensor_size': (180, 240),
+    },
+    ],
+    'poster_rotation': [
+            {  # quality=8.4, |ω|=1.123 rad/s
+        'id': 'seg_A',
+        't_start': 8.816,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([1.121, 0.051, 0.027]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=7.1, |ω|=0.671 rad/s
+        'id': 'seg_B',
+        't_start': 1.766,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.040, 0.669, 0.022]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=5.7, |ω|=0.546 rad/s
+        'id': 'seg_C',
+        't_start': 5.166,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.058, 0.541, -0.050]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=5.1, |ω|=0.474 rad/s
+        'id': 'seg_D',
+        't_start': 3.566,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.033, -0.472, -0.028]),
+        'sensor_size': (180, 240),
+    },
+    {  # quality=4.0, |ω|=0.516 rad/s
+        'id': 'seg_E',
+        't_start': 0.516,
+        'frame_duration': 0.02,
+        'n_frames': 25,  # 0.5s / 0.02s
+        'initial_R': None,
+        'expected_omega': np.array([0.042, -0.511, -0.053]),
+        'sensor_size': (180, 240),
+    },
+    ],
+}
+
+# Backward-compatible: single config = first segment per dataset
 DATASET_CONFIGS = {
+    name: segs[0] for name, segs in DATASET_SEGMENTS.items()
+}
+
+# Per-dataset configurations (from find_segments.py output):
+'''DATASET_CONFIGS = {
     'shapes_rotation': {
         't_start': 2.416,       
         'frame_duration': 0.020,
-        'n_frames': 25,
-        'initial_R':  np.array([0.00079, -0.01494, 0.00237]),
+        'n_frames': 25, #125
+        'initial_R': None,
         'expected_omega': np.array([0.040, -0.747, 0.118]),
+        'sensor_size': (180, 240),  # (H, W) for DAVIS240C
+
     },
+    
     'boxes_rotation': {
         't_start': 10.872,
         'frame_duration': 0.020,
-        'n_frames': 25,
-        'initial_R': np.array([0.00308, 0.00203, -0.02959]),
+        'n_frames': 125, #25, #125, 150 is 3 s
+        'initial_R': None,  # Will be set from IMU
         'expected_omega': np.array([0.154, 0.102, -1.479]),
+        'sensor_size': (180, 240),  # (H, W) for DAVIS240C
     },
+    
     'poster_rotation':{
         't_start':  8.816,
         'frame_duration': 0.020,
-        'n_frames': 25,
-        'initial_R': np.array([0.02242, 0.00101, 0.00055]),
+        'n_frames': 50, #125
+        'initial_R': None,
         'expected_omega': np.array([1.121, 0.051, 0.027]),
+        'sensor_size': (180, 240),  # (H, W) for DAVIS240C
     }
-}
+}'''
 
 THESIS_PARAMS = dict(
-        delta_VFG=0.20,    # OFCE: strong (must compete with kinematics) 0.15
-        delta_IG=0.10,     # G from I: moderate
-        delta_GI=0.05,     # I from G: gentle (Poisson step, needs stability)
-        delta_RF=0.01,     # F from R: WEAK (let OFCE build local structure) 0.03
-        delta_FR=0.80,     # R from F: strong (global aggregate, stable)  0.50
-    )
+    delta_VFG=0.12,    # OFCE, 0.15
+    delta_IG=0.10,     # G from I: moderate
+    delta_GI=0.05,     # I from G: gentle (Poisson step, needs stability)
+    delta_RF=0.05,     # F from R: WEAK (let OFCE build local structure) 0.03
+    delta_FR=0.20,     # R from F: strong (global aggregate, stable)  0.50
+    delta_IMU=0.30     
+)
 
 COOK_PARAMS = dict(
     delta_VFG=0.08,
     delta_IG=0.12,
     delta_GI=0.08,
-    delta_RF=0.10,
-    delta_FR=0.50,
+    delta_RF=0.03,  #0.10
+    delta_FR=0.30,   #0.10,
 )
 
-ITERS_PER_FRAME = 75
+ITERS_PER_FRAME = 75   # Thesis use 50-75; 
 
 # ---------------------------------------------------------------------------
 # Helper: resolve paths for a dataset
@@ -70,4 +217,28 @@ def get_dataset_paths(dataset_name: str, base_dir: str = None):
         'calib': os.path.join(data_dir, 'calib.txt'),
         'imu': os.path.join(data_dir, 'imu.txt'),
         'groundtruth': os.path.join(data_dir, 'groundtruth.txt'),
+        'images': os.path.join(data_dir, 'images.txt'),
+
     }
+
+def get_initial_R_from_imu(dataset_name: str):
+    """Read the IMU gyroscope at t_start to get the correct initial_R."""
+    cfg = DATASET_CONFIGS[dataset_name]
+    paths = get_dataset_paths(dataset_name)
+    
+    imu_data = np.loadtxt(paths['imu'], dtype=np.float64)
+    t_start = cfg['t_start']
+    dt = cfg['frame_duration']
+    
+    # Find IMU readings closest to t_start
+    t_lo = t_start
+    t_hi = t_start + dt
+    mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
+    
+    if np.sum(mask) > 0:
+        omega = np.mean(imu_data[mask, 4:7], axis=0)
+    else:
+        idx = np.argmin(np.abs(imu_data[:, 0] - t_start))
+        omega = imu_data[idx, 4:7]
+    
+    return omega * dt  # rad/s → rad/frame

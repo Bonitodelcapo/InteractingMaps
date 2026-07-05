@@ -164,7 +164,26 @@ def generate_config(segments, dataset_name: str, top_n=5):
         print(f"# Expected ω ≈ [{omega[0]:.3f}, {omega[1]:.3f}, {omega[2]:.3f}] rad/s")
         print()
 
+# Add at the end of find_segments.py:
 
+def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020):
+    """Print ready-to-paste DATASET_SEGMENTS entry matching config.py format."""
+    print(f"\n# Paste into config.py DATASET_SEGMENTS['{dataset_name}']:")
+    print(f"'{dataset_name}': [")
+    for i, seg in enumerate(segments[:top_n]):
+        omega = seg['mean_omega']
+        n_frames = int(seg['duration'] / frame_duration)
+        print(f"    {{  # quality={seg['quality']:.1f}, |ω|={seg['omega_magnitude']:.3f} rad/s")
+        print(f"        'id': 'seg_{chr(65+i)}',")
+        print(f"        't_start': {seg['t_start']:.3f},")
+        print(f"        'frame_duration': {frame_duration},")
+        print(f"        'n_frames': {n_frames},  # {seg['duration']:.1f}s / {frame_duration}s")
+        print(f"        'initial_R': None,")
+        print(f"        'expected_omega': np.array([{omega[0]:.3f}, {omega[1]:.3f}, {omega[2]:.3f}]),")
+        print(f"        'sensor_size': (180, 240),")
+        print(f"    }},")
+    print(f"],")
+    
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -179,6 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('--min_omega', type=float, default=0.05, help='Min |ω| to exclude stationary')
     parser.add_argument('--min_duration', type=float, default=0.5, help='Min segment duration (s)')
     parser.add_argument('--no-plot', action='store_true', help='Skip plotting')
+    parser.add_argument('--export', action='store_true', help='Print config.py snippet')
 
     args = parser.parse_args()
 
@@ -215,6 +235,7 @@ if __name__ == '__main__':
     top = print_segments(filtered)
     dataset_name = Path(args.imu_file).parent.name
     generate_config(filtered, dataset_name)
-
+    if args.export:
+        export_to_config(filtered, dataset_name, top_n=5)
     if not args.no_plot:
         plot_imu_with_segments(imu_data, filtered)
