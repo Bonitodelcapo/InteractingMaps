@@ -116,12 +116,14 @@ class RunConfig:
     
     @property
     def output_dir(self):
-        """NEU: Ordner enthält jetzt segment_id."""
+        """Folder now includes dt."""
         folder_name = (f"{self.segment_id}_t{self.t_start:.3f}"
-                       f"_dt{self.frame_duration*1000:.0f}ms"
-                       f"_n{self.n_frames}_i{self.n_iters}")
+                    f"_dt{self.frame_duration*1000:.0f}ms"
+                    f"_n{self.n_frames}_i{self.n_iters}")
         if self.use_imu:
             folder_name += f"_dimu{self.delta_IMU:.2f}"
+        # Also encode delta_FR to distinguish configs
+        folder_name += f"_dFR{self.params.get('delta_FR', 0):.2f}"
         return os.path.join('results', self.dataset, self.model, folder_name)
     
     def to_dict(self):
@@ -906,15 +908,17 @@ def experiment_full_evaluation(dataset_filter=None, model_filter=None, save_fram
 # ===========================================================================
 # EXPERIMENT 8: Automatic Parameter Grid Sweep
 # ===========================================================================
-def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segments=False, save_frames=True):
+def experiment_parameter_grid(dataset_filter=None, model_filter=None, 
+                              all_segments=False, save_frames=True):
     """
     Sweep over:
+      - frame_duration: [0.010, 0.020, 0.030]
       - n_frames: [25, 50, 150]
       - n_iters: [75, 100]
       - delta_FR: [0.10, 0.20, 0.30, 0.50]
       - delta_IMU: [0.10, 0.20, 0.30, 0.50]  (only for thesis_imu)
     
-    Runs tracking (Exp 2) for each combination and collects results.
+    For each config: runs tracking (Exp 2) AND single-frame convergence (Exp 1).
     """
     print("\n" + "="*70)
     print("EXPERIMENT 8: Automatic Parameter Grid Sweep")
@@ -922,14 +926,12 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segmen
 
     # ─── GRID DEFINITION ──────────────────────────────────────────────
     grid = {
+        'frame_duration': [0.010, 0.020, 0.030],
         'n_frames':  [25, 50, 150],
         'n_iters':   [75, 100],
         'delta_FR':  [0.10, 0.20, 0.30, 0.50],
-        'delta_IMU': [0.10, 0.20, 0.30, 0.50],  # only used for thesis_imu
+        'delta_IMU': [0.10, 0.20, 0.30, 0.50],
     }
-    # Optional: add more axes here, e.g.:
-    # 'delta_IMU': [0.10, 0.20, 0.30, 0.50],
-    # 'delta_VFG': [0.08, 0.12, 0.15],
 
     # ─── DATASETS ─────────────────────────────────────────────────────
     if dataset_filter:
@@ -938,7 +940,6 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segmen
         datasets = list(DATASET_SEGMENTS.keys())
 
     # ─── MODELS ───────────────────────────────────────────────────────
-    # model_filter=None → all models; otherwise just the one specified
     if model_filter is None:
         models = ['cook', 'thesis', 'thesis_imu']
     else:
@@ -947,18 +948,20 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segmen
     all_results = []
     run_idx = 0
 
-    # Count total runs for progress display
+    # Count total runs
     total_runs = 0
     for dataset in datasets:
         n_segs = len(DATASET_SEGMENTS[dataset]) if all_segments else 1
         for model in models:
             n_imu = len(grid['delta_IMU']) if model == 'thesis_imu' else 1
-            total_runs += (n_segs * len(grid['n_frames']) *
-                          len(grid['n_iters']) * len(grid['delta_FR']) * n_imu)
+            total_runs += (n_segs * len(grid['frame_duration']) * 
+                          len(grid['n_frames']) * len(grid['n_iters']) * 
+                          len(grid['delta_FR']) * n_imu)
 
     print(f"  Datasets: {datasets}")
     print(f"  Models:   {models}")
     print(f"  Segments: {'ALL' if all_segments else 'first only'}")
+    print(f"  Grid axes: {list(grid.keys())}")
     print(f"  Total runs: {total_runs}")
     print()
 
@@ -970,87 +973,103 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segmen
 
         for seg in segs:
             for model in models:
-                # delta_IMU sweep only for thesis_imu; otherwise just [None]
                 imu_values = grid['delta_IMU'] if model == 'thesis_imu' else [None]
 
-                for n_frames in grid['n_frames']:
-                    for n_iters in grid['n_iters']:
-                        for delta_FR in grid['delta_FR']:
-                            for delta_IMU in imu_values:
-                                run_idx += 1
-                                imu_str = f", δ_IMU={delta_IMU}" if delta_IMU else ""
-                                print(f"\n{'─'*60}")
-                                print(f"  RUN {run_idx}/{total_runs}: "
-                                      f"{dataset}/{seg['id']}/{model}")
-                                print(f"  n_frames={n_frames}, n_iters={n_iters}, "
-                                      f"δ_FR={delta_FR}{imu_str}")
-                                print(f"{'─'*60}")
+                for frame_duration in grid['frame_duration']:
+                    for n_frames in grid['n_frames']:
+                        for n_iters in grid['n_iters']:
+                            for delta_FR in grid['delta_FR']:
+                                for delta_IMU in imu_values:
+                                    run_idx += 1
+                                    imu_str = f", δ_IMU={delta_IMU}" if delta_IMU else ""
+                                    print(f"\n{'─'*60}")
+                                    print(f"  RUN {run_idx}/{total_runs}: "
+                                          f"{dataset}/{seg['id']}/{model}")
+                                    print(f"  dt={frame_duration*1000:.0f}ms, "
+                                          f"n_frames={n_frames}, n_iters={n_iters}, "
+                                          f"δ_FR={delta_FR}{imu_str}")
+                                    print(f"{'─'*60}")
 
-                                try:
-                                    rc = RunConfig(
-                                        dataset=dataset,
-                                        model=model,
-                                        segment=seg,
-                                        n_frames=n_frames,
-                                        n_iters=n_iters,
-                                        delta_IMU=delta_IMU,
-                                    )
-                                    # Override delta_FR
-                                    rc.params['delta_FR'] = delta_FR
+                                    try:
+                                        rc = RunConfig(
+                                            dataset=dataset,
+                                            model=model,
+                                            segment=seg,
+                                            frame_duration=frame_duration,
+                                            n_frames=n_frames,
+                                            n_iters=n_iters,
+                                            delta_IMU=delta_IMU,
+                                        )
+                                        rc.params['delta_FR'] = delta_FR
 
-                                    summary = experiment_tracking(rc, save_frames=save_frames)
+                                        # ── Run Exp 2 (tracking) ──
+                                        summary = experiment_tracking(
+                                            rc, save_frames=save_frames)
 
-                                    result = {
-                                        'dataset': dataset,
-                                        'segment_id': seg['id'],
-                                        'model': model,
-                                        'n_frames': n_frames,
-                                        'n_iters': n_iters,
-                                        'delta_FR': delta_FR,
-                                        'delta_IMU': delta_IMU if delta_IMU else 0.0,
-                                        'duration_s': rc.duration_s,
-                                        'mean_err_deg_s': summary['mean_err_deg_s'],
-                                        'median_err_deg_s': summary['median_err_deg_s'],
-                                        'mean_dir_err_deg': summary['mean_dir_err_deg'],
-                                        'mean_beta': summary['mean_beta'],
-                                    }
-                                    all_results.append(result)
+                                        # ── Run Exp 1 (convergence diagnostic) ──
+                                        if save_frames:
+                                            experiment_single_frame_convergence(
+                                                rc, frame_idx=0, 
+                                                max_iters=n_iters)
 
-                                except Exception as e:
-                                    print(f"  FAILED: {e}")
-                                    all_results.append({
-                                        'dataset': dataset,
-                                        'segment_id': seg['id'],
-                                        'model': model,
-                                        'n_frames': n_frames,
-                                        'n_iters': n_iters,
-                                        'delta_FR': delta_FR,
-                                        'delta_IMU': delta_IMU if delta_IMU else 0.0,
-                                        'duration_s': n_frames * 0.020,
-                                        'mean_err_deg_s': float('nan'),
-                                        'median_err_deg_s': float('nan'),
-                                        'mean_dir_err_deg': float('nan'),
-                                        'mean_beta': float('nan'),
-                                    })
+                                        result = {
+                                            'dataset': dataset,
+                                            'segment_id': seg['id'],
+                                            'model': model,
+                                            'frame_duration': frame_duration,
+                                            'n_frames': n_frames,
+                                            'n_iters': n_iters,
+                                            'delta_FR': delta_FR,
+                                            'delta_IMU': delta_IMU if delta_IMU else 0.0,
+                                            'duration_s': n_frames * frame_duration,
+                                            'mean_err_deg_s': summary['mean_err_deg_s'],
+                                            'median_err_deg_s': summary['median_err_deg_s'],
+                                            'mean_dir_err_deg': summary['mean_dir_err_deg'],
+                                            'mean_beta': summary['mean_beta'],
+                                        }
+                                        all_results.append(result)
+
+                                    except Exception as e:
+                                        print(f"  FAILED: {e}")
+                                        all_results.append({
+                                            'dataset': dataset,
+                                            'segment_id': seg['id'],
+                                            'model': model,
+                                            'frame_duration': frame_duration,
+                                            'n_frames': n_frames,
+                                            'n_iters': n_iters,
+                                            'delta_FR': delta_FR,
+                                            'delta_IMU': delta_IMU if delta_IMU else 0.0,
+                                            'duration_s': n_frames * frame_duration,
+                                            'mean_err_deg_s': float('nan'),
+                                            'median_err_deg_s': float('nan'),
+                                            'mean_dir_err_deg': float('nan'),
+                                            'mean_beta': float('nan'),
+                                        })
 
     # ─── RESULTS TABLE ─────────────────────────────────────────────────
-    print("\n\n" + "="*120)
+    print("\n\n" + "="*130)
     print("PARAMETER GRID RESULTS")
-    print("="*120)
-    print(f"{'Dataset':<16} {'Seg':<6} {'Model':<12} {'n_fr':>5} {'iters':>5} "
-          f"{'δ_FR':>5} {'δ_IMU':>6} | "
+    print("="*130)
+    print(f"{'Dataset':<16} {'Seg':<6} {'Model':<12} {'dt_ms':>5} {'n_fr':>5} "
+          f"{'iters':>5} {'δ_FR':>5} {'δ_IMU':>6} | "
           f"{'err°/s':>7} {'med°/s':>7} {'dir°':>6} {'β':>5}")
-    print("-"*120)
+    print("-"*130)
     for r in all_results:
         print(f"{r['dataset']:<16} {r['segment_id']:<6} {r['model']:<12} "
-              f"{r['n_frames']:>5} {r['n_iters']:>5} {r['delta_FR']:>5.2f} "
+              f"{r['frame_duration']*1000:>5.0f} {r['n_frames']:>5} "
+              f"{r['n_iters']:>5} {r['delta_FR']:>5.2f} "
               f"{r['delta_IMU']:>6.2f} | "
               f"{r['mean_err_deg_s']:>7.1f} {r['median_err_deg_s']:>7.1f} "
               f"{r['mean_dir_err_deg']:>6.1f} {r['mean_beta']:>5.2f}")
 
     # ─── SAVE CSV ──────────────────────────────────────────────────────
     os.makedirs('results', exist_ok=True)
-    csv_path = 'results/parameter_grid.csv'
+    if dataset_filter:
+        csv_path = f'results/parameter_grid_{dataset_filter}.csv'
+    else:
+        csv_path = 'results/parameter_grid.csv'
+
     if all_results:
         with open(csv_path, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
@@ -1066,8 +1085,10 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None, all_segmen
             m_valid = [r for r in valid if r['model'] == m]
             if m_valid:
                 best = min(m_valid, key=lambda r: r['mean_err_deg_s'])
-                imu_str = f", δ_IMU={best['delta_IMU']:.2f}" if m == 'thesis_imu' else ""
+                imu_str = (f", δ_IMU={best['delta_IMU']:.2f}" 
+                          if m == 'thesis_imu' else "")
                 print(f"    [{m:12s}] {best['dataset']}/{best['segment_id']}, "
+                      f"dt={best['frame_duration']*1000:.0f}ms, "
                       f"n={best['n_frames']}, i={best['n_iters']}, "
                       f"δ_FR={best['delta_FR']:.2f}{imu_str} "
                       f"→ {best['mean_err_deg_s']:.1f}°/s")

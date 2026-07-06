@@ -2,8 +2,9 @@
 Find time segments with approximately constant angular velocity in imu.txt.
 
 Usage:
-    python find_segments.py data/shapes_rotation/imu.txt
-    python find_segments.py data/boxes_rotation/imu.txt --min_duration 0.5
+    python find_segments.py data/boxes_rotation/imu.txt
+    python find_segments.py data/dynamic_rotation/imu.txt --top 10
+    python find_segments.py data/poster_rotation/imu.txt --export
 """
 
 import os
@@ -21,90 +22,240 @@ def load_imu(path: str) -> np.ndarray:
     return data
 
 
+def check_window_quality(gyro_window, min_omega=0.30, max_relative_std=0.25):
+    """
+    Check if a gyroscope window qualifies as constant-velocity.
+    
+    Returns (passes, quality, stats_dict) or (False, 0, None).
+    """
+    if len(gyro_window) < 10:
+        return False, 0.0, None
+    
+    mean_omega = np.mean(gyro_window, axis=0)
+    std_omega = np.std(gyro_window, axis=0)
+    omega_magnitude = np.linalg.norm(mean_omega)
+    
+    if omega_magnitude < min_omega:
+        return False, 0.0, None
+    
+    # Dominant axis analysis
+    abs_mean = np.abs(mean_omega)
+    dominant_axis = np.argmax(abs_mean)
+    dominant_magnitude = abs_mean[dominant_axis]
+    dominant_std = std_omega[dominant_axis]
+    relative_std_dominant = dominant_std / (dominant_magnitude + 1e-10)
+    
+    # Magnitude stability
+    omega_magnitudes = np.linalg.norm(gyro_window, axis=1)
+    magnitude_std = np.std(omega_magnitudes)
+    relative_std_magnitude = magnitude_std / (omega_magnitude + 1e-10)
+    
+    # Direction stability: check that the rotation axis doesn't drift
+    # Compute angle between each sample's ω and mean ω
+    if omega_magnitude > 0.1:
+        dots = gyro_window @ mean_omega / (
+            np.linalg.norm(gyro_window, axis=1, keepdims=False) * omega_magnitude + 1e-10
+        )
+        dots = np.clip(dots, -1, 1)
+        direction_spread = np.std(np.arccos(dots))  # rad
+    else:
+        direction_spread = 0.0
+    
+    # Use the better (lower) of the two relative stds
+    relative_std = min(relative_std_dominant, relative_std_magnitude)
+    
+    if relative_std > max_relative_std:
+        return False, 0.0, None
+    
+    # Also reject if direction drifts too much (>15° std)
+    if direction_spread > 0.26:  # ~15 degrees
+        return False, 0.0, None
+    
+    quality = omega_magnitude * (1.0 - relative_std)
+    
+    stats = {
+        'mean_omega': mean_omega,
+        'omega_magnitude': omega_magnitude,
+        'std_omega': std_omega,
+        'dominant_axis': int(dominant_axis),
+        'relative_std': relative_std,
+        'direction_spread_deg': np.degrees(direction_spread),
+    }
+    return True, quality, stats
+
+
 def find_constant_velocity_segments(
     imu_data: np.ndarray,
-    window_duration: float = 0.5,
-    max_std_threshold: float = 0.1,
+    window_durations: list = None,
     step: float = 0.05,
-    min_omega: float = 0.05,
+    min_omega: float = 0.30,
+    max_relative_std: float = 0.25,
+    frame_duration: float = 0.020,
 ):
     """
-    Slide a window over the gyroscope data and find segments where
-    the angular velocity is approximately constant (low std).
-
+    Find segments where angular velocity is approximately constant.
+    
+    For each candidate starting point, finds the LONGEST window that
+    still passes the constant-velocity test. This determines max_n_frames.
+    
     Parameters
     ----------
     imu_data : (N, 7) — timestamp ax ay az gx gy gz
-    window_duration : length of window in seconds
-    max_std_threshold : maximum std (rad/s) per axis to count as "constant"
-    step : window step size in seconds
-    min_omega : minimum |ω| to exclude stationary segments
-
+    window_durations : list of durations to test (longest first internally)
+    step : window step size in seconds  
+    min_omega : minimum |ω| to exclude near-stationary segments
+    max_relative_std : max relative std on dominant axis
+    frame_duration : dt for computing max_n_frames
+    
     Returns
     -------
-    segments : list of dicts with keys:
-        t_start, t_end, duration, mean_omega, std_omega, quality
+    segments : list of dicts sorted by quality (best first)
     """
+    if window_durations is None:
+        window_durations = [0.5, 1.0, 1.5, 2.0, 3.0]
+    
+    # Sort longest first (we'll find the max duration that passes)
+    window_durations = sorted(window_durations, reverse=True)
+    
     t = imu_data[:, 0]
-    gyro = imu_data[:, 4:7]  # gx, gy, gz
-
+    gyro = imu_data[:, 4:7]
     t_min, t_max = t[0], t[-1]
+    
     segments = []
-
     t_start = t_min
-    while t_start + window_duration <= t_max:
-        t_end = t_start + window_duration
-        mask = (t >= t_start) & (t < t_end)
-
-        if np.sum(mask) < 10:
-            t_start += step
-            continue
-
-        window_gyro = gyro[mask]
-        mean_omega = np.mean(window_gyro, axis=0)
-        std_omega = np.std(window_gyro, axis=0)
-        max_std = np.max(std_omega)
-        omega_magnitude = np.linalg.norm(mean_omega)
-
-        if max_std < max_std_threshold and omega_magnitude > min_omega:
-            quality = omega_magnitude / (max_std + 1e-10)  # higher = better
+    
+    while t_start + window_durations[-1] <= t_max:  # shortest window must fit
+        # Try windows from longest to shortest
+        best_duration = None
+        best_quality = 0
+        best_stats = None
+        
+        for duration in window_durations:
+            if t_start + duration > t_max:
+                continue
+            
+            t_end = t_start + duration
+            mask = (t >= t_start) & (t < t_end)
+            
+            if np.sum(mask) < 10:
+                continue
+            
+            window_gyro = gyro[mask]
+            passes, quality, stats = check_window_quality(
+                window_gyro, min_omega=min_omega, max_relative_std=max_relative_std
+            )
+            
+            if passes:
+                best_duration = duration
+                best_quality = quality
+                best_stats = stats
+                break  # longest passing window found
+        
+        if best_duration is not None:
+            max_n_frames = int(best_duration / frame_duration)
             segments.append({
                 't_start': t_start,
-                't_end': t_end,
-                'duration': window_duration,
-                'mean_omega': mean_omega,
-                'omega_magnitude': omega_magnitude,
-                'std_omega': std_omega,
-                'max_std': max_std,
-                'quality': quality,
+                't_end': t_start + best_duration,
+                'duration': best_duration,
+                'max_n_frames': max_n_frames,
+                'mean_omega': best_stats['mean_omega'],
+                'omega_magnitude': best_stats['omega_magnitude'],
+                'std_omega': best_stats['std_omega'],
+                'dominant_axis': best_stats['dominant_axis'],
+                'relative_std': best_stats['relative_std'],
+                'direction_spread_deg': best_stats['direction_spread_deg'],
+                'quality': best_quality,
             })
-
+        
         t_start += step
-
-    # Sort by quality (best first)
+    
     segments.sort(key=lambda s: s['quality'], reverse=True)
     return segments
 
 
-def print_segments(segments, top_n=20):
+def deduplicate_segments(segments, min_gap=0.5):
+    """Remove overlapping segments, keeping highest quality."""
+    filtered = []
+    for seg in segments:
+        overlap = False
+        for kept in filtered:
+            if not (seg['t_end'] + min_gap < kept['t_start'] or
+                    seg['t_start'] - min_gap > kept['t_end']):
+                overlap = True
+                break
+        if not overlap:
+            filtered.append(seg)
+    return filtered
+
+
+def print_segments(segments, top_n=10):
     """Print the best segments."""
-    print(f"\n{'='*80}")
-    print(f"TOP {min(top_n, len(segments))} CONSTANT-VELOCITY SEGMENTS")
-    print(f"{'='*80}")
-    print(f"{'#':>3} | {'t_start':>8} {'t_end':>8} | "
+    axis_names = ['x', 'y', 'z']
+    n = min(top_n, len(segments))
+    print(f"\n{'='*100}")
+    print(f"TOP {n} CONSTANT-VELOCITY SEGMENTS")
+    print(f"{'='*100}")
+    print(f"{'#':>3} | {'t_start':>7} {'t_end':>7} {'dur':>5} {'max_n':>5} | "
           f"{'ωx':>7} {'ωy':>7} {'ωz':>7} | "
-          f"{'|ω|':>6} {'max_σ':>6} {'quality':>7}")
-    print(f"{'-'*80}")
+          f"{'|ω|':>5} {'dom':>3} {'rσ':>5} {'dir°':>5} {'qual':>5}")
+    print(f"{'-'*100}")
+
+    for i, seg in enumerate(segments[:n]):
+        omega = seg['mean_omega']
+        dom = axis_names[seg['dominant_axis']]
+        print(
+            f"{i+1:3d} | {seg['t_start']:7.3f} {seg['t_end']:7.3f} "
+            f"{seg['duration']:5.1f} {seg['max_n_frames']:5d} | "
+            f"{omega[0]:7.3f} {omega[1]:7.3f} {omega[2]:7.3f} | "
+            f"{seg['omega_magnitude']:5.3f} {dom:>3} "
+            f"{seg['relative_std']:5.3f} {seg['direction_spread_deg']:5.1f} "
+            f"{seg['quality']:5.2f}"
+        )
+
+    return segments[:n]
+
+
+def generate_config(segments, dataset_name: str, top_n=5, frame_duration=0.020):
+    """Generate config snippet."""
+    print(f"\n{'='*60}")
+    print(f"SUGGESTED CONFIG FOR {dataset_name}")
+    print(f"{'='*60}")
+    print(f"# Copy one of these into your config.py:\n")
 
     for i, seg in enumerate(segments[:top_n]):
         omega = seg['mean_omega']
-        print(
-            f"{i+1:3d} | {seg['t_start']:8.3f} {seg['t_end']:8.3f} | "
-            f"{omega[0]:7.3f} {omega[1]:7.3f} {omega[2]:7.3f} | "
-            f"{seg['omega_magnitude']:6.3f} {seg['max_std']:6.4f} {seg['quality']:7.1f}"
-        )
+        dt = frame_duration
+        initial_R = omega * dt
+        axis_names = ['x', 'y', 'z']
+        dom = axis_names[seg['dominant_axis']]
+        print(f"# Segment #{i+1}: quality={seg['quality']:.2f}, "
+              f"|ω|={seg['omega_magnitude']:.3f} rad/s, dominant=ω_{dom}")
+        print(f"# Validated duration: {seg['duration']:.1f}s → max_n_frames={seg['max_n_frames']}")
+        print(f"T_START = {seg['t_start']:.3f}")
+        print(f"FRAME_DURATION = {dt}")
+        print(f"N_FRAMES = {seg['max_n_frames']}  # max safe value")
+        print(f"initial_R = np.array([{initial_R[0]:.5f}, {initial_R[1]:.5f}, {initial_R[2]:.5f}])")
+        print()
 
-    return segments[:top_n]
+
+def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020, target_n_frames=150):
+    """Print ready-to-paste DATASET_SEGMENTS entry."""
+    print(f"\n# Paste into config.py DATASET_SEGMENTS['{dataset_name}']:")
+    print(f"'{dataset_name}': [")
+    for i, seg in enumerate(segments[:top_n]):
+        omega = seg['mean_omega']
+        axis_names = ['x', 'y', 'z']
+        dom = axis_names[seg['dominant_axis']]
+        print(f"    {{  # quality={seg['quality']:.2f}, |ω|={seg['omega_magnitude']:.3f} rad/s, "
+              f"dominant=ω_{dom}")
+        print(f"        'id': 'seg_{chr(65+i)}',")
+        print(f"        't_start': {seg['t_start']:.3f},")
+        print(f"        'frame_duration': {frame_duration},")
+        print(f"        'n_frames': {target_n_frames},  # {target_n_frames * frame_duration:.1f}s")
+        print(f"        'initial_R': None,")
+        print(f"        'sensor_size': (180, 240),")
+        print(f"    }},")
+    print(f"],")
 
 
 def plot_imu_with_segments(imu_data, segments, top_n=5):
@@ -123,67 +274,26 @@ def plot_imu_with_segments(imu_data, segments, top_n=5):
         axes[i].set_ylabel(labels[i])
         axes[i].grid(True, alpha=0.3)
 
-    # |ω|
     omega_mag = np.linalg.norm(gyro, axis=1)
     axes[3].plot(t, omega_mag, 'k-', lw=0.5, alpha=0.7)
     axes[3].set_ylabel('|ω| (rad/s)')
     axes[3].set_xlabel('Time (s)')
     axes[3].grid(True, alpha=0.3)
 
-    # Highlight top segments
-    seg_colors = plt.cm.Set2(np.linspace(0, 1, top_n))
+    seg_colors = plt.cm.Set2(np.linspace(0, 1, min(top_n, len(segments))))
     for i, seg in enumerate(segments[:top_n]):
         for ax in axes:
             ax.axvspan(seg['t_start'], seg['t_end'],
                       alpha=0.3, color=seg_colors[i],
-                      label=f"#{i+1}: t={seg['t_start']:.2f}s" if ax == axes[0] else None)
+                      label=(f"#{i+1}: |ω|={seg['omega_magnitude']:.2f}, "
+                             f"{seg['duration']:.1f}s")
+                      if ax == axes[0] else None)
 
     axes[0].legend(fontsize=7, loc='upper right')
     plt.tight_layout()
-    #plt.savefig('imu_segments.png', dpi=150)
     plt.show()
 
 
-def generate_config(segments, dataset_name: str, top_n=5):
-    """Generate a config snippet for validation.py."""
-    print(f"\n{'='*60}")
-    print(f"SUGGESTED CONFIG FOR {dataset_name}")
-    print(f"{'='*60}")
-    print(f"# Copy one of these into your validation.py or demo.py:\n")
-
-    for i, seg in enumerate(segments[:top_n]):
-        omega = seg['mean_omega']
-        # Estimate initial_R from mean omega * frame_duration
-        dt = 0.020
-        initial_R = omega * dt
-        print(f"# Segment #{i+1}: quality={seg['quality']:.1f}, |ω|={seg['omega_magnitude']:.3f} rad/s")
-        print(f"T_START = {seg['t_start']:.3f}")
-        print(f"FRAME_DURATION = 0.020")
-        print(f"N_FRAMES = {int(seg['duration'] / dt)}")
-        print(f"initial_R = np.array([{initial_R[0]:.5f}, {initial_R[1]:.5f}, {initial_R[2]:.5f}])")
-        print(f"# Expected ω ≈ [{omega[0]:.3f}, {omega[1]:.3f}, {omega[2]:.3f}] rad/s")
-        print()
-
-# Add at the end of find_segments.py:
-
-def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020):
-    """Print ready-to-paste DATASET_SEGMENTS entry matching config.py format."""
-    print(f"\n# Paste into config.py DATASET_SEGMENTS['{dataset_name}']:")
-    print(f"'{dataset_name}': [")
-    for i, seg in enumerate(segments[:top_n]):
-        omega = seg['mean_omega']
-        n_frames = int(seg['duration'] / frame_duration)
-        print(f"    {{  # quality={seg['quality']:.1f}, |ω|={seg['omega_magnitude']:.3f} rad/s")
-        print(f"        'id': 'seg_{chr(65+i)}',")
-        print(f"        't_start': {seg['t_start']:.3f},")
-        print(f"        'frame_duration': {frame_duration},")
-        print(f"        'n_frames': {n_frames},  # {seg['duration']:.1f}s / {frame_duration}s")
-        print(f"        'initial_R': None,")
-        print(f"        'expected_omega': np.array([{omega[0]:.3f}, {omega[1]:.3f}, {omega[2]:.3f}]),")
-        print(f"        'sensor_size': (180, 240),")
-        print(f"    }},")
-    print(f"],")
-    
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -193,49 +303,46 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Find constant-velocity segments in IMU data')
     parser.add_argument('imu_file', type=str, help='Path to imu.txt')
-    parser.add_argument('--window', type=float, default=0.5, help='Window duration (s)')
-    parser.add_argument('--threshold', type=float, default=0.15, help='Max std threshold (rad/s)')
-    parser.add_argument('--min_omega', type=float, default=0.05, help='Min |ω| to exclude stationary')
-    parser.add_argument('--min_duration', type=float, default=0.5, help='Min segment duration (s)')
+    parser.add_argument('--dt', type=float, default=0.020, help='Frame duration (s)')
+    parser.add_argument('--max-relative-std', type=float, default=0.25,
+                        help='Max relative std (default 0.25 = 25%%)')
+    parser.add_argument('--min-omega', type=float, default=0.30,
+                        help='Min |ω| in rad/s (default 0.30)')
+    parser.add_argument('--step', type=float, default=0.05, help='Window step (s)')
+    parser.add_argument('--top', type=int, default=10, help='Number of segments')
     parser.add_argument('--no-plot', action='store_true', help='Skip plotting')
     parser.add_argument('--export', action='store_true', help='Print config.py snippet')
+    parser.add_argument('--min-gap', type=float, default=3.0,
+                    help='Min gap between segment starts (s). '
+                         'Set to max tested duration to avoid overlap.')
 
     args = parser.parse_args()
 
     imu_data = load_imu(args.imu_file)
 
-    # Try multiple window sizes
-    all_segments = []
-    for window in [args.min_duration, args.min_duration * 2, args.min_duration * 3]:
-        segs = find_constant_velocity_segments(
-            imu_data,
-            window_duration=window,
-            max_std_threshold=args.threshold,
-            min_omega=args.min_omega,
-        )
-        all_segments.extend(segs)
+    segments = find_constant_velocity_segments(
+        imu_data,
+        window_durations=[0.5, 1.0, 1.5, 2.0, 3.0],
+        step=args.step,
+        min_omega=args.min_omega,
+        max_relative_std=args.max_relative_std,
+        frame_duration=args.dt,
+    )
 
-    # Deduplicate (remove overlapping segments, keep best quality)
-    all_segments.sort(key=lambda s: s['quality'], reverse=True)
-    filtered = []
-    for seg in all_segments:
-        overlap = False
-        for kept in filtered:
-            if not (seg['t_end'] < kept['t_start'] or seg['t_start'] > kept['t_end']):
-                overlap = True
-                break
-        if not overlap:
-            filtered.append(seg)
-
-    if not filtered:
-        print("\nNo constant-velocity segments found!")
-        print("Try: --threshold 0.3 --min_omega 0.02")
+    if not segments:
+        print(f"\nNo segments found! Try: --min-omega 0.15 --max-relative-std 0.35")
         sys.exit(1)
 
-    top = print_segments(filtered)
+    segments = deduplicate_segments(segments, min_gap=args.min_gap)
+    print(f"\nFound {len(segments)} non-overlapping segments")
+
+    top = print_segments(segments, top_n=args.top)
+
     dataset_name = Path(args.imu_file).parent.name
-    generate_config(filtered, dataset_name)
+    generate_config(segments, dataset_name, top_n=min(args.top, 5), frame_duration=args.dt)
+
     if args.export:
-        export_to_config(filtered, dataset_name, top_n=5)
+        export_to_config(segments, dataset_name, top_n=5, frame_duration=args.dt)
+
     if not args.no_plot:
-        plot_imu_with_segments(imu_data, filtered)
+        plot_imu_with_segments(imu_data, segments, top_n=min(5, len(segments)))
