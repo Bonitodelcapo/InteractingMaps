@@ -25,6 +25,7 @@ from interacting_maps.network import InteractingMaps
 
 DATASET = 'poster_rotation'
 USE_THESIS_VERSION = True
+UNDISTORT_MODE = True
 
 cfg = DATASET_CONFIGS[DATASET]
 paths = get_dataset_paths(DATASET)
@@ -53,11 +54,11 @@ def make_real_source():
         n_frames=cfg['n_frames'],
         clip_value=10.0,
     )
-    return list(seq), seq.calib, seq.H, seq.W
+    return list(seq), seq.calib, seq.H, seq.W,
 
 use_real = os.path.isfile(EVENTS_FILE) and os.path.isfile(CALIB_FILE)
 print(f"Using real event-camera data ({DATASET} dataset).")
-frames, calib, H, W = make_real_source()
+frames, calib, H, W,  = make_real_source()
 fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 
 
@@ -65,9 +66,16 @@ fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 # Build network
 # ---------------------------------------------------------------------------
 
+
 if USE_THESIS_VERSION:
     NET_PARAMS = THESIS_PARAMS.copy()
-    net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
+    
+    if UNDISTORT_MODE:
+        dist_coeffs = calib.dist
+        print(f"  UNDISTORT_MODE ON  — dist_coeffs = {calib.dist}")
+        net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, dist_coeffs=dist_coeffs, **NET_PARAMS)
+    else:
+        net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
     net.initialize_from_rotation(initial_R)
 else:
     NET_PARAMS = COOK_PARAMS.copy()

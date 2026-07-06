@@ -33,6 +33,7 @@ class InteractingMaps:
         delta_GI: float = 0.1,
         delta_RF: float = 0.1,
         delta_FR: float = 0.5,
+        dist_coeffs: np.ndarray | None = None,
     ):
         self.H = H
         self.W = W
@@ -51,8 +52,10 @@ class InteractingMaps:
         # Constant calibration map (unit direction per pixel)
         self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3)
 
-        # Precompute the perspective-correct kinematic matrix (Thesis Eq. 6.37)
-        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)  # (H, W, 2, 3)
+        # Precompute the perspective-correct kinematic matrix (Thesis Eq. 6.37).
+        # When dist_coeffs is set, C_mat is built in distorted pixel space.
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy,
+                                             dist_coeffs=dist_coeffs)  # (H, W, 2, 3)
 
         # Mutable maps — initialised by reset()
         self.I = np.zeros((H + 1, W + 1), dtype=np.float64)

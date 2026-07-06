@@ -186,14 +186,32 @@ class InteractingMapsThesis:
     """
     def __init__(self, H, W, fx, fy, cx, cy,
                  delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
-                 delta_RF=0.03, delta_FR=0.50):
+                 delta_RF=0.03, delta_FR=0.50,
+                 lr_I=1.0, lr_G=1.0, lr_F=1.0, lr_R=1.0,
+                 dist_coeffs=None):
         self.H = H
         self.W = W
         self.fx, self.fy = fx, fy
         self.cx, self.cy = cx, cy
+        self.dist_coeffs = dist_coeffs
 
-        # Build kinematic matrix from real intrinsics (Eq. 6.38)
-        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)
+        # Per-quantity learning rates applied at the Phase-2 update step:
+        #     q.value -= lr_q * q.gradient_accumulator
+        # Each Cost has ALREADY multiplied its message by its own δ_* before
+        # add_gradient(), so the natural default is lr=1.0 (apply messages as-is).
+        # Lowering lr_R is the usual lever when R oscillates while the other
+        # quantities are stable; lowering all four together acts as a global
+        # damping knob without retuning the five δ_* parameters.
+        self.lr_I = lr_I
+        self.lr_G = lr_G
+        self.lr_F = lr_F
+        self.lr_R = lr_R
+
+        # Build kinematic matrix from real intrinsics (Eq. 6.38).
+        # If dist_coeffs is provided and non-zero, C_mat is built in DISTORTED
+        # pixel space (correctly accounts for lens distortion in the events).
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy,
+                                             dist_coeffs=dist_coeffs)
 
         # Initialize Quantities
         self.q_V = Quantity((H, W), "Input_V")
@@ -305,10 +323,11 @@ class InteractingMapsThesis:
                 cost.compute_and_send_gradients()
 
             # PHASE 2: All quantities update simultaneously
-            self.q_I.update(1.0)
-            self.q_G.update(1.0)
-            self.q_F.update(1.0)
-            self.q_R.update(1.0)
+            # lr_* default to 1.0 → identical to the original behaviour.
+            self.q_I.update(self.lr_I)
+            self.q_G.update(self.lr_G)
+            self.q_F.update(self.lr_F)
+            self.q_R.update(self.lr_R)
 
             # Stability clipping
             self.q_I.value = np.clip(self.q_I.value, -10.0, 10.0)

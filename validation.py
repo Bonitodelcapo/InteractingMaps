@@ -34,7 +34,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, F_DECAY, G_DECAY, get_dataset_paths
+from config import (DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME,
+                    F_DECAY, G_DECAY, UNDISTORT_MODE, get_dataset_paths)
 from data_loader import EventFrameSequence
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
@@ -43,8 +44,22 @@ from interacting_maps.network_dissertation import InteractingMapsThesis
 # Configuration  (change DATASET here to switch datasets)
 # ---------------------------------------------------------------------------
 
-DATASET           = 'shapes_rotation'
+DATASET           = 'poster_rotation' #'synthetic_xrot'  # 
 USE_THESIS_VERSION = True
+
+# ---------------------------------------------------------------------------
+# Validation mode
+#   RESEED_R_FROM_GT = False → standard run: R carries over from the previous
+#                              frame (the network's own previous estimate).
+#   RESEED_R_FROM_GT = True  → "perfect oracle" mode: at the start of EACH
+#                              frame, R is re-initialised from the GT angular
+#                              velocity for that frame. F is then re-anchored
+#                              to C·R via the inter-frame f_decay, so the
+#                              network sees a kinematically-correct starting
+#                              state every frame. Useful to isolate per-frame
+#                              inference quality from the carry-over dynamics.
+# ---------------------------------------------------------------------------
+RESEED_R_FROM_GT  = True
 
 cfg   = DATASET_CONFIGS[DATASET]
 paths = get_dataset_paths(DATASET)
@@ -185,20 +200,26 @@ def run_validation(gt_data: np.ndarray, imu_data: np.ndarray | None = None):
     cx, cy = seq.calib.cx, seq.calib.cy
     H, W   = seq.H, seq.W
 
+    # Distortion-aware C_mat (when UNDISTORT_MODE is enabled in config.py)
+    dist_coeffs = seq.calib.dist if UNDISTORT_MODE else None
+    if UNDISTORT_MODE:
+        print(f"  UNDISTORT_MODE ON  — dist_coeffs = {seq.calib.dist}")
+
     if USE_THESIS_VERSION:
         net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
-                                   **THESIS_PARAMS)
+                                   dist_coeffs=dist_coeffs, **THESIS_PARAMS)
         net.initialize_from_rotation(initial_R)
         label = 'Thesis (Martel 2019)'
     else:
         net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
-                              **COOK_PARAMS)
+                              dist_coeffs=dist_coeffs, **COOK_PARAMS)
         net.reset(scale=0.01)
         net.R = initial_R.copy()
         label = 'Cook et al. 2011'
 
     have_imu = imu_data is not None
-    print(f"\n  Network: {label},  {ITERS_PER_FRAME} iters/frame")
+    mode_str = "RESEED R from GT each frame" if RESEED_R_FROM_GT else "R carries over between frames"
+    print(f"\n  Network: {label},  {ITERS_PER_FRAME} iters/frame  [{mode_str}]")
     hdr = (f"\n{'Frame':>5}  {'t_mid':>7}  "
            f"{'Est ωx':>8} {'Est ωy':>8} {'Est ωz':>8}  |  "
            f"{'GT  ωx':>8} {'GT  ωy':>8} {'GT  ωz':>8}  |  ")
@@ -214,10 +235,23 @@ def run_validation(gt_data: np.ndarray, imu_data: np.ndarray | None = None):
     omega_imu_all  = []
 
     for k, (V, t_mid) in enumerate(seq):
+        # Compute GT angular velocity for this frame (used as reference, and
+        # optionally as a per-frame R re-seed under RESEED_R_FROM_GT).
+        omega_ref = gt_omega_body(gt_data, t_mid, FRAME_DURATION)
+
+        if RESEED_R_FROM_GT:
+            # "Perfect oracle" reseed: force R back to GT before each step.
+            # F is re-anchored toward C·R inside net.step via f_decay, so the
+            # whole network sees a kinematically-consistent starting state.
+            R_init_frame = omega_ref * FRAME_DURATION   # rad/s → rad/frame
+            if USE_THESIS_VERSION:
+                net.q_R.value = R_init_frame.copy()
+            else:
+                net.R = R_init_frame.copy()
+
         net.step(V, n_iters=ITERS_PER_FRAME, f_decay=F_DECAY, g_decay=G_DECAY)
 
         omega_est = net.R / FRAME_DURATION
-        omega_ref = gt_omega_body(gt_data, t_mid, FRAME_DURATION)
 
         t_lo = T_START + k * FRAME_DURATION
         t_hi = t_lo + FRAME_DURATION
@@ -252,11 +286,13 @@ def plot_results(times, omega_est, omega_gt, omega_imu, label):
     """4-panel figure: one row per ω component + angular error vs both references."""
 
     fig = plt.figure(figsize=(13, 10))
+    mode_str = "GT-reseeded R per frame" if RESEED_R_FROM_GT else "R carried over between frames"
     fig.suptitle(
         f'Angular Velocity Validation — {label}\n'
         f'Dataset: {DATASET}   '
         f'{FRAME_DURATION*1000:.0f} ms frames   '
-        f'{ITERS_PER_FRAME} iters/frame',
+        f'{ITERS_PER_FRAME} iters/frame   '
+        f'[{mode_str}]',
         fontsize=11,
     )
 

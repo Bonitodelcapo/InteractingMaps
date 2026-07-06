@@ -25,38 +25,125 @@ def compute_calibration(H: int, W: int, fx: float, fy: float, cx: float, cy: flo
     return C
 
 
-def build_kinematic_matrix(H: int, W: int, fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
+def _undistort_points_iterative(x_d, y_d, k1, k2, p1, p2, k3, n_iters=10):
     """
-    Precompute the (H, W, 2, 3) matrix that maps angular velocity R → pixel flow.
+    Invert OpenCV's plumb-bob distortion model on a grid of distorted normalised
+    coordinates.  Same fixed-point iteration as cv2.undistortPoints (no Jacobian
+    needed — converges in ~5 iterations for typical |k1| < 1).
 
-    From Thesis Eq. 6.38 (general intrinsics):
-        x' = (col - cx) / fx
-        y' = (row - cy) / fy
+    Parameters
+    ----------
+    x_d, y_d : ndarray, distorted normalised coords (i.e. (col-cx)/fx, (row-cy)/fy)
+    k1..k3, p1, p2 : Brown-Conrady coefficients (radial + tangential)
+    n_iters : number of fixed-point iterations
 
-        F_u = fx*[x'y' ωx - (x'²+1) ωy + y' ωz]
-        F_v = fy*[(y'²+1) ωx - x'y' ωy - x' ωz]
+    Returns
+    -------
+    x, y : ndarray, undistorted normalised coords such that the forward distortion
+           of (x, y) reproduces (x_d, y_d).
+    """
+    x, y = x_d.copy(), y_d.copy()   # initial guess = distorted coords themselves
+    for _ in range(n_iters):
+        r2     = x * x + y * y
+        k_rad  = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3
+        x_tang = 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+        y_tang = p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+        x = (x_d - x_tang) / k_rad
+        y = (y_d - y_tang) / k_rad
+    return x, y
 
-    Parameters come directly from calib.txt.
+
+def build_kinematic_matrix(H: int, W: int, fx: float, fy: float, cx: float, cy: float,
+                           dist_coeffs: np.ndarray | None = None) -> np.ndarray:
+    """
+    Precompute the (H, W, 2, 3) matrix that maps angular velocity ω → pixel flow.
+
+    Pinhole case (dist_coeffs is None or all zeros) — Thesis Eq. 6.38:
+        x' = (col - cx) / fx,  y' = (row - cy) / fy
+        F_u = fx · [x'y' ωx - (x'²+1) ωy + y' ωz]
+        F_v = fy · [(y'²+1) ωx - x'y' ωy - x' ωz]
+
+    Distortion case (dist_coeffs = [k1, k2, p1, p2, k3], OpenCV plumb-bob):
+        The pixel grid (col, row) is at DISTORTED locations on the sensor.
+        For each pixel:
+          1. Recover the undistorted normalised coords (x, y) by inverting
+             the plumb-bob model via fixed-point iteration.
+          2. Build the pinhole flow matrix M_ω(x, y) at the UNDISTORTED point.
+          3. Multiply by the Jacobian J_g of the distortion mapping
+             (x, y) → (x_d, y_d), which transforms velocity in undistorted
+             coords to velocity in distorted coords.
+          4. Scale by diag(fx, fy) to convert distorted-normalised velocity
+             to distorted-pixel velocity.
+
+        So C_mat_distorted[row, col] = diag(fx, fy) · J_g(x, y) · M_ω(x, y).
+
+    The pure-rotation assumption (no translation, no parallax) is what lets us
+    write this as a per-pixel 2×3 matrix that depends only on the calibration
+    — no scene-depth dependence.
     """
     cols = np.arange(W, dtype=np.float64)
     rows = np.arange(H, dtype=np.float64)
     uu, vv = np.meshgrid(cols, rows)
 
-    xp = (uu - cx) / fx  # normalized x'
-    yp = (vv - cy) / fy  # normalized y'
+    # Distorted normalised coordinates (always — the pixel grid is what it is).
+    xd = (uu - cx) / fx
+    yd = (vv - cy) / fy
 
-    C_mat = np.zeros((H, W, 2, 3), dtype=np.float64)
+    # Detect "no distortion" so we can fall through to the cheap pinhole path.
+    has_dist = (dist_coeffs is not None) and np.any(np.asarray(dist_coeffs) != 0.0)
 
-    # Horizontal flow (F_u), scaled by fx:
-    C_mat[:, :, 0, 0] = fx * (xp * yp)
-    C_mat[:, :, 0, 1] = fx * (-(xp**2 + 1.0))
-    C_mat[:, :, 0, 2] = fx * yp
+    if not has_dist:
+        # ---- Pure pinhole: (x, y) = (x_d, y_d), J_g = identity ----
+        x, y = xd, yd
 
-    # Vertical flow (F_v), scaled by fy:
-    C_mat[:, :, 1, 0] = fy * (yp**2 + 1.0)
-    C_mat[:, :, 1, 1] = fy * (-xp * yp)
-    C_mat[:, :, 1, 2] = fy * (-xp)
+        C_mat = np.zeros((H, W, 2, 3), dtype=np.float64)
+        C_mat[:, :, 0, 0] = fx * (x * y)
+        C_mat[:, :, 0, 1] = fx * (-(x ** 2 + 1.0))
+        C_mat[:, :, 0, 2] = fx * y
+        C_mat[:, :, 1, 0] = fy * (y ** 2 + 1.0)
+        C_mat[:, :, 1, 1] = fy * (-x * y)
+        C_mat[:, :, 1, 2] = fy * (-x)
+        return C_mat
 
+    # ---- Plumb-bob distortion path ----
+    k1, k2, p1, p2, k3 = (float(dist_coeffs[i]) for i in range(5))
+
+    # 1. Undistort the pixel grid to get the true ray coords (x, y).
+    x, y = _undistort_points_iterative(xd, yd, k1, k2, p1, p2, k3)
+
+    # 2. Jacobian J_g of (x, y) → (x_d, y_d).
+    #    Using k_rad = 1 + k1 r² + k2 r⁴ + k3 r⁶ ;  dk_rad/dr² = k1 + 2k2 r² + 3k3 r⁴
+    r2          = x * x + y * y
+    k_rad       = 1.0 + k1 * r2 + k2 * r2 ** 2 + k3 * r2 ** 3
+    dk_rad_dr2  = k1 + 2.0 * k2 * r2 + 3.0 * k3 * r2 ** 2
+
+    # ∂x_d/∂x and ∂y_d/∂y are the diagonal terms; ∂x_d/∂y = ∂y_d/∂x by symmetry.
+    Jxx = k_rad + 2.0 * (x ** 2) * dk_rad_dr2 + 2.0 * p1 * y + 6.0 * p2 * x
+    Jyy = k_rad + 2.0 * (y ** 2) * dk_rad_dr2 + 6.0 * p1 * y + 2.0 * p2 * x
+    Jxy = 2.0 * x * y * dk_rad_dr2 + 2.0 * p1 * x + 2.0 * p2 * y     # = Jyx
+
+    # 3. Pinhole flow Jacobian M_ω(x, y), evaluated at UNDISTORTED coords.
+    M00 = x * y
+    M01 = -(x ** 2 + 1.0)
+    M02 = y
+    M10 = (y ** 2 + 1.0)
+    M11 = -x * y
+    M12 = -x
+
+    # 4. C_mat_distorted = diag(fx, fy) · J_g · M_ω
+    #    Per-pixel:   [a b]   [M00 M01 M02]
+    #                 [b d] · [M10 M11 M12]
+    a = Jxx
+    b = Jxy
+    d = Jyy
+
+    C_mat = np.empty((H, W, 2, 3), dtype=np.float64)
+    C_mat[:, :, 0, 0] = fx * (a * M00 + b * M10)
+    C_mat[:, :, 0, 1] = fx * (a * M01 + b * M11)
+    C_mat[:, :, 0, 2] = fx * (a * M02 + b * M12)
+    C_mat[:, :, 1, 0] = fy * (b * M00 + d * M10)
+    C_mat[:, :, 1, 1] = fy * (b * M01 + d * M11)
+    C_mat[:, :, 1, 2] = fy * (b * M02 + d * M12)
     return C_mat
 
 #def compute_calibration(H: int, W: int, f: float) -> np.ndarray:

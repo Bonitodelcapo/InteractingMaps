@@ -123,8 +123,10 @@ def load_events_fast(
                 break
             skip += 1
 
-    # Estimate max rows (events/sec * duration from first scan)
-    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=5_000_000, dtype=np.float32)
+    # Estimate max rows. The original cap of 5M was tuned for the RPG rotation
+    # datasets (~2 Mev/s × 0.6 s ≈ 1.2 Mev). Dense synthetic datasets can hit
+    # 10 Mev/s+ and would be SILENTLY TRUNCATED at the old cap. Raise to 30M.
+    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=30_000_000, dtype=np.float32)
     if chunk.ndim == 1:
         chunk = chunk.reshape(1, -1)
 
@@ -207,9 +209,27 @@ class EventFrameSequence:
         # Load real calibration — no modification
         self.calib = CameraCalibration(calib_path)
 
-        # Use FULL sensor size from calibration (no crop!)
-        self.H = int(round(self.calib.cy * 2))
-        self.W = int(round(self.calib.cx * 2))
+        # ------------------------------------------------------------------
+        # Sensor size — DAVIS240C (RPG event-camera dataset)
+        # ------------------------------------------------------------------
+        # The RPG rotation datasets (shapes_, boxes_, poster_) were all
+        # captured with the DAVIS240C, whose physical sensor is 240 × 180 px.
+        #
+        # We DO NOT derive (H, W) from (2·cy, 2·cx) because the principal
+        # point (cx≈132.2, cy≈110.7) is OFFSET from the geometric centre
+        # (120, 90) — calibration finds where the optical axis actually
+        # pierces the focal plane, which is rarely at the exact centre.
+        # Doubling would give 264×221 phantom pixels:
+        #   - events never fire there (mask filters them out → V=0 region),
+        #   - but C_mat / M = Σ Cᵀ C are still summed over those pixels,
+        #   - so R* = M⁻¹·Σ Cᵀ·F is biased toward smaller magnitudes
+        #     (denominator inflated, numerator unchanged).
+        #
+        # If you ever switch to a different camera, change these two
+        # constants OR derive them from the events.txt extent.
+        # ------------------------------------------------------------------
+        self.H = 180
+        self.W = 240
 
         # No offset — we use the entire sensor
         self.x_offset = 0
@@ -220,7 +240,7 @@ class EventFrameSequence:
 
         print(f"Using calib.txt directly: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
               f"cx={self.calib.cx:.1f} cy={self.calib.cy:.1f}")
-        print(f"Full sensor: {self.W}×{self.H} — no crop")
+        print(f"DAVIS240C sensor: {self.W}×{self.H} (hardcoded; principal point is offset from centre)")
 
         t_end = t_start + n_frames * frame_duration + 0.1
         self._events = load_events_fast(events_txt, t_start=t_start, duration=t_end - t_start)
