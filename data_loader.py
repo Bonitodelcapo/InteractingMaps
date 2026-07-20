@@ -238,6 +238,7 @@ class EventFrameSequence:
         n_frames: int = 50,
         clip_value: float = 3.0,
         sensor_size: tuple = None,
+        undistort: bool = True,
     ):
         self.calib = CameraCalibration(calib_path)
 
@@ -248,6 +249,7 @@ class EventFrameSequence:
 
         self.frame_duration = frame_duration
         self.clip_value = clip_value
+        self.undistort = undistort
 
         print(f"Using calib.txt: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
               f"cx={self.calib.cx:.1f} cy={self.calib.cy:.1f}")
@@ -269,8 +271,9 @@ class EventFrameSequence:
             t_hi = t_lo + self._dt
             mask = (events[:, 0] >= t_lo) & (events[:, 0] < t_hi)
 
-            frame_events = undistort_events(events[mask], self.calib)
-
+            frame_events = events[mask]
+            if self.undistort:
+                frame_events = undistort_events(frame_events, self.calib)
             V = events_to_vframe(
                 frame_events, self.H, self.W,
                 x_offset=0, y_offset=0,  # no crop

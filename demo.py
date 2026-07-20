@@ -26,6 +26,9 @@ DATASET = 'poster_rotation'
 USE_THESIS_VERSION = True
 USE_IMU = True  # Only applies when USE_THESIS_VERSION = True
 
+# Distortion handling: 'undistort_events' | 'C_full'
+DIST_MODE = 'C_full'
+
 cfg = DATASET_CONFIGS[DATASET]
 initial_R = cfg['initial_R']
 if initial_R is None:
@@ -55,6 +58,7 @@ def make_real_source():
         n_frames=cfg['n_frames'],
         clip_value=10.0,
         sensor_size=cfg.get('sensor_size', None),
+        undistort=(DIST_MODE == 'undistort_events'),
     )
     return list(seq), seq.calib, seq.H, seq.W
 
@@ -63,6 +67,14 @@ print(f"Using real event-camera data ({DATASET} dataset).")
 frames, calib, H, W = make_real_source()
 fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 
+# resolve distortion handling for the C matrix
+if DIST_MODE == 'undistort_events':
+    dist_coeffs = None            # events already undistorted → pinhole C
+elif DIST_MODE == 'C_full':
+    dist_coeffs = calib.dist      # distortion-aware C (+ Jacobian)
+else:
+    raise ValueError(f"Unknown DIST_MODE: {DIST_MODE}")
+
 
 # ---------------------------------------------------------------------------
 # Build network
@@ -70,11 +82,15 @@ fx, fy, cx, cy = calib.fx, calib.fy, calib.cx, calib.cy
 
 if USE_THESIS_VERSION:
     NET_PARAMS = THESIS_PARAMS.copy()
-    net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
+    net = InteractingMapsThesis(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+                                dist_coeffs=dist_coeffs,
+                                **NET_PARAMS)
     net.initialize_from_rotation(initial_R)
 else:
     NET_PARAMS = COOK_PARAMS.copy()
-    net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **NET_PARAMS)
+    net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+                          dist_coeffs=dist_coeffs,
+                          **NET_PARAMS)
     net.reset(scale=0.5)
     net.R = initial_R.copy()
     # Initialize F = C·R so OFCE has something to work with

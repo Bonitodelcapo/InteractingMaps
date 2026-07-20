@@ -33,6 +33,8 @@ class InteractingMaps:
         delta_GI: float = 0.1,
         delta_RF: float = 0.1,
         delta_FR: float = 0.5,
+        dist_coeffs=None,
+        include_jacobian: bool = True,
     ):
         self.H = H
         self.W = W
@@ -49,11 +51,12 @@ class InteractingMaps:
         self.delta_FR = delta_FR    # R from F,C (Eq. 13)
 
         # Constant calibration map (unit direction per pixel)
-        self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3)
+        #self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3) is UNUSED
 
         # Precompute the perspective-correct kinematic matrix (Thesis Eq. 6.37)
-        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)  # (H, W, 2, 3)
-
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy,
+                                                    dist_coeffs=dist_coeffs,
+                                                    include_jacobian=include_jacobian)
         # Mutable maps — initialised by reset()
         self.I = np.zeros((H + 1, W + 1), dtype=np.float64)
         self.G = np.zeros((H, W, 2), dtype=np.float64)

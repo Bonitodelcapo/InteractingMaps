@@ -207,7 +207,9 @@ class InteractingMapsThesis:
     """
     def __init__(self, H, W, fx, fy, cx, cy, frame_duration=0.005,
                  delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
-                 delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3):
+                 delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3,
+                 dist_coeffs=None, include_jacobian=True):
+
         self.H = H
         self.W = W
         self.fx, self.fy = fx, fy
@@ -217,7 +219,9 @@ class InteractingMapsThesis:
 
 
         # Build kinematic matrix from real intrinsics (Eq. 6.38)
-        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy)
+        self._C_mat = build_kinematic_matrix(H, W, fx, fy, cx, cy,
+                                             dist_coeffs=dist_coeffs,
+                                             include_jacobian=include_jacobian)
 
         # Initialize Quantities
         self.q_V = Quantity((H, W), "Input_V")

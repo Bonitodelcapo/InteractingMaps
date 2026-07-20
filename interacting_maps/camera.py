@@ -1,5 +1,5 @@
 import numpy as np
-
+import cv2
 
 def compute_calibration(H: int, W: int, fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
     """
@@ -24,39 +24,60 @@ def compute_calibration(H: int, W: int, fx: float, fy: float, cx: float, cy: flo
     C = np.stack([xn / norm, yn / norm, zn / norm], axis=-1)
     return C
 
-
-def build_kinematic_matrix(H: int, W: int, fx: float, fy: float, cx: float, cy: float) -> np.ndarray:
+def build_kinematic_matrix(H, W, fx, fy, cx, cy,
+                           dist_coeffs=None, include_jacobian=True):
     """
-    Precompute the (H, W, 2, 3) matrix that maps angular velocity R → pixel flow.
+    (H, W, 2, 3) matrix mapping ω -> pixel flow.
 
-    From Thesis Eq. 6.38 (general intrinsics):
-        x' = (col - cx) / fx
-        y' = (row - cy) / fy
-
-        F_u = fx*[x'y' ωx - (x'²+1) ωy + y' ωz]
-        F_v = fy*[(y'²+1) ωx - x'y' ωy - x' ωz]
-
-    Parameters come directly from calib.txt.
+    dist_coeffs=None      -> ideal pinhole
+    dist_coeffs=[k1,k2,p1,p2,k3]:
+        x', y' become the true UNDISTORTED normalized coords of each native
+        (distorted) pixel; if include_jacobian, the flow is mapped into
+        distorted-pixel space via the distortion Jacobian J_D:
+            C_mat = diag(fx,fy) @ J_D(x',y') @ A(x',y')
     """
     cols = np.arange(W, dtype=np.float64)
     rows = np.arange(H, dtype=np.float64)
     uu, vv = np.meshgrid(cols, rows)
 
-    xp = (uu - cx) / fx  # normalized x'
-    yp = (vv - cy) / fy  # normalized y'
+    if dist_coeffs is None:
+        xp = (uu - cx) / fx
+        yp = (vv - cy) / fy
+        Jxx = Jyy = np.ones_like(xp)
+        Jxy = np.zeros_like(xp)
+    else:
+        K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+        dist = np.asarray(dist_coeffs, dtype=np.float64).ravel()
+        pts = np.stack([uu.ravel(), vv.ravel()], axis=-1).reshape(-1, 1, 2)
+        norm = cv2.undistortPoints(pts, K, dist)   # no P -> normalized undistorted
+        xp = norm[:, 0, 0].reshape(H, W)
+        yp = norm[:, 0, 1].reshape(H, W)
 
-    C_mat = np.zeros((H, W, 2, 3), dtype=np.float64)
+        if include_jacobian:
+            k1, k2, p1, p2, k3 = dist[:5]
+            r2 = xp**2 + yp**2
+            krad = 1 + k1*r2 + k2*r2**2 + k3*r2**3
+            s = k1 + 2*k2*r2 + 3*k3*r2**2
+            Jxx = krad + 2*xp**2*s + 2*p1*yp + 6*p2*xp
+            Jxy = 2*xp*yp*s + 2*p1*xp + 2*p2*yp
+            Jyy = krad + 2*yp**2*s + 6*p1*yp + 2*p2*xp
+        else:
+            Jxx = Jyy = np.ones_like(xp)
+            Jxy = np.zeros_like(xp)
 
-    # Horizontal flow (F_u), scaled by fx:
-    C_mat[:, :, 0, 0] = fx * (xp * yp)
-    C_mat[:, :, 0, 1] = fx * (-(xp**2 + 1.0))
-    C_mat[:, :, 0, 2] = fx * yp
+    # Rotational-flow matrix A(x',y'), rows = [Fx'; Fy']
+    A = np.empty((H, W, 2, 3), dtype=np.float64)
+    A[..., 0, 0] = xp * yp
+    A[..., 0, 1] = -(xp**2 + 1.0)
+    A[..., 0, 2] = yp
+    A[..., 1, 0] = yp**2 + 1.0
+    A[..., 1, 1] = -xp * yp
+    A[..., 1, 2] = -xp
 
-    # Vertical flow (F_v), scaled by fy:
-    C_mat[:, :, 1, 0] = fy * (yp**2 + 1.0)
-    C_mat[:, :, 1, 1] = fy * (-xp * yp)
-    C_mat[:, :, 1, 2] = fy * (-xp)
-
+    # C_mat = diag(fx,fy) @ J_D @ A   (J_D symmetric: Jyx = Jxy)
+    C_mat = np.empty((H, W, 2, 3), dtype=np.float64)
+    C_mat[..., 0, :] = fx * (Jxx[..., None] * A[..., 0, :] + Jxy[..., None] * A[..., 1, :])
+    C_mat[..., 1, :] = fy * (Jxy[..., None] * A[..., 0, :] + Jyy[..., None] * A[..., 1, :])
     return C_mat
 
 #def compute_calibration(H: int, W: int, f: float) -> np.ndarray:

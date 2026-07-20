@@ -46,40 +46,21 @@ DATASET_SEGMENTS = {
         'sensor_size': (180, 240),
     },
     ],
-    ''''shapes_rotation': [
-        {  # quality=7.2, |ω|=0.757 rad/s
-        'id': 'seg_A',
-        't_start': 2.416,
-        'frame_duration': 0.02,
-        'n_frames': 25,  # 0.5s / 0.02s
-        'initial_R': None,
-        'sensor_size': (180, 240),
-    },
-    {  # quality=7.2, |ω|=0.925 rad/s
-        'id': 'seg_B',
-        't_start': 6.216,
-        'frame_duration': 0.02,
-        'n_frames': 25,  # 0.5s / 0.02s
-        'initial_R': None,
-        'sensor_size': (180, 240),
-    },
-    {  # quality=6.2, |ω|=0.646 rad/s
-        'id': 'seg_C',
-        't_start': 1.616,
-        'frame_duration': 0.02,
-        'n_frames': 25,  # 0.5s / 0.02s
-        'initial_R': None,
-        'sensor_size': (180, 240),
-    },
-    {  # quality=1.2, |ω|=0.066 rad/s
-        'id': 'seg_D',
-        't_start': 0.166,
-        'frame_duration': 0.02,
-        'n_frames': 25,  # 0.5s / 0.02s
-        'initial_R': None,
-        'sensor_size': (180, 240),
-    },
-    ],'''
+    # 'shapes_rotation' disabled:
+    # 'shapes_rotation': [
+    #     {  # quality=7.2, |ω|=0.757 rad/s
+    #     'id': 'seg_A', 't_start': 2.416, 'frame_duration': 0.02,
+    #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
+    #     {  # quality=7.2, |ω|=0.925 rad/s
+    #     'id': 'seg_B', 't_start': 6.216, 'frame_duration': 0.02,
+    #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
+    #     {  # quality=6.2, |ω|=0.646 rad/s
+    #     'id': 'seg_C', 't_start': 1.616, 'frame_duration': 0.02,
+    #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
+    #     {  # quality=1.2, |ω|=0.066 rad/s
+    #     'id': 'seg_D', 't_start': 0.166, 'frame_duration': 0.02,
+    #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
+    # ],
     'poster_rotation': [
            {  # quality=2.47, |ω|=2.816 rad/s, dominant=ω_z
         'id': 'seg_A',
@@ -181,6 +162,11 @@ COOK_PARAMS = dict(
 )
 
 ITERS_PER_FRAME = 75   # Thesis use 50-75; 
+
+# Distortion handling (ablation switch):
+#   'undistort_events' : undistort events before binning; pinhole C    (original)
+#   'C_full'           : raw events; distortion-aware coords + Jacobian in C  (best)
+DISTORTION_MODE = 'C_full'
 
 # ---------------------------------------------------------------------------
 # Helper: resolve paths for a dataset

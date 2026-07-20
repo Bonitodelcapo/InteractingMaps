@@ -28,6 +28,10 @@ Usage:
 
     # Einzelner Run:
     python evaluation.py --exp 2 --dataset poster_rotation --model thesis_imu
+
+    # exp 9 
+    python evaluation.py --exp 9 --dataset boxes_rotation  --segment all --model thesis_imu --no-frames
+    python evaluation.py --exp 9 --dataset poster_rotation --segment all --model thesis_imu --no-frames
 """
 
 import numpy as np
@@ -38,7 +42,8 @@ import json
 import time as time_module
 
 from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
-                    ITERS_PER_FRAME, get_dataset_paths, get_initial_R_from_imu)
+                    ITERS_PER_FRAME, DISTORTION_MODE, get_dataset_paths, get_initial_R_from_imu)
+from best_config import best_params
 from data_loader import EventFrameSequence
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
@@ -52,10 +57,11 @@ class RunConfig:
     """All parameters for a single evaluation run."""
     def __init__(self, dataset='boxes_rotation', model='thesis_imu',
                  segment=None, t_start=None, frame_duration=None, n_frames=None,
-                 n_iters=None, delta_IMU=None):
-        
+                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None):
+
         self.dataset = dataset
         self.model = model  # 'cook', 'thesis', 'thesis_imu'
+        self.distortion_mode = distortion_mode or DISTORTION_MODE
         
         if segment is None:
             # Fallback: erstes Segment bzw. DATASET_CONFIGS
@@ -99,6 +105,10 @@ class RunConfig:
         # Override delta_IMU if specified
         if delta_IMU is not None and self.use_imu:
             self.params['delta_IMU'] = delta_IMU
+
+        # Override delta_FR if specified
+        if delta_FR is not None:
+            self.params['delta_FR'] = delta_FR
         
         # Paths
         self.paths = get_dataset_paths(dataset)
@@ -109,6 +119,10 @@ class RunConfig:
     @property
     def delta_IMU(self):
         return self.params.get('delta_IMU', 0.0)
+    
+    @property
+    def undistort_at_event_level(self):
+        return self.distortion_mode == 'undistort_events'
     
     @property
     def duration_s(self):
@@ -124,6 +138,7 @@ class RunConfig:
             folder_name += f"_dimu{self.delta_IMU:.2f}"
         # Also encode delta_FR to distinguish configs
         folder_name += f"_dFR{self.params.get('delta_FR', 0):.2f}"
+        folder_name += f"_{self.distortion_mode}"
         return os.path.join('results', self.dataset, self.model, folder_name)
     
     def to_dict(self):
@@ -134,6 +149,7 @@ class RunConfig:
             't_start': self.t_start,
             'frame_duration': self.frame_duration,
             'n_frames': self.n_frames,
+            'distortion_mode': self.distortion_mode,
             'n_iters': self.n_iters,
             'duration_s': self.duration_s,
             'sensor_size': list(self.sensor_size),
@@ -172,6 +188,32 @@ class RunConfig:
 # HELPERS
 # ===========================================================================
 
+def resolve_best_kwargs(dataset, segment_id, model, cli_overrides=None):
+    """Return RunConfig kwargs (frame_duration/n_frames/n_iters/delta_FR/delta_IMU)
+    from best_config.py for a (dataset, segment_id, model).
+
+    delta_IMU is only included for thesis_imu. `cli_overrides` (a dict of any of
+    those keys with non-None values) wins over the stored best values, so an
+    explicit CLI flag always takes precedence. Returns {} if no best entry exists.
+    """
+    bp = best_params(dataset, segment_id, model)
+    if bp is None:
+        print(f"  [--best] No best config for {dataset}/{segment_id}/{model}; "
+              f"using defaults.")
+        return {}
+    kw = {
+        'frame_duration': bp['frame_duration'],
+        'n_frames': bp['n_frames'],
+        'n_iters': bp['n_iters'],
+        'delta_FR': bp['delta_FR'],
+    }
+    if model == 'thesis_imu':
+        kw['delta_IMU'] = bp['delta_IMU']
+    if cli_overrides:
+        kw.update({k: v for k, v in cli_overrides.items() if v is not None})
+    return kw
+
+
 def load_imu(path: str) -> np.ndarray:
     return np.loadtxt(path, dtype=np.float64)
 
@@ -183,15 +225,30 @@ def get_gyro_for_frame(imu_data, t_lo, t_hi):
     return np.mean(imu_data[mask, 4:7], axis=0)
 
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
-    """Create network from RunConfig."""
+    """Create network from RunConfig; distortion handling from rc.distortion_mode."""
+    from data_loader import CameraCalibration
+    mode = rc.distortion_mode
+    if mode == 'undistort_events':
+        dist_coeffs = None                                    # events already undistorted → pinhole C
+    elif mode == 'C_full':
+        dist_coeffs = CameraCalibration(rc.paths['calib']).dist  # distortion-aware C (+ Jacobian)
+    else:
+        raise ValueError(f"Unknown distortion_mode: {mode}")
+
     if rc.use_thesis:
         net = InteractingMapsThesis(
             H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
-            frame_duration=rc.frame_duration, **rc.params
+            frame_duration=rc.frame_duration,
+            dist_coeffs=dist_coeffs,
+            **rc.params
         )
         net.initialize_from_rotation(rc.initial_R)
     else:
-        net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **rc.params)
+        net = InteractingMaps(
+            H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+            dist_coeffs=dist_coeffs,
+            **rc.params
+        )
         net.I = np.random.randn(H+1, W+1) * 0.001
         net.G = np.zeros((H, W, 2), dtype=np.float64)
         net.F = np.einsum('hwij,j->hwi', net._C_mat, rc.initial_R)
@@ -246,6 +303,7 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
         rc.paths['events'], rc.paths['calib'],
         frame_duration=rc.frame_duration, t_start=rc.t_start,
         n_frames=frame_idx + 1, clip_value=10.0,
+        undistort=rc.undistort_at_event_level,
         sensor_size=rc.sensor_size,
     )
     frames = list(seq)
@@ -375,6 +433,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         rc.paths['events'], rc.paths['calib'],
         frame_duration=rc.frame_duration, t_start=rc.t_start,
         n_frames=rc.n_frames, clip_value=10.0,
+        undistort=rc.undistort_at_event_level,
         sensor_size=rc.sensor_size,
     )
     H, W = seq.H, seq.W
@@ -492,6 +551,108 @@ def _plot_tracking(rows, rc: RunConfig):
     plt.savefig(os.path.join(rc.output_dir, 'tracking_plot.png'), dpi=150)
     plt.close()
 
+def experiment_distortion_ablation(rc: RunConfig, save_frames=False):
+    """
+    EXPERIMENT 9: run the SAME tracking config under both distortion models
+    and tabulate metrics.
+        undistort_events : events undistorted, pinhole C        (baseline)
+        C_full           : distortion in C, directions + Jacobian
+    """
+    print("\n" + "="*70)
+    print("EXPERIMENT 9: Distortion-Handling Ablation")
+    print(f"  Base config: {rc}")
+    print("="*70)
+
+    modes = ['undistort_events', 'C_full']
+    rows = []
+    for mode in modes:
+        rc_m = RunConfig(
+            dataset=rc.dataset, model=rc.model, segment=rc.segment,
+            frame_duration=rc.frame_duration, n_frames=rc.n_frames,
+            n_iters=rc.n_iters,
+            delta_IMU=(rc.delta_IMU if rc.use_imu else None),
+            delta_FR=rc.params.get('delta_FR'),
+            distortion_mode=mode,
+        )
+        summary = experiment_tracking(rc_m, save_frames=save_frames)
+        rows.append({
+            'mode': mode,
+            'mean_err_deg_s': summary['mean_err_deg_s'],
+            'median_err_deg_s': summary['median_err_deg_s'],
+            'mean_dir_err_deg': summary['mean_dir_err_deg'],
+            'mean_beta': summary['mean_beta'],
+            'std_beta': summary['std_beta'],
+        })
+
+    print("\n\n" + "="*80)
+    print(f"DISTORTION ABLATION — {rc.dataset}/{rc.segment_id}, model={rc.model}")
+    print("="*80)
+    print(f"{'mode':<18} {'err°/s':>8} {'med°/s':>8} {'dir°':>7} {'β':>6} {'σβ':>6}")
+    print("-"*80)
+    for r in rows:
+        print(f"{r['mode']:<18} {r['mean_err_deg_s']:>8.1f} "
+              f"{r['median_err_deg_s']:>8.1f} {r['mean_dir_err_deg']:>7.1f} "
+              f"{r['mean_beta']:>6.2f} {r['std_beta']:>6.2f}")
+
+    out = os.path.join('results', 'ablation_distortion')
+    os.makedirs(out, exist_ok=True)
+    csv_path = os.path.join(out, f"{rc.dataset}_{rc.segment_id}_{rc.model}.csv")
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"\nAblation CSV saved: {csv_path}")
+    return rows
+
+def experiment_distortion_ablation_all_segments(dataset, model, save_frames=False,
+                                                use_best=False):
+    """
+    Run the distortion ablation over EVERY segment of a dataset and emit one
+    combined CSV (dataset × segment × mode) plus a grouped summary table.
+
+    If use_best=True, each segment's base config is taken from best_config.py
+    (best grid params for that dataset/segment/model) instead of the defaults.
+    """
+    print("\n" + "="*80)
+    print(f"EXPERIMENT 9 (ALL SEGMENTS): Distortion Ablation — {dataset}, model={model}")
+    print("="*80)
+
+    segs = DATASET_SEGMENTS[dataset]
+    all_rows = []
+    for seg in segs:
+        best_kw = resolve_best_kwargs(dataset, seg['id'], model) if use_best else {}
+        rc = RunConfig(dataset=dataset, model=model, segment=seg['id'],
+                       distortion_mode=None, **best_kw)  # per-mode override happens inside
+        rows = experiment_distortion_ablation(rc, save_frames=save_frames)
+        for r in rows:
+            all_rows.append({'dataset': dataset, 'segment_id': seg['id'],
+                             'model': model, **r})
+
+    # ─── grouped summary table ──────────────────────────────────────────
+    print("\n\n" + "="*92)
+    print(f"COMBINED DISTORTION ABLATION — {dataset}, model={model}")
+    print("="*92)
+    print(f"{'segment':<8} {'mode':<18} {'err°/s':>8} {'med°/s':>8} "
+          f"{'dir°':>7} {'β':>6} {'σβ':>6}")
+    print("-"*92)
+    last_seg = None
+    for r in all_rows:
+        if r['segment_id'] != last_seg:
+            print("-"*92)
+            last_seg = r['segment_id']
+        print(f"{r['segment_id']:<8} {r['mode']:<18} {r['mean_err_deg_s']:>8.1f} "
+              f"{r['median_err_deg_s']:>8.1f} {r['mean_dir_err_deg']:>7.1f} "
+              f"{r['mean_beta']:>6.2f} {r['std_beta']:>6.2f}")
+
+    out = os.path.join('results', 'ablation_distortion')
+    os.makedirs(out, exist_ok=True)
+    csv_path = os.path.join(out, f"{dataset}_ALLSEG_{model}.csv")
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=all_rows[0].keys())
+        writer.writeheader()
+        writer.writerows(all_rows)
+    print(f"\nCombined ablation CSV saved: {csv_path}")
+    return all_rows
 
 # ===========================================================================
 # EXPERIMENT 3: Parameter Influence
@@ -515,7 +676,7 @@ def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
     seq = EventFrameSequence(
         rc.paths['events'], rc.paths['calib'],
         frame_duration=rc.frame_duration, t_start=rc.t_start,
-        n_frames=frame_idx + 1, clip_value=10.0, sensor_size=rc.sensor_size,
+        n_frames=frame_idx + 1, clip_value=10.0, undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
     )
     frames = list(seq)
     V, _ = frames[frame_idx]
@@ -546,7 +707,7 @@ def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
         seq2 = EventFrameSequence(
             rc.paths['events'], rc.paths['calib'],
             frame_duration=dt, t_start=rc.t_start,
-            n_frames=frame_idx + 1, clip_value=10.0, sensor_size=rc.sensor_size,
+            n_frames=frame_idx + 1, clip_value=10.0, undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
         )
         frames2 = list(seq2)
         V2, _ = frames2[frame_idx]
@@ -767,7 +928,7 @@ def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
     seq = EventFrameSequence(
         rc.paths['events'], rc.paths['calib'],
         frame_duration=rc.frame_duration, t_start=rc.t_start,
-        n_frames=frame_idx + 1, clip_value=10.0, sensor_size=rc.sensor_size,
+        n_frames=frame_idx + 1, clip_value=10.0, undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
     )
     frames = list(seq)
     V, _ = frames[frame_idx]
@@ -908,8 +1069,9 @@ def experiment_full_evaluation(dataset_filter=None, model_filter=None, save_fram
 # ===========================================================================
 # EXPERIMENT 8: Automatic Parameter Grid Sweep
 # ===========================================================================
-def experiment_parameter_grid(dataset_filter=None, model_filter=None, 
-                              all_segments=False, save_frames=True):
+def experiment_parameter_grid(dataset_filter=None, model_filter=None,
+                              all_segments=False, save_frames=True,
+                              distortion_mode=None):
     """
     Sweep over:
       - frame_duration: [0.010, 0.020, 0.030]
@@ -961,6 +1123,7 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
     print(f"  Datasets: {datasets}")
     print(f"  Models:   {models}")
     print(f"  Segments: {'ALL' if all_segments else 'first only'}")
+    print(f"  Distortion mode: {distortion_mode or DISTORTION_MODE}")
     print(f"  Grid axes: {list(grid.keys())}")
     print(f"  Total runs: {total_runs}")
     print()
@@ -999,6 +1162,7 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
                                             n_frames=n_frames,
                                             n_iters=n_iters,
                                             delta_IMU=delta_IMU,
+                                            distortion_mode=distortion_mode,
                                         )
                                         rc.params['delta_FR'] = delta_FR
 
@@ -1016,6 +1180,7 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
                                             'dataset': dataset,
                                             'segment_id': seg['id'],
                                             'model': model,
+                                            'distortion_mode': rc.distortion_mode,
                                             'frame_duration': frame_duration,
                                             'n_frames': n_frames,
                                             'n_iters': n_iters,
@@ -1035,6 +1200,7 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
                                             'dataset': dataset,
                                             'segment_id': seg['id'],
                                             'model': model,
+                                            'distortion_mode': distortion_mode or DISTORTION_MODE,
                                             'frame_duration': frame_duration,
                                             'n_frames': n_frames,
                                             'n_iters': n_iters,
@@ -1119,6 +1285,13 @@ if __name__ == '__main__':
                     help='Run grid sweep over ALL segments (slow)')
     parser.add_argument('--no-frames', action='store_true',
                         help='Skip saving 3-col PNGs (faster)')
+    parser.add_argument('--distortion-mode', type=str, default=None,
+                        choices=['undistort_events', 'C_full'],
+                        help='Override distortion handling (exp 1-6, 8). Exp 9 sweeps both.')
+    parser.add_argument('--best', action='store_true',
+                        help='Fill unspecified params from best_config.py '
+                             '(best grid params for this dataset/segment/model). '
+                             'Explicit CLI flags still win.')
     args = parser.parse_args()
     save_frames = not args.no_frames  # Default: save images
 
@@ -1129,17 +1302,30 @@ if __name__ == '__main__':
 
     # Build config ONLY for experiments that need it (1-6)
     rc = None
-    if args.exp in (1, 2, 3, 4, 5, 6):
+    need_rc = args.exp in (1, 2, 3, 4, 5, 6, 9)
+    if args.exp == 9 and args.segment == 'all':
+        need_rc = False                       # all-segments path builds its own configs
+    if need_rc:
         dataset = args.dataset or 'boxes_rotation'
         model = args.model if args.model != 'all' else 'thesis_imu'
-        rc = RunConfig(
+        rc_kwargs = dict(
             dataset=dataset,
             model=model,
             segment=args.segment,
             n_frames=args.n_frames,
             n_iters=args.n_iters,
             delta_IMU=args.delta_imu,
+            distortion_mode=args.distortion_mode,
         )
+        if args.best:
+            if args.segment in (None, 'all'):
+                print("  [--best] requires a specific --segment (e.g. seg_A); "
+                      "ignoring --best.")
+            else:
+                cli = {'n_frames': args.n_frames, 'n_iters': args.n_iters,
+                       'delta_IMU': args.delta_imu}
+                rc_kwargs.update(resolve_best_kwargs(dataset, args.segment, model, cli))
+        rc = RunConfig(**rc_kwargs)
 
     experiments = {
         1: lambda: experiment_single_frame_convergence(rc, frame_idx=args.frame),
@@ -1159,7 +1345,14 @@ if __name__ == '__main__':
             model_filter=effective_model,
             all_segments=args.all_segments,
             save_frames=save_frames,
+            distortion_mode=args.distortion_mode,
         ),
-    }
+        9: lambda: (experiment_distortion_ablation_all_segments(
+                        dataset=args.dataset or 'boxes_rotation',
+                        model=(args.model if args.model != 'all' else 'thesis_imu'),
+                        save_frames=save_frames, use_best=args.best)
+                    if args.segment == 'all'
+                    else experiment_distortion_ablation(rc, save_frames=save_frames)),
+        }
 
     experiments[args.exp]()
