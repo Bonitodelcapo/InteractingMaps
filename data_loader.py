@@ -123,8 +123,10 @@ def load_events_fast(
                 break
             skip += 1
 
-    # Estimate max rows (events/sec * duration from first scan)
-    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=5_000_000, dtype=np.float32)
+    # Estimate max rows (events/sec * duration from first scan).
+    # Cap raised 5M→30M: long segments (dt=0.05 × 150 frames = 7.5s at
+    # ~2 Mev/s ≈ 16 Mev) were silently truncated at 5M, blanking later frames.
+    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=30_000_000, dtype=np.float32)
     if chunk.ndim == 1:
         chunk = chunk.reshape(1, -1)
 

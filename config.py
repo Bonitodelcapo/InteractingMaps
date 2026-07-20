@@ -46,7 +46,7 @@ DATASET_SEGMENTS = {
         'sensor_size': (180, 240),
     },
     ],
-    ''''shapes_rotation': [
+    'shapes_rotation': [
         {  # quality=7.2, |ω|=0.757 rad/s
         'id': 'seg_A',
         't_start': 2.416,
@@ -79,7 +79,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    ],'''
+    ],
     'poster_rotation': [
            {  # quality=2.47, |ω|=2.816 rad/s, dominant=ω_z
         'id': 'seg_A',

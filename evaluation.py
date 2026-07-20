@@ -182,6 +182,80 @@ def get_gyro_for_frame(imu_data, t_lo, t_hi):
         return imu_data[idx, 4:7]
     return np.mean(imu_data[mask, 4:7], axis=0)
 
+
+# ---------------------------------------------------------------------------
+# Ground-truth reference from groundtruth.txt (Vicon poses)
+#
+# The IMU gyro (imu.txt) is the camera's OWN sensor. When it is also fed to the
+# thesis_imu model as `omega_imu`, scoring against it is circular (the model is
+# graded against its own input). groundtruth.txt comes from an INDEPENDENT
+# motion-capture rig, so scoring against it is unbiased.
+#
+# ω is recovered by differencing two successive orientation quaternions:
+#     dR_body = R1.T @ R2      (right-invariant → CAMERA BODY FRAME)
+# NOT R2 @ R1.T, which would give world-frame ω. The network and the gyro both
+# report body-frame ω, so the reference must be body-frame too.
+# ---------------------------------------------------------------------------
+
+# Which source to SCORE against: 'groundtruth' (Vicon, independent) or 'imu'
+# (gyro — only use for datasets that ship no groundtruth.txt). Model INPUT for
+# thesis_imu is always the gyro regardless of this setting.
+SCORE_AGAINST = 'groundtruth'
+
+
+def load_groundtruth(path: str):
+    """Load groundtruth.txt: [t tx ty tz qx qy qz qw] → (N, 8), or None."""
+    if not os.path.exists(path):
+        return None
+    return np.loadtxt(path, dtype=np.float64)
+
+
+def _quat_to_rotmat(q):
+    """Quaternion (qx, qy, qz, qw) → 3×3 rotation matrix R_wc."""
+    qx, qy, qz, qw = q / np.linalg.norm(q)
+    return np.array([
+        [1 - 2*(qy**2 + qz**2),   2*(qx*qy - qz*qw),   2*(qx*qz + qy*qw)],
+        [    2*(qx*qy + qz*qw), 1 - 2*(qx**2 + qz**2),   2*(qy*qz - qx*qw)],
+        [    2*(qx*qz - qy*qw),   2*(qy*qz + qx*qw), 1 - 2*(qx**2 + qy**2)],
+    ])
+
+
+def gt_omega_body(gt_data, t_lo, t_hi):
+    """
+    Body-frame angular velocity (rad/s) from two groundtruth.txt poses that
+    bracket the frame window [t_lo, t_hi], via dR_body = R1.T @ R2.
+    """
+    idx1 = int(np.argmin(np.abs(gt_data[:, 0] - t_lo)))
+    idx2 = int(np.argmin(np.abs(gt_data[:, 0] - t_hi)))
+    if idx1 == idx2:
+        idx2 = min(idx1 + 1, len(gt_data) - 1)
+    actual_dt = gt_data[idx2, 0] - gt_data[idx1, 0]
+    if abs(actual_dt) < 1e-10:
+        return np.zeros(3)
+
+    R1 = _quat_to_rotmat(gt_data[idx1, 4:8])
+    R2 = _quat_to_rotmat(gt_data[idx2, 4:8])
+    dR = R1.T @ R2                      # body frame (NOT R2 @ R1.T)
+
+    cos_a = np.clip((np.trace(dR) - 1.0) / 2.0, -1.0, 1.0)
+    angle = np.arccos(cos_a)
+    if abs(angle) < 1e-10:
+        return np.zeros(3)
+    skew = (dR - dR.T) / (2.0 * np.sin(angle) + 1e-15)
+    axis = np.array([skew[2, 1], skew[0, 2], skew[1, 0]])
+    return axis * angle / actual_dt    # rad/s, body frame
+
+
+def get_reference_omega(gt_data, imu_data, t_lo, t_hi):
+    """
+    Angular velocity used to SCORE the estimate (independent of model input).
+    Prefers groundtruth.txt (Vicon); falls back to gyro if unavailable.
+    Returns (omega_ref, source_str).
+    """
+    if SCORE_AGAINST == 'groundtruth' and gt_data is not None:
+        return gt_omega_body(gt_data, t_lo, t_hi), 'groundtruth'
+    return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
+
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig."""
     if rc.use_thesis:
@@ -379,7 +453,15 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     )
     H, W = seq.H, seq.W
     fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
-    imu_data = load_imu(rc.paths['imu'])
+    imu_data = load_imu(rc.paths['imu'])            # model INPUT (gyro)
+    gt_data  = load_groundtruth(rc.paths['groundtruth'])  # SCORING ref (Vicon)
+
+    ref_src = 'groundtruth' if (SCORE_AGAINST == 'groundtruth' and gt_data is not None) else 'imu'
+    if ref_src == 'imu':
+        print("  ⚠ Scoring against IMU gyro (no groundtruth.txt). "
+              "For thesis_imu this is circular — the model is graded on its own input.")
+    else:
+        print("  Scoring against groundtruth.txt (Vicon, independent of the IMU input).")
 
     net = make_network(rc, H, W, fx, fy, cx, cy)
 
@@ -396,21 +478,29 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     for k, (V, t_mid) in enumerate(seq):
         t_lo = rc.t_start + k * rc.frame_duration
         t_hi = t_lo + rc.frame_duration
-        gt_omega = get_gyro_for_frame(imu_data, t_lo, t_hi)
+
+        # Model INPUT: gyro (the sensor being fused). Independent of scoring.
+        omega_imu = get_gyro_for_frame(imu_data, t_lo, t_hi)
+        # SCORING reference: Vicon (independent), falls back to gyro if absent.
+        omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi)
 
         if rc.use_thesis and rc.use_imu:
-            net.step(V, n_iters=rc.n_iters, omega_imu=gt_omega)
+            net.step(V, n_iters=rc.n_iters, omega_imu=omega_imu)
         else:
             net.step(V, n_iters=rc.n_iters)
 
         omega_est = net.R / rc.frame_duration
-        err, dir_err, beta = compute_metrics(omega_est, gt_omega)
+        err, dir_err, beta = compute_metrics(omega_est, omega_ref)
 
         rows.append({
             'frame': k, 'time': t_mid,
             'est_wx': omega_est[0], 'est_wy': omega_est[1], 'est_wz': omega_est[2],
-            'gt_wx': gt_omega[0], 'gt_wy': gt_omega[1], 'gt_wz': gt_omega[2],
+            # gt_* is the SCORING reference (Vicon when available)
+            'gt_wx': omega_ref[0], 'gt_wy': omega_ref[1], 'gt_wz': omega_ref[2],
+            # imu_* is the gyro fed to the model (kept for comparison/debug)
+            'imu_wx': omega_imu[0], 'imu_wy': omega_imu[1], 'imu_wz': omega_imu[2],
             'err_deg_s': err, 'dir_err_deg': dir_err, 'beta': beta,
+            'ref_source': ref_src,
         })
 
         # ─── Save 3-column frame ─────────────────────────────────────
@@ -467,16 +557,26 @@ def _plot_tracking(rows, rc: RunConfig):
     omega_gt = np.array([[r['gt_wx'], r['gt_wy'], r['gt_wz']] for r in rows])
     err = np.array([r['err_deg_s'] for r in rows])
 
+    ref_src = rows[0].get('ref_source', 'imu')
+    ref_label = 'GT (Vicon quat)' if ref_src == 'groundtruth' else 'GT (IMU)'
+    # Only overlay the gyro separately when it is NOT the scoring reference.
+    has_imu_col = 'imu_wx' in rows[0]
+    omega_imu = (np.array([[r['imu_wx'], r['imu_wy'], r['imu_wz']] for r in rows])
+                 if has_imu_col else None)
+
     fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
     fig.suptitle(f'ω Tracking — {rc.dataset} ({rc.model})\n'
                  f'dt={rc.frame_duration*1000:.0f}ms, {rc.n_iters} iters, '
-                 f'{rc.duration_s:.1f}s', fontsize=11)
+                 f'{rc.duration_s:.1f}s  |  scored vs {ref_label}', fontsize=11)
 
     labels = ['ωx', 'ωy', 'ωz']
     colors = ['#4e79a7', '#f28e2b', '#e15759']
 
     for i in range(3):
-        axes[i].plot(times, omega_gt[:, i], 'k-', lw=1.0, alpha=0.8, label='GT (IMU)')
+        axes[i].plot(times, omega_gt[:, i], 'k-', lw=1.0, alpha=0.8, label=ref_label)
+        if omega_imu is not None and ref_src == 'groundtruth':
+            axes[i].plot(times, omega_imu[:, i], color='#59a14f', lw=0.8, ls=':',
+                         alpha=0.7, label='IMU gyro (model input)')
         axes[i].plot(times, omega_est[:, i], color=colors[i], lw=1.5, label='Estimated')
         axes[i].set_ylabel(f'{labels[i]} (rad/s)')
         axes[i].legend(loc='upper right', fontsize=8)
@@ -925,12 +1025,18 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
     print("="*70)
 
     # ─── GRID DEFINITION ──────────────────────────────────────────────
+    # Trimmed per sensitivity analysis of the previous grid:
+    #   - n_iters: FIXED at 75 (75 vs 100 moved error by <0.2 deg/s → inert)
+    #   - frame_duration: NOW SWEPT (was silently fixed at 0.020 before; it is
+    #     the physically most important untested axis — sets flow magnitude/frame)
+    #   - delta_FR: [0.1, 0.2, 0.5] (inert for pure vision; matters only for imu)
+    #   - delta_IMU: [0.1, 0.2, 0.5] (main knob for thesis_imu)
     grid = {
-        'frame_duration': [0.010, 0.020, 0.030],
-        'n_frames':  [25, 50, 150],
-        'n_iters':   [75, 100],
-        'delta_FR':  [0.10, 0.20, 0.30, 0.50],
-        'delta_IMU': [0.10, 0.20, 0.30, 0.50],
+        'frame_duration': [0.010, 0.020, 0.050],
+        'n_frames':  [25, 150],       # short-track accuracy + long-track drift/reversal
+        'n_iters':   [75],
+        'delta_FR':  [0.10, 0.20, 0.50],
+        'delta_IMU': [0.10, 0.20, 0.50],
     }
 
     # ─── DATASETS ─────────────────────────────────────────────────────
