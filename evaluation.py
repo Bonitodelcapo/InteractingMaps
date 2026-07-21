@@ -83,6 +83,7 @@ class RunConfig:
         self.sensor_size = cfg.get('sensor_size', (180, 240))
         
         # Model parameters
+        self.use_cmax = False
         if model == 'cook':
             self.params = COOK_PARAMS.copy()
             self.use_thesis = False
@@ -91,6 +92,15 @@ class RunConfig:
             self.params = THESIS_PARAMS.copy()
             self.use_thesis = True
             self.use_imu = False
+        elif model == 'thesis_cmax':
+            # V1: same as thesis_imu, but the per-frame R anchor comes from a
+            # full CMax solve on the events instead of the IMU gyro. Reuses the
+            # Cost_IMU mechanism (a generic "pull R toward an external ω").
+            # Init still from the gyro at frame 0 (see _compute_initial_R).
+            self.params = THESIS_PARAMS.copy()
+            self.use_thesis = True
+            self.use_imu = True     # Cost_IMU is the anchor; target = ω_cmax
+            self.use_cmax = True
         else:  # thesis_imu
             self.params = THESIS_PARAMS.copy()
             self.use_thesis = True
@@ -465,6 +475,23 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
 
     net = make_network(rc, H, W, fx, fy, cx, cy)
 
+    # ─── CMax front-end (V1: full CMax per frame → R anchor) ──────────
+    # B1: load the raw events separately and slice per window here, leaving
+    # EventFrameSequence untouched. The gyro still provides frame-0 init only.
+    cmax_est = None
+    cmax_events = None
+    omega_cmax_prev = np.zeros(3)
+    if getattr(rc, 'use_cmax', False):
+        from cmax import CMaxAngularVelocity
+        from data_loader import load_events_fast, undistort_events
+        dur = rc.n_frames * rc.frame_duration + 0.1
+        cmax_events = undistort_events(
+            load_events_fast(rc.paths['events'], t_start=rc.t_start, duration=dur),
+            seq.calib)
+        cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
+        print(f"  CMax front-end active — R anchored to full CMax ω per frame "
+              f"({len(cmax_events)} events).")
+
     # ─── Frame saving setup ───────────────────────────────────────────
     frames_dir = None
     gt_images = None
@@ -484,8 +511,17 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         # SCORING reference: Vicon (independent), falls back to gyro if absent.
         omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi)
 
+        # The R anchor: CMax (thesis_cmax) or gyro (thesis_imu), rad/s.
+        if cmax_est is not None:
+            win = cmax_events[(cmax_events[:, 0] >= t_lo) & (cmax_events[:, 0] < t_hi)]
+            omega_anchor = cmax_est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
+                                             omega_init=omega_cmax_prev)
+            omega_cmax_prev = omega_anchor.copy()
+        else:
+            omega_anchor = omega_imu
+
         if rc.use_thesis and rc.use_imu:
-            net.step(V, n_iters=rc.n_iters, omega_imu=omega_imu)
+            net.step(V, n_iters=rc.n_iters, omega_imu=omega_anchor)
         else:
             net.step(V, n_iters=rc.n_iters)
 
@@ -1213,7 +1249,7 @@ if __name__ == '__main__':
     parser.add_argument('--exp', type=int, default=2, help='1-7')
     parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--model', type=str, default='thesis_imu',
-                        choices=['cook', 'thesis', 'thesis_imu', 'all'])
+                        choices=['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'all'])
     parser.add_argument('--segment', type=str, default=None,       # ← NEU
                         help='Segment ID (z.B. seg_A, seg_B)')
     parser.add_argument('--n_frames', type=int, default=None)
