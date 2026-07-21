@@ -83,7 +83,11 @@ class RunConfig:
         self.sensor_size = cfg.get('sensor_size', (180, 240))
         
         # Model parameters
-        self.use_cmax = False
+        self.use_cmax = False       # load raw events + compute per-frame CMax ω
+        self.use_cmax_v2 = False    # V2: CMax drives R inside the MP loop
+        self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
+                                    # ≳5e-4 diverges. Scales with event count² —
+                                    # lower it for denser streams (see cmax.md).
         if model == 'cook':
             self.params = COOK_PARAMS.copy()
             self.use_thesis = False
@@ -101,6 +105,14 @@ class RunConfig:
             self.use_thesis = True
             self.use_imu = True     # Cost_IMU is the anchor; target = ω_cmax
             self.use_cmax = True
+        elif model == 'thesis_cmax_v2':
+            # V2: CMax is the per-iteration R update INSIDE the message passing.
+            # Kinematics updates F only; no IMU. Events loaded per frame (B1).
+            self.params = THESIS_PARAMS.copy()
+            self.use_thesis = True
+            self.use_imu = False
+            self.use_cmax = True
+            self.use_cmax_v2 = True
         else:  # thesis_imu
             self.params = THESIS_PARAMS.copy()
             self.use_thesis = True
@@ -273,6 +285,11 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
             H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
             frame_duration=rc.frame_duration, **rc.params
         )
+        # V2: CMax drives R inside the loop (kinematics → F only, no IMU).
+        if getattr(rc, 'use_cmax_v2', False):
+            from cmax import CMaxAngularVelocity
+            est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
+            net.enable_cmax_r_update(est, lr=rc.cmax_lr)
         net.initialize_from_rotation(rc.initial_R)
     else:
         net = InteractingMaps(H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, **rc.params)
@@ -482,15 +499,20 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     cmax_events = None
     omega_cmax_prev = np.zeros(3)
     if getattr(rc, 'use_cmax', False):
-        from cmax import CMaxAngularVelocity
         from data_loader import load_events_fast, undistort_events
         dur = rc.n_frames * rc.frame_duration + 0.1
         cmax_events = undistort_events(
             load_events_fast(rc.paths['events'], t_start=rc.t_start, duration=dur),
             seq.calib)
-        cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
-        print(f"  CMax front-end active — R anchored to full CMax ω per frame "
-              f"({len(cmax_events)} events).")
+        if getattr(rc, 'use_cmax_v2', False):
+            print(f"  CMax V2 active — R driven by 1 CMax step / iteration "
+                  f"(lr={rc.cmax_lr}, {len(cmax_events)} events).")
+        else:
+            # V1: standalone full-solve estimator, feeds the R anchor.
+            from cmax import CMaxAngularVelocity
+            cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
+            print(f"  CMax V1 active — R anchored to full CMax ω per frame "
+                  f"({len(cmax_events)} events).")
 
     # ─── Frame saving setup ───────────────────────────────────────────
     frames_dir = None
@@ -511,17 +533,22 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         # SCORING reference: Vicon (independent), falls back to gyro if absent.
         omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi)
 
-        # The R anchor: CMax (thesis_cmax) or gyro (thesis_imu), rad/s.
-        if cmax_est is not None:
+        # Raw events for this window (V1 anchor and V2 in-loop both need them).
+        win = None
+        if cmax_events is not None:
             win = cmax_events[(cmax_events[:, 0] >= t_lo) & (cmax_events[:, 0] < t_hi)]
+
+        if getattr(rc, 'use_cmax_v2', False):
+            # V2: CMax drives R inside the message passing.
+            net.step(V, n_iters=rc.n_iters, events=win)
+        elif cmax_est is not None:
+            # V1: full CMax solve → R anchor (via Cost_IMU mechanism).
             omega_anchor = cmax_est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
                                              omega_init=omega_cmax_prev)
             omega_cmax_prev = omega_anchor.copy()
-        else:
-            omega_anchor = omega_imu
-
-        if rc.use_thesis and rc.use_imu:
             net.step(V, n_iters=rc.n_iters, omega_imu=omega_anchor)
+        elif rc.use_thesis and rc.use_imu:
+            net.step(V, n_iters=rc.n_iters, omega_imu=omega_imu)
         else:
             net.step(V, n_iters=rc.n_iters)
 
@@ -1249,7 +1276,8 @@ if __name__ == '__main__':
     parser.add_argument('--exp', type=int, default=2, help='1-7')
     parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--model', type=str, default='thesis_imu',
-                        choices=['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'all'])
+                        choices=['cook', 'thesis', 'thesis_imu', 'thesis_cmax',
+                                 'thesis_cmax_v2', 'all'])
     parser.add_argument('--segment', type=str, default=None,       # ← NEU
                         help='Segment ID (z.B. seg_A, seg_B)')
     parser.add_argument('--n_frames', type=int, default=None)

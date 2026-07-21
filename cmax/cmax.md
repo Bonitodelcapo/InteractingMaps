@@ -19,14 +19,18 @@ the anchor.
 | Step | What | State |
 |---|---|---|
 | **1a** | Standalone CMax front-end (`cmax/angular_velocity.py`) | ✅ done, validated |
-| **1b** | Feed CMax ω into the message passing (`model='thesis_cmax'`) | ✅ implemented, small-sample OK |
-| 2 (V2) | CMax as the in-loop R-update rule | ⏳ later |
+| **1b (V1)** | Feed CMax ω into the message passing (`model='thesis_cmax'`) | ✅ implemented, small-sample OK |
+| **2 (V2)** | CMax as the in-loop R-update rule (`model='thesis_cmax_v2'`) | ✅ implemented, small-sample OK |
 
 **Key results (poster seg_C).**
 - **1a:** CMax agrees with the *independent* gyro to **8.4 °/s** and with smoothed
   GT to **13.5 °/s** (gyro: 8.6) → **CMax is an IMU-quality, sensor-free ω source.**
-- **1b:** `thesis_cmax` (IMU-free in-loop) tracks GT **comparably to `thesis_imu`**
+- **1b (V1):** `thesis_cmax` (IMU-free in-loop) tracks GT **comparably to `thesis_imu`**
   on a 5-frame sanity (9.7 vs 12.4 °/s smoothed GT). *Small sample — verify at scale.*
+- **2 (V2):** `thesis_cmax_v2` (R driven by 1 CMax step/iter, CMax-only) reaches the
+  **standalone CMax quality** — vs IMU **8.2 °/s**, vs smoothed GT 14.2 (5-frame sanity),
+  *better* than V1 vs IMU because kinematics no longer pulls R. **`lr` is sensitive:**
+  stable ~`[1e-5, 1e-4]`, `≳5e-4` diverges (gradient ∝ event-count²).
 - The raw **20 ms GT is noisy** (quaternion differencing); score against **smoothed
   GT (~100 ms)** or the gyro, not the 20 ms GT.
 - **Analytic-gradient + CG** is implemented and correct (FD-validated ~1e-4) but in
@@ -64,7 +68,7 @@ OFCE lacks, from events alone.
 - **V1 (loose):** full CMax per frame → `ω_cmax` fed as the `R` anchor (replaces the
   IMU). = `thesis_imu` with the anchor source swapped. **← done (1a+1b).**
 - **V2 (tight):** one CMax gradient step = the per-iteration `R` update inside the
-  loop; **R driven by CMax only** (kinematics only propagates R→F). ⏳ later.
+  loop; **R driven by CMax only** (kinematics only propagates R→F). **← done.**
 
 ---
 
@@ -146,6 +150,50 @@ recurrent R, GT scoring) is identical.
 
 ---
 
+## 3b. Step 2 — CMax as the in-loop R update (`thesis_cmax_v2`, V2)
+
+CMax is no longer a separate solve; **one CMax gradient-ascent step on the IWE
+variance is the per-iteration update rule for R**, interleaved with the other
+message-passing updates. R is driven by **CMax only**.
+
+### What changes in the network (`network_dissertation.py`)
+- **`Cost_Kinematics(update_r=False)`** — updates **F only** (`F ← C·R`); no longer
+  touches R.
+- **`Cost_CMax`** (new) — per MP iteration: `ω = R/dt`; call the validated
+  `_contrast_and_grad` → `∂Var/∂ω`; chain-rule `∂Var/∂R = (∂Var/∂ω)/dt`; take one
+  **ascent** step `R ← R + λ·∂Var/∂R` (implemented as `add_gradient(−λ·∂Var/∂R)`
+  since Phase-2 descends).
+- **`enable_cmax_r_update(estimator, lr)`** — flips the network into V2: sets
+  `cost_kin.update_r=False`, appends `Cost_CMax`. `Cost_IMU` becomes inert (no ω_imu).
+- **`step(V, …, events=…)`** — the raw window events are handed to `Cost_CMax`
+  (warped to the window midpoint) once per frame.
+
+### Wiring (`evaluation.py`)
+`model='thesis_cmax_v2'` → `use_thesis=True, use_imu=False, use_cmax=True,
+use_cmax_v2=True`. `make_network` builds a `CMaxAngularVelocity` and calls
+`enable_cmax_r_update(est, lr=rc.cmax_lr)`. The loop passes the per-window events to
+`net.step(V, events=win)`. Frame-0 init still from the gyro (decision C).
+
+### The `lr` (ascent step) — sensitive
+`cmax_lr` default **1e-4**. Stable range ~`[1e-5, 1e-4]` (result plateaus — R reaches
+the CMax optimum, `lr` only sets convergence speed); `≳5e-4` **diverges**. The
+gradient magnitude scales with **event-count²**, so denser streams need a smaller
+`lr`. **Recommended follow-up:** normalize the step (`λ·grad/‖grad‖`, λ in rad/s) or
+scale `lr ∝ 1/N²` for robustness across datasets.
+
+### Small-sample result (poster seg_C, 5 frames)
+| lr | vs GT(smooth) | vs IMU |
+|---|---|---|
+| 1e-5 | 14.36 | 8.27 |
+| 3e-5 | 14.23 | 8.23 |
+| 1e-4 | 14.22 | 8.22 |
+| 5e-4 | 49.98 | 46.32 (diverging) |
+
+At a stable `lr`, V2 reaches **standalone-CMax quality** (vs IMU ~8.2) — *better than
+V1 vs IMU* because kinematics no longer competes for R. **Verify at scale.**
+
+---
+
 ## 4. Findings (verification detail)
 
 Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started.
@@ -164,12 +212,14 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 
 ## 5. Open questions / next steps
 
-1. **Verify 1b at scale** (workstation): all poster segments, more frames, vs smoothed GT.
-2. **Window sweep** — CMax over a wider *centered* span `[t_mid ± {10,20,40} ms]`
+1. **Verify V1 & V2 at scale** (workstation): all poster segments, more frames, vs smoothed GT.
+2. **V2 `lr` robustness** — normalize the ascent step (`λ·grad/‖grad‖`) or scale
+   `lr ∝ 1/N²` so it's not event-count-dependent. (Current: fixed `lr`, data-tuned.)
+3. **Window sweep** — CMax over a wider *centered* span `[t_mid ± {10,20,40} ms]`
    (sharper contrast peak, but ω must stay ~constant across it). Main accuracy lever.
-3. **CMax-init** — replace frame-0 gyro init with CMax(frame 0) for a fully IMU-free pipeline.
-4. **`bincount`** scatter — only if the analytic+CG path needs to be competitive.
-5. **V2** — CMax as the in-loop R-update (1 step/iter, CMax-only on R, likely 2-D `B(x)ω` warp).
+4. **CMax-init** — replace frame-0 gyro init with CMax(frame 0) for a fully IMU-free pipeline.
+5. **`bincount`** scatter — speed up the analytic gradient (helps V2, which calls it
+   75×/frame, and the analytic+CG front-end path).
 
 ---
 
@@ -181,4 +231,5 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 | `cmax/__init__.py` | exports `CMaxAngularVelocity` |
 | `cmax/cmax.md` | this document |
 | `test_cmax_frontend.py` (root) | Step-1a verification vs GT & IMU |
-| `evaluation.py` | `model='thesis_cmax'` (Step 1b integration) |
+| `evaluation.py` | `model='thesis_cmax'` (V1), `'thesis_cmax_v2'` (V2) |
+| `interacting_maps/network_dissertation.py` | `Cost_CMax`, `Cost_Kinematics(update_r)`, `enable_cmax_r_update`, `step(events=…)` (V2) |

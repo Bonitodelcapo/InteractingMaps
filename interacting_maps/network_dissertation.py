@@ -147,11 +147,14 @@ class Cost_Kinematics(Cost):
     The Ω update uses the thesis's RECOMMENDED approach (Eq. 6.50, footnote 18):
     precompute M⁻¹ and blend toward the closed-form optimal Ω*.
     """
-    def __init__(self, quantities_dict, delta_RF, delta_FR, C_mat):
+    def __init__(self, quantities_dict, delta_RF, delta_FR, C_mat, update_r=True):
         super().__init__(quantities_dict)
         self.delta_RF = delta_RF
         self.delta_FR = delta_FR
         self.C_mat = C_mat  # (H, W, 2, 3)
+        # update_r=False → this cost updates F only (F ← C·R), NOT R. Used by
+        # the CMax V2 variant, where R is driven exclusively by Cost_CMax.
+        self.update_r = update_r
 
         # Precompute M = Σ C^T·C and M⁻¹ (Eq. 6.48, footnote 18)
         self._M = np.einsum('hwji,hwjk->ik', C_mat, C_mat)  # (3, 3)
@@ -168,11 +171,60 @@ class Cost_Kinematics(Cost):
         error_F = f - f_target
         self.q['F'].add_gradient(error_F * self.delta_RF)
 
+        if not self.update_r:
+            return   # V2: R is CMax-driven; kinematics only propagates R → F
+
         # Ω: blend toward Ω* = M⁻¹·v (Eq. 6.49-6.50)
         v = np.einsum('hwji,hwj->i', self.C_mat, f)  # (3,)
         R_target = self._M_inv @ v  # (3,)
         error_R = r - R_target
         self.q['R'].add_gradient(error_R * self.delta_FR)
+
+
+class Cost_CMax(Cost):
+    """
+    Contrast-Maximization drive on R (V2).
+
+    Once per message-passing iteration, take a single gradient-ASCENT step on the
+    IWE variance w.r.t. angular velocity:  R ← R + λ · ∂Var/∂R.
+
+    Reuses the validated analytic gradient from `cmax.CMaxAngularVelocity`
+    (∂Var/∂ω, ω in rad/s). Chain rule to the network's R (rad/frame): since
+    ω = R / dt_frame,  ∂Var/∂R = (∂Var/∂ω) / dt_frame.
+
+    The network's Phase-2 update is a DESCENT step (`value -= accumulator`), so to
+    ASCEND we add the NEGATIVE gradient: accumulator = -λ · ∂Var/∂R.
+    """
+    def __init__(self, quantities_dict, estimator, dt_frame, lr):
+        super().__init__(quantities_dict)
+        self.est = estimator        # cmax.CMaxAngularVelocity (injected)
+        self.dt_frame = dt_frame
+        self.lr = lr
+        self._bearings = None
+        self._dt = None
+        self._w = None
+
+    def set_frame(self, events, t_ref):
+        """Precompute per-frame warp inputs (bearings, dt, weights) once."""
+        if events is None or len(events) < 10:
+            self._bearings = None
+            return
+        xs = events[:, 1].astype(np.float64)
+        ys = events[:, 2].astype(np.float64)
+        self._bearings = self.est._bearings(xs, ys)
+        self._dt = events[:, 0].astype(np.float64) - t_ref
+        pol = events[:, 3].astype(np.float64)
+        self._w = (2.0 * pol - 1.0) if self.est.use_polarity else np.ones_like(pol)
+
+    def compute_and_send_gradients(self):
+        if self._bearings is None:
+            return
+        r = self.q['R'].value                 # rad/frame
+        omega = r / self.dt_frame             # rad/s
+        _, grad_w = self.est._contrast_and_grad(omega, self._bearings, self._dt, self._w)
+        grad_R = grad_w / self.dt_frame       # ∂Var/∂R
+        # Ascent: R += lr·grad_R  ⇒  accumulator = -lr·grad_R
+        self.q['R'].add_gradient(-self.lr * grad_R)
 
 class Cost_IMU(Cost):
     """
@@ -231,13 +283,30 @@ class InteractingMapsThesis:
             'V': self.q_V, 'I': self.q_I, 'G': self.q_G,
             'F': self.q_F, 'R': self.q_R,
         }
+        self.q_dict = q_dict
+        self.cost_kin = Cost_Kinematics(q_dict, delta_RF, delta_FR, self._C_mat)
         self.costs = [
             Cost_OFCE(q_dict, delta_VFG, max_grad=5.0),
             Cost_Spatial(q_dict, delta_IG, delta_GI),
-            Cost_Kinematics(q_dict, delta_RF, delta_FR, self._C_mat),
+            self.cost_kin,
         ]
         self.cost_imu = Cost_IMU(q_dict, delta_IMU)
         self.costs.append(self.cost_imu)
+
+        # V2 (CMax-driven R): off by default. enable_cmax_r_update() turns it on.
+        self.r_update = 'kinematics'
+        self.cost_cmax = None
+
+    def enable_cmax_r_update(self, estimator, lr):
+        """
+        Switch to the V2 update scheme: R is driven ONLY by a per-iteration CMax
+        gradient step; the kinematics cost stops updating R (F ← C·R only).
+        `estimator` is a cmax.CMaxAngularVelocity; `lr` the ascent step size.
+        """
+        self.r_update = 'cmax'
+        self.cost_kin.update_r = False
+        self.cost_cmax = Cost_CMax(self.q_dict, estimator, self.frame_duration, lr)
+        self.costs.append(self.cost_cmax)
 
     # Properties for demo.py
     @property
@@ -280,14 +349,15 @@ class InteractingMapsThesis:
         self.q_F.value = rng.standard_normal((self.H, self.W, 2)) * scale
         self.q_R.value = np.zeros(3, dtype=np.float64)
 
-    def step(self, V: np.ndarray, n_iters: int = 50, omega_imu: np.ndarray = None):
+    def step(self, V: np.ndarray, n_iters: int = 50, omega_imu: np.ndarray = None,
+             events: np.ndarray = None):
         """
-        Two-Phase Message Passing (Algorithm 6.5) with inter-frame flow decay.
+        Two-Phase Message Passing (Algorithm 6.5).
         Thesis uses 50-75 iterations per time-slice (Section 6.8).
 
-        The decay breaks the kinematic-flow feedback lock that
-        prevents the network from tracking time-varying rotations.
-        
+        omega_imu : (3,) rad/s — if given, Cost_IMU anchors R toward it (V1/IMU).
+        events    : (N,4) [t,x,y,pol] — required by the V2 CMax-driven R update
+                    (enable_cmax_r_update). Warped to the window midpoint.
         """
         self.q_V.value = V
 
@@ -297,7 +367,15 @@ class InteractingMapsThesis:
             self._use_imu = True
         else:
             self._use_imu = False
-            
+
+        # V2: hand this frame's raw events to the CMax cost (warp to midpoint).
+        if self.r_update == 'cmax' and self.cost_cmax is not None:
+            if events is not None and len(events) > 0:
+                t_ref = 0.5 * (events[:, 0].min() + events[:, 0].max())
+                self.cost_cmax.set_frame(events, t_ref)
+            else:
+                self.cost_cmax.set_frame(None, 0.0)
+
         for _ in range(n_iters):
             # PHASE 1: All costs compute gradients
             for q in [self.q_I, self.q_G, self.q_F, self.q_R]:
