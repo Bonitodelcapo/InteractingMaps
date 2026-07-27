@@ -360,6 +360,20 @@ def normalise(x):
     lo, hi = x.min(), x.max()
     return (x - lo) / (hi - lo + 1e-10)
 
+def normalise_robust(x, lo_pct=1.0, hi_pct=99.0):
+    """Percentile min-max to [0,1] for stable frame-to-frame display.
+
+    Plain min-max maps the extreme pixels to 0/1, so a single outlier that
+    moves between frames rescales the whole image -> the video flickers darker
+    /brighter. Clipping to robust percentiles (1st/99th) fixes the display
+    range against outliers, and because I is only defined up to a gauge
+    (offset/scale) this also cancels that drift, keeping brightness steady.
+    """
+    lo, hi = np.percentile(x, [lo_pct, hi_pct])
+    if hi - lo < 1e-9:
+        return np.full_like(x, 0.5, dtype=np.float64)
+    return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+
 def flow_to_rgb(flow):
     from matplotlib.colors import hsv_to_rgb
     fx, fy = flow[..., 0], flow[..., 1]
@@ -979,7 +993,7 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     axes[0].axis('off')
 
     I_disp = net.I if net.I.shape == (H, W) else net.I[:H, :W]
-    axes[1].imshow(normalise(I_disp), cmap='gray', vmin=0, vmax=1)
+    axes[1].imshow(normalise_robust(I_disp), cmap='gray', vmin=0, vmax=1)
     axes[1].set_title('Estimated I', fontsize=10)
     axes[1].axis('off')
 
