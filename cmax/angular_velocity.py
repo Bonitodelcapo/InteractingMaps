@@ -19,6 +19,7 @@ network's R (rad/frame = ω·dt) and as `evaluation.gt_omega_body`.
 """
 
 import numpy as np
+import cv2
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
 
@@ -36,17 +37,27 @@ class CMaxAngularVelocity:
     blur_sigma    : Gaussian blur (px) applied to the IWE before variance;
                     smooths the objective (Gallego blurs the IWE too)
     optimizer     : SciPy method ('Nelder-Mead' default)
+    dist_coeffs   : None  -> pinhole warp; events already undistorted    (Way 1)
+                    [k1,k2,p1,p2,k3] -> raw events; lens carried inside   (Way 2)
+                    the warp (pi^-1 via cv2.undistortPoints, pi via the
+                    forward Brown-Conrady model). Same geometry as the
+                    distortion-aware C matrix (interacting_maps/camera.py).
     """
 
     def __init__(self, H, W, fx, fy, cx, cy,
                  use_polarity=True, blur_sigma=1.0, optimizer='Nelder-Mead',
-                 use_analytic_gradient=False):
+                 use_analytic_gradient=False, dist_coeffs=None):
         self.H, self.W = H, W
         self.fx, self.fy = fx, fy
         self.cx, self.cy = cx, cy
         self.use_polarity = use_polarity
         self.blur_sigma = blur_sigma
         self.optimizer = optimizer
+
+        # Distortion handling (see class docstring). None keeps the original
+        # pinhole behaviour byte-for-byte (Way 1).
+        self.dist = None if dist_coeffs is None else np.asarray(dist_coeffs, np.float64).ravel()
+        self.K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
         # When True: use the analytic gradient of the (UNBLURRED) IWE variance
         # with a gradient-based optimizer (conjugate gradient). When False:
@@ -61,6 +72,10 @@ class CMaxAngularVelocity:
         self.use_analytic_gradient = use_analytic_gradient
         if use_analytic_gradient and optimizer == 'Nelder-Mead':
             self.optimizer = 'CG'
+        if self.dist is not None and use_analytic_gradient:
+            raise NotImplementedError(
+                "Analytic gradient needs the distortion Jacobian too; use "
+                "Nelder-Mead for the Way-2 (distortion-aware) estimator.")
 
         # Diagnostics from the last estimate()
         self.last_iwe = None
@@ -71,15 +86,39 @@ class CMaxAngularVelocity:
     # ------------------------------------------------------------------
     def _bearings(self, xs, ys):
         """
-        Undistorted pixel (xs, ys) → unit bearing vectors (N, 3) in the camera
-        frame. Assumes events are already undistorted (as the pipeline delivers
-        them); a pure pinhole back-projection.
+        Pixel (xs, ys) → unit bearing vectors (N, 3) in the camera frame (pi^-1).
+
+        dist=None : pure pinhole back-projection; events assumed already
+                    undistorted (Way 1, as the pipeline delivers them).
+        dist set  : raw distorted pixels; cv2.undistortPoints carries the lens
+                    to give the true undistorted normalized ray (Way 2).
         """
-        x_n = (xs - self.cx) / self.fx
-        y_n = (ys - self.cy) / self.fy
+        if self.dist is None:
+            x_n = (xs - self.cx) / self.fx
+            y_n = (ys - self.cy) / self.fy
+        else:
+            pts = np.stack([xs, ys], axis=-1).reshape(-1, 1, 2)
+            norm = cv2.undistortPoints(pts, self.K, self.dist)   # normalized undistorted (a,b), z=1
+            x_n = norm[:, 0, 0]
+            y_n = norm[:, 0, 1]
         p = np.stack([x_n, y_n, np.ones_like(x_n)], axis=-1)   # (N, 3)
         p /= np.linalg.norm(p, axis=-1, keepdims=True)
         return p
+
+    def _distort_normalized(self, a, b):
+        """
+        Forward Brown-Conrady: ideal normalized (a, b) → distorted normalized
+        (x_d, y_d). This is exactly the forward model whose analytic Jacobian
+        J_D is baked into the distortion-aware C matrix
+        (interacting_maps/camera.py, build_kinematic_matrix). Same coefficient
+        order [k1, k2, p1, p2, k3].
+        """
+        k1, k2, p1, p2, k3 = self.dist[:5]
+        r2 = a * a + b * b
+        radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 ** 3
+        x_d = a * radial + 2 * p1 * a * b + p2 * (r2 + 2 * a * a)
+        y_d = b * radial + p1 * (r2 + 2 * b * b) + 2 * p2 * a * b
+        return x_d, y_d
 
     # ------------------------------------------------------------------
     # Warp + IWE
@@ -97,8 +136,15 @@ class CMaxAngularVelocity:
         p_rot = bearings + np.cross(delta_rot, bearings)  # (N, 3)
         z = p_rot[:, 2]
         z = np.where(np.abs(z) < 1e-9, 1e-9, z)
-        xw = self.fx * (p_rot[:, 0] / z) + self.cx
-        yw = self.fy * (p_rot[:, 1] / z) + self.cy
+        a = p_rot[:, 0] / z
+        b = p_rot[:, 1] / z
+        if self.dist is None:
+            xw = self.fx * a + self.cx                    # pinhole reproject (Way 1)
+            yw = self.fy * b + self.cy
+        else:
+            x_d, y_d = self._distort_normalized(a, b)     # forward distortion (Way 2)
+            xw = self.fx * x_d + self.cx
+            yw = self.fy * y_d + self.cy
         return xw, yw
 
     def _accumulate_iwe(self, xw, yw, weights):
