@@ -31,6 +31,11 @@ the anchor.
   **standalone CMax quality** — vs IMU **8.2 °/s**, vs smoothed GT 14.2 (5-frame sanity),
   *better* than V1 vs IMU because kinematics no longer pulls R. **`lr` is sensitive:**
   stable ~`[1e-5, 1e-4]`, `≳5e-4` diverges (gradient ∝ event-count²).
+- **V2 full segment (150 frames, seg_C):** mean **22.3 °/s** / median 19.9 vs the
+  *raw 20 ms GT* (β 1.27±1.49). Crucially, **V2 tracks the real reversals** — ω_est
+  swings +1.3 → −1.9 → +1.4 → −1.4 following the true motion (seg_C reverses over 3 s).
+  The 22 °/s is inflated by 20 ms-GT noise; re-score vs smoothed GT (use
+  `test_cmax_v1_vs_v2.py`).
 - The raw **20 ms GT is noisy** (quaternion differencing); score against **smoothed
   GT (~100 ms)** or the gyro, not the 20 ms GT.
 - **Analytic-gradient + CG** is implemented and correct (FD-validated ~1e-4) but in
@@ -190,7 +195,31 @@ scale `lr ∝ 1/N²` for robustness across datasets.
 | 5e-4 | 49.98 | 46.32 (diverging) |
 
 At a stable `lr`, V2 reaches **standalone-CMax quality** (vs IMU ~8.2) — *better than
-V1 vs IMU* because kinematics no longer competes for R. **Verify at scale.**
+V1 vs IMU* because kinematics no longer competes for R.
+
+### Full-segment run (150 frames, seg_C, `lr=1e-4`)
+mean **22.3 °/s** / median 19.9 vs the *raw 20 ms GT*; dir mean 26.4° / median 16.0°;
+β 1.27 ± 1.49. **V2 tracks the reversals** (ω_est +1.3 → −1.9 → +1.4 → −1.4 as the
+camera genuinely reverses over 3 s). The 22 °/s is inflated by 20 ms-GT noise — the
+fair number comes from smoothed-GT scoring. **Verify at scale vs smoothed GT.**
+
+### V1 vs V2 comparison
+`test_cmax_v1_vs_v2.py [n_frames]` runs both models on poster seg_C over a small
+window and prints a per-frame table (GT-smooth vs V1 vs V2) + summary scored three
+ways (GT-20ms, GT-smooth, IMU). Use this to see where V1 and V2 diverge and confirm
+both track reversals.
+
+### IWE logging (`--save-iwe`)
+Opt-in (`python evaluation.py … --model thesis_cmax[_v2] --save-iwe`). Saves the
+**final** contrast-maximized IWE per frame — V1: at the full-solve ω (`est.last_iwe`);
+V2: at the converged `R` after the MP iterations (`Cost_CMax.build_current_iwe()`).
+Both build the IWE through the **same** estimator code (unblurred), so the artifact
+is identical and directly comparable. Output `…/iwe/`: `frame_XXXX.png` (per-frame
+normalised), `iwe_log.csv` (`frame,t_mid,n_events,wx,wy,wz,contrast`),
+`contrast_curve.png` (variance-vs-frame), and `iwe_sequence.gif` (best-effort, needs
+`imageio`). Shared saver = `cmax/iwe_io.py`; off by default (zero overhead).
+Sanity: on seg_C V1 and V2 log near-identical ω + contrast per frame (both reach the
+CMax optimum).
 
 ---
 
@@ -227,9 +256,11 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 
 | File | Purpose |
 |---|---|
-| `cmax/angular_velocity.py` | `CMaxAngularVelocity` — the front-end estimator |
+| `cmax/angular_velocity.py` | `CMaxAngularVelocity` — the front-end estimator (exposes `last_iwe`) |
+| `cmax/iwe_io.py` | shared IWE logger: `save_iwe`, `plot_contrast_curve`, `make_gif` |
 | `cmax/__init__.py` | exports `CMaxAngularVelocity` |
 | `cmax/cmax.md` | this document |
 | `test_cmax_frontend.py` (root) | Step-1a verification vs GT & IMU |
+| `test_cmax_v1_vs_v2.py` (root) | V1 vs V2 side-by-side over N frames, scored 3 ways |
 | `evaluation.py` | `model='thesis_cmax'` (V1), `'thesis_cmax_v2'` (V2) |
 | `interacting_maps/network_dissertation.py` | `Cost_CMax`, `Cost_Kinematics(update_r)`, `enable_cmax_r_update`, `step(events=…)` (V2) |

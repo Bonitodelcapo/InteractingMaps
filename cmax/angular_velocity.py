@@ -87,7 +87,7 @@ class CMaxAngularVelocity:
     def _warp_to_pixels(self, bearings, dt, omega):
         """
         Linear (first-order) rotational warp of bearing vectors, then reproject.
-            p_rot = p + (ω·dt) × p           (Gallego's linear warp)
+            p_rot = p + (ω·dt) × p           
             (x', y') = intrinsics( p_rot / p_rot_z )
         dt : (N,) time offset of each event from the reference time (s)
         omega : (3,) rad/s
@@ -268,5 +268,7 @@ class CMaxAngularVelocity:
                            options=dict(maxiter=400))
 
         self.last_result = res
+        # last_iwe = final (unblurred) IWE at the estimated ω. Exposed for the
+        # shared IWE logger (cmax.iwe_io); this class does NOT do file I/O.
         self.last_iwe = self._build_iwe(bearings, dt, weights, res.x)
         return res.x

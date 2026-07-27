@@ -226,6 +226,18 @@ class Cost_CMax(Cost):
         # Ascent: R += lr·grad_R  ⇒  accumulator = -lr·grad_R
         self.q['R'].add_gradient(-self.lr * grad_R)
 
+    def build_current_iwe(self):
+        """
+        (iwe, contrast) at the CURRENT R, from this frame's cached warp inputs.
+        Used to save the final V2 IWE after the message-passing iterations. Goes
+        through the same estimator builder as V1's `last_iwe` (unblurred IWE).
+        """
+        if self._bearings is None:
+            return None, 0.0
+        omega = self.q['R'].value / self.dt_frame
+        iwe = self.est._build_iwe(self._bearings, self._dt, self._w, omega)
+        return iwe, float(np.var(iwe))
+
 class Cost_IMU(Cost):
     """
     IMU Soft Constraint (Thesis Section 6.8.3).

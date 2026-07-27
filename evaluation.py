@@ -85,6 +85,7 @@ class RunConfig:
         # Model parameters
         self.use_cmax = False       # load raw events + compute per-frame CMax ω
         self.use_cmax_v2 = False    # V2: CMax drives R inside the MP loop
+        self.save_iwe = False       # save the final CMax IWE per frame (V1/V2)
         self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
                                     # ≳5e-4 diverges. Scales with event count² —
                                     # lower it for denser streams (see cmax.md).
@@ -498,6 +499,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     cmax_est = None
     cmax_events = None
     omega_cmax_prev = np.zeros(3)
+    omega_anchor = None
     if getattr(rc, 'use_cmax', False):
         from data_loader import load_events_fast, undistort_events
         dur = rc.n_frames * rc.frame_duration + 0.1
@@ -513,6 +515,14 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
             cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
             print(f"  CMax V1 active — R anchored to full CMax ω per frame "
                   f"({len(cmax_events)} events).")
+
+    # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
+    iwe_dir = None
+    if getattr(rc, 'save_iwe', False) and getattr(rc, 'use_cmax', False):
+        from cmax.iwe_io import save_iwe, plot_contrast_curve, make_gif
+        iwe_dir = os.path.join(rc.output_dir, 'iwe')
+        os.makedirs(iwe_dir, exist_ok=True)
+        print(f"  Saving final IWE per frame to: {iwe_dir}/")
 
     # ─── Frame saving setup ───────────────────────────────────────────
     frames_dir = None
@@ -555,6 +565,18 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         omega_est = net.R / rc.frame_duration
         err, dir_err, beta = compute_metrics(omega_est, omega_ref)
 
+        # ─── Save the final contrast-maximized IWE for this frame ────
+        if iwe_dir is not None and win is not None:
+            if getattr(rc, 'use_cmax_v2', False):
+                iwe, contrast = net.cost_cmax.build_current_iwe()   # at final R
+                w_iwe = omega_est
+            else:
+                iwe = cmax_est.last_iwe                              # at CMax solve ω
+                contrast = float(np.var(iwe)) if iwe is not None else 0.0
+                w_iwe = omega_anchor
+            if iwe is not None:
+                save_iwe(iwe, w_iwe, contrast, iwe_dir, k, t_mid, len(win))
+
         rows.append({
             'frame': k, 'time': t_mid,
             'est_wx': omega_est[0], 'est_wy': omega_est[1], 'est_wz': omega_est[2],
@@ -581,6 +603,13 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
+
+    # ─── IWE sequence artefacts (contrast curve + GIF) ────────────────
+    if iwe_dir is not None:
+        plot_contrast_curve(iwe_dir)
+        make_gif(iwe_dir)
+        print(f"  IWE: {rc.n_frames} PNGs + iwe_log.csv + contrast_curve.png "
+              f"(+gif) → {iwe_dir}/")
 
     # ─── Summary ──────────────────────────────────────────────────────
     err_all = np.array([r['err_deg_s'] for r in rows])
@@ -1289,6 +1318,8 @@ if __name__ == '__main__':
                     help='Run grid sweep over ALL segments (slow)')
     parser.add_argument('--no-frames', action='store_true',
                         help='Skip saving 3-col PNGs (faster)')
+    parser.add_argument('--save-iwe', action='store_true',
+                        help='Save the final CMax IWE per frame (V1/V2 only)')
     args = parser.parse_args()
     save_frames = not args.no_frames  # Default: save images
 
@@ -1310,6 +1341,7 @@ if __name__ == '__main__':
             n_iters=args.n_iters,
             delta_IMU=args.delta_imu,
         )
+        rc.save_iwe = args.save_iwe
 
     experiments = {
         1: lambda: experiment_single_frame_convergence(rc, frame_idx=args.frame),
