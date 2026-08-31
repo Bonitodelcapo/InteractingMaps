@@ -22,7 +22,7 @@ import sys, gdown
 url = sys.argv[1]
 if "/folders/" in url:
     gdown.download_folder(url=url, output=".", quiet=False,
-                          use_cookies=False, remaining_ok=True)
+                          use_cookies=False)
 else:
     gdown.download(url=url, output=".", quiet=False, fuzzy=True, use_cookies=False)
 print("\nDone -> files are in the current directory")

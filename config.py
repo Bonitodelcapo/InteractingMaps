@@ -166,11 +166,24 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
+    {   'id': 'seg_full',
+        't_start': 0.05,
+        'frame_duration': 0.02,
+        'n_frames': 240,        # ~4.8 s of the 5 s clip  (n = duration/dt)
+        'initial_R': None,
+        'sensor_size': (180, 240) },
+    ],
+    'ecrot_street': [
+    {  # quality=1.79, |ω|=1.792 rad/s, dominant=ω_y
+        'id': 'seg_A',
+        't_start': 4.451,
+        'frame_duration': 0.02,
+        'n_frames': 150,  # 3.0s
+        'initial_R': None,
+        'sensor_size': (180, 240),
+    },
     ],
 
-    # 'ecrot_street' not yet downloaded/converted. After converting the bag
-    # (convert_ecrot.py street.bag --out ecrot_street), run find_segments.py on
-    # its omega_gt.txt and paste a block here (same shape as ecrot_city).
 }
 
 # Backward-compatible: single config = first segment per dataset
