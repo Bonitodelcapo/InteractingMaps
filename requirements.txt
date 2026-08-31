@@ -1,3 +1,7 @@
 numpy
 scipy
 matplotlib
+opencv-python        # cv2: event undistortion + distortion-aware warp
+rosbags              # ECRot ROSbag -> pipeline format (convert_ecrot.py)
+pyyaml               # ECRot calibration YAML
+imageio              # optional: IWE sequence GIFs (--save-iwe)

@@ -1,20 +1,30 @@
 """
 InteractingMaps — Energy-Based Message Passing, Martel 2019 Thesis (Chapter 6).
 
-Faithfully implements Algorithm 6.5 with:
-- BLEND updates for linear relations (Eq. 6.140-6.141):
-    q ← (1-η)q + η·target  =  q - η·(q - target)
-- GRADIENT updates for nonlinear relations (Eq. 6.12-6.14):
-    q ← q - η·∂C/∂q
+Implements Algorithm 6.5 (two-phase Jacobi message passing):
+  Phase 1: every Cost reads the current quantities {I,G,F,R} and accumulates its
+           gradient/message.
+  Phase 2: every Quantity updates simultaneously, then values are clipped.
 
-Phase 1: All costs compute "gradients" (messages) from current state.
-Phase 2: All quantities update simultaneously.
+Costs (each a squared-residual relation)
+  - Cost_OFCE        V + F·G = 0   (nonlinear; per-pixel gradient clip)
+  - Cost_Spatial     G = ∇I        (blend G→∇I; I via discrete −div(G−∇I))
+  - Cost_Kinematics  F = C·R        (blend F→C·R; R←M⁻¹ΣCᵀF unless update_r=False)
+  - Cost_IMU         R → ω_ext·dt   (soft anchor toward an external ω; gyro or CMax)
+  - Cost_CMax        R ← R + λ·∂Var/∂ω   (V2: CMax drives R, one step/iteration)
+
+Variants built on this class
+  - thesis        : OFCE + Spatial + Kinematics (pure vision).
+  - thesis_imu    : + Cost_IMU active (target = gyro).
+  - thesis_cmax   : + Cost_IMU active (target = a full CMax solve; see evaluation.py).
+  - thesis_cmax_v2: enable_cmax_r_update() → Cost_Kinematics stops updating R
+                    (F only) and Cost_CMax drives R directly from the events.
 
 Key implementation detail:
-    The simultaneous (Jacobi) update requires quantities to start in a
-    MUTUALLY CONSISTENT state. If R is known, F must be initialized as
-    F = C·R (not zero), otherwise the kinematic cost crushes R to zero
-    before OFCE can develop structure.
+    The Jacobi update requires quantities to start MUTUALLY CONSISTENT. If R is
+    known, F must be initialized as F = C·R (not zero), else the kinematic cost
+    crushes R to zero before OFCE can develop structure
+    (see initialize_from_rotation).
 """
 
 import numpy as np
@@ -225,6 +235,19 @@ class Cost_CMax(Cost):
         grad_R = grad_w / self.dt_frame       # ∂Var/∂R
         # Ascent: R += lr·grad_R  ⇒  accumulator = -lr·grad_R
         self.q['R'].add_gradient(-self.lr * grad_R)
+
+    def build_current_iwe(self):
+        """
+        (iwe, contrast) at the CURRENT R, from this frame's cached warp inputs.
+        Used to save the final V2 IWE after the message-passing iterations. Goes
+        through the same estimator builder as V1's `last_iwe` (unblurred IWE).
+        """
+        if self._bearings is None:
+            return None, 0.0
+        omega = self.q['R'].value / self.dt_frame
+        iwe = self.est._build_iwe(self._bearings, self._dt, self._w, omega)
+        return iwe, float(np.var(iwe))
+
 
 class Cost_IMU(Cost):
     """

@@ -22,6 +22,22 @@ def load_imu(path: str) -> np.ndarray:
     return data
 
 
+def load_omega_gt_as_imu(path: str) -> np.ndarray:
+    """
+    Load a clean direct-ω reference (omega_gt.txt: t wx wy wz) into the (N,7)
+    IMU-like layout the segment finder expects (gyro in cols [4:7], accel = 0).
+    Lets us pick segments on the exact synthetic ω (ECRot) instead of the gyro.
+    """
+    om = np.loadtxt(path, dtype=np.float64)
+    n = len(om)
+    data = np.zeros((n, 7), dtype=np.float64)
+    data[:, 0] = om[:, 0]        # t
+    data[:, 4:7] = om[:, 1:4]    # gx gy gz  <- wx wy wz
+    print(f"Loaded {n} omega_gt samples from {path}")
+    print(f"  Time range: {om[0,0]:.3f} – {om[-1,0]:.3f} s")
+    return data
+
+
 def check_window_quality(gyro_window, min_omega=0.30, max_relative_std=0.25):
     """
     Check if a gyroscope window qualifies as constant-velocity.
@@ -302,7 +318,9 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Find constant-velocity segments in IMU data')
-    parser.add_argument('imu_file', type=str, help='Path to imu.txt')
+    parser.add_argument('imu_file', type=str, help='Path to imu.txt (or omega_gt.txt with --source omega_gt)')
+    parser.add_argument('--source', choices=['imu', 'omega_gt'], default='imu',
+                        help="'omega_gt' reads a clean direct-ω file (ECRot) instead of imu.txt")
     parser.add_argument('--dt', type=float, default=0.020, help='Frame duration (s)')
     parser.add_argument('--max-relative-std', type=float, default=0.25,
                         help='Max relative std (default 0.25 = 25%%)')
@@ -318,7 +336,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    imu_data = load_imu(args.imu_file)
+    imu_data = (load_omega_gt_as_imu(args.imu_file) if args.source == 'omega_gt'
+                else load_imu(args.imu_file))
 
     segments = find_constant_velocity_segments(
         imu_data,
