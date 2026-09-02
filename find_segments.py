@@ -102,89 +102,104 @@ def check_window_quality(gyro_window, min_omega=0.30, max_relative_std=0.25):
 
 def find_constant_velocity_segments(
     imu_data: np.ndarray,
-    window_durations: list = None,
+    window_durations: list = None,     # deprecated, kept for compatibility
     step: float = 0.05,
     min_omega: float = 0.30,
     max_relative_std: float = 0.25,
     frame_duration: float = 0.020,
+    min_duration: float = 0.5,
+    max_duration: float = None,
+    grow_step: float = 0.10,
 ):
     """
-    Find segments where angular velocity is approximately constant.
-    
-    For each candidate starting point, finds the LONGEST window that
-    still passes the constant-velocity test. This determines max_n_frames.
-    
+    Find segments where the angular velocity is approximately constant.
+
+    A segment is an INTERVAL [t_start, t_end] over which omega is quasi-constant
+    -- a property of the data. `frame_duration` and the number of frames are
+    hyperparameters of the experiment and are deliberately NOT baked in here
+    (`max_n_frames` is reported only as a convenience).
+
+    Search: from each candidate start, GROW the window in `grow_step`
+    increments for as long as check_window_quality() still passes, and keep the
+    maximal passing interval. This replaces the earlier approach of trying a
+    hardcoded ladder [0.5, 1.0, 1.5, 2.0, 3.0] s and snapping to one of those
+    values, which is why segment durations previously clustered on those five
+    numbers instead of reflecting the real motion.
+
     Parameters
     ----------
-    imu_data : (N, 7) — timestamp ax ay az gx gy gz
-    window_durations : list of durations to test (longest first internally)
-    step : window step size in seconds  
-    min_omega : minimum |ω| to exclude near-stationary segments
-    max_relative_std : max relative std on dominant axis
-    frame_duration : dt for computing max_n_frames
-    
+    imu_data : (N, 7) — timestamp ax ay az gx gy gz  (gyro in cols 4:7)
+    step     : stride between candidate window starts (s)
+    min_omega, max_relative_std : passed to check_window_quality
+    frame_duration : dt used only to report max_n_frames
+    min_duration   : a candidate must pass at least this long to count (s)
+    max_duration   : optional cap on growth (s); None = grow until it fails
+    grow_step      : growth increment (s)
+    window_durations : DEPRECATED. If given, min/max_duration are derived from
+                       it so old call sites keep working.
+
     Returns
     -------
-    segments : list of dicts sorted by quality (best first)
+    segments : list of dicts sorted by quality (best first). Each has
+               t_start, t_end, duration, max_n_frames, mean_omega, ...
     """
-    if window_durations is None:
-        window_durations = [0.5, 1.0, 1.5, 2.0, 3.0]
-    
-    # Sort longest first (we'll find the max duration that passes)
-    window_durations = sorted(window_durations, reverse=True)
-    
+    if window_durations is not None:            # back-compat shim
+        min_duration = min(window_durations)
+        max_duration = max(window_durations)
+
     t = imu_data[:, 0]
     gyro = imu_data[:, 4:7]
     t_min, t_max = t[0], t[-1]
-    
+
     segments = []
     t_start = t_min
-    
-    while t_start + window_durations[-1] <= t_max:  # shortest window must fit
-        # Try windows from longest to shortest
-        best_duration = None
-        best_quality = 0
-        best_stats = None
-        
-        for duration in window_durations:
-            if t_start + duration > t_max:
-                continue
-            
-            t_end = t_start + duration
-            mask = (t >= t_start) & (t < t_end)
-            
-            if np.sum(mask) < 10:
-                continue
-            
-            window_gyro = gyro[mask]
-            passes, quality, stats = check_window_quality(
-                window_gyro, min_omega=min_omega, max_relative_std=max_relative_std
-            )
-            
-            if passes:
-                best_duration = duration
-                best_quality = quality
-                best_stats = stats
-                break  # longest passing window found
-        
-        if best_duration is not None:
-            max_n_frames = int(best_duration / frame_duration)
-            segments.append({
-                't_start': t_start,
-                't_end': t_start + best_duration,
-                'duration': best_duration,
-                'max_n_frames': max_n_frames,
-                'mean_omega': best_stats['mean_omega'],
-                'omega_magnitude': best_stats['omega_magnitude'],
-                'std_omega': best_stats['std_omega'],
-                'dominant_axis': best_stats['dominant_axis'],
-                'relative_std': best_stats['relative_std'],
-                'direction_spread_deg': best_stats['direction_spread_deg'],
-                'quality': best_quality,
-            })
-        
-        t_start += step
-    
+
+    while t_start + min_duration <= t_max:
+        # --- must pass at the minimum duration to be a candidate at all ---
+        mask = (t >= t_start) & (t < t_start + min_duration)
+        if np.sum(mask) < 10:
+            t_start += step
+            continue
+        passes, quality, stats = check_window_quality(
+            gyro[mask], min_omega=min_omega, max_relative_std=max_relative_std)
+        if not passes:
+            t_start += step
+            continue
+
+        # --- grow while it keeps passing -> maximal constant-omega interval ---
+        best_duration, best_quality, best_stats = min_duration, quality, stats
+        duration = min_duration + grow_step
+        while t_start + duration <= t_max:
+            if max_duration is not None and duration > max_duration:
+                break
+            m = (t >= t_start) & (t < t_start + duration)
+            if np.sum(m) < 10:
+                break
+            ok, q, s = check_window_quality(
+                gyro[m], min_omega=min_omega, max_relative_std=max_relative_std)
+            if not ok:
+                break
+            best_duration, best_quality, best_stats = duration, q, s
+            duration += grow_step
+
+        segments.append({
+            't_start': t_start,
+            't_end': t_start + best_duration,
+            'duration': best_duration,
+            'max_n_frames': int(best_duration / frame_duration),
+            'mean_omega': best_stats['mean_omega'],
+            'omega_magnitude': best_stats['omega_magnitude'],
+            'std_omega': best_stats['std_omega'],
+            'dominant_axis': best_stats['dominant_axis'],
+            'relative_std': best_stats['relative_std'],
+            'direction_spread_deg': best_stats['direction_spread_deg'],
+            # prefer long, stable, fast-rotating windows
+            'quality': best_quality * (best_duration ** 0.5),
+        })
+
+        # jump past this segment: the next candidate start is beyond its end
+        t_start += max(step, best_duration * 0.5)
+
     segments.sort(key=lambda s: s['quality'], reverse=True)
     return segments
 
@@ -254,20 +269,31 @@ def generate_config(segments, dataset_name: str, top_n=5, frame_duration=0.020):
         print()
 
 
-def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020, target_n_frames=150):
-    """Print ready-to-paste DATASET_SEGMENTS entry."""
+def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020,
+                     target_n_frames=None):
+    """
+    Print a ready-to-paste DATASET_SEGMENTS entry.
+
+    Emits the VALIDATED duration of each segment plus the n_frames that fits
+    inside it. Previously this printed a fixed target_n_frames (150) for every
+    segment regardless of how long omega was actually constant, which meant a
+    segment validated for 0.5 s was being run for 3.0 s -- silently breaking the
+    "quasi-constant omega" premise. `target_n_frames` is now only an upper clamp.
+    """
     print(f"\n# Paste into config.py DATASET_SEGMENTS['{dataset_name}']:")
     print(f"'{dataset_name}': [")
     for i, seg in enumerate(segments[:top_n]):
-        omega = seg['mean_omega']
         axis_names = ['x', 'y', 'z']
         dom = axis_names[seg['dominant_axis']]
-        print(f"    {{  # quality={seg['quality']:.2f}, |ω|={seg['omega_magnitude']:.3f} rad/s, "
-              f"dominant=ω_{dom}")
+        n_fit = int(seg['duration'] / frame_duration)
+        n_use = min(n_fit, target_n_frames) if target_n_frames else n_fit
+        print(f"    {{  # quality={seg['quality']:.2f}, |w|={seg['omega_magnitude']:.3f} rad/s, "
+              f"dominant=w_{dom}, rel_std={seg['relative_std']:.3f}")
         print(f"        'id': 'seg_{chr(65+i)}',")
         print(f"        't_start': {seg['t_start']:.3f},")
+        print(f"        'duration': {seg['duration']:.2f},   # validated constant-w interval (s)")
         print(f"        'frame_duration': {frame_duration},")
-        print(f"        'n_frames': {target_n_frames},  # {target_n_frames * frame_duration:.1f}s")
+        print(f"        'n_frames': {n_use},  # {n_use * frame_duration:.2f}s (fits in duration)")
         print(f"        'initial_R': None,")
         print(f"        'sensor_size': (180, 240),")
         print(f"    }},")
@@ -330,29 +356,62 @@ if __name__ == '__main__':
     parser.add_argument('--top', type=int, default=10, help='Number of segments')
     parser.add_argument('--no-plot', action='store_true', help='Skip plotting')
     parser.add_argument('--export', action='store_true', help='Print config.py snippet')
-    parser.add_argument('--min-gap', type=float, default=3.0,
-                    help='Min gap between segment starts (s). '
-                         'Set to max tested duration to avoid overlap.')
+    parser.add_argument('--min-gap', type=float, default=0.5,
+                    help='Min gap between segments (s) when de-duplicating')
+    parser.add_argument('--min-duration', type=float, default=0.5,
+                    help='A window must stay constant at least this long (s)')
+    parser.add_argument('--max-duration', type=float, default=None,
+                    help='Cap on how far a window may grow (s); default: uncapped')
+    parser.add_argument('--grow-step', type=float, default=0.10,
+                    help='Growth increment when extending a window (s)')
+    parser.add_argument('--n-segments', type=int, default=None,
+                    help='Target number of segments; relaxes thresholds until reached')
+    parser.add_argument('--max-n-frames', type=int, default=None,
+                    help='Upper clamp on n_frames in the --export block')
 
     args = parser.parse_args()
 
     imu_data = (load_omega_gt_as_imu(args.imu_file) if args.source == 'omega_gt'
                 else load_imu(args.imu_file))
 
-    segments = find_constant_velocity_segments(
-        imu_data,
-        window_durations=[0.5, 1.0, 1.5, 2.0, 3.0],
-        step=args.step,
-        min_omega=args.min_omega,
-        max_relative_std=args.max_relative_std,
-        frame_duration=args.dt,
-    )
+    def search(min_omega, max_rel_std, min_dur):
+        segs = find_constant_velocity_segments(
+            imu_data,
+            step=args.step,
+            min_omega=min_omega,
+            max_relative_std=max_rel_std,
+            frame_duration=args.dt,
+            min_duration=min_dur,
+            max_duration=args.max_duration,
+            grow_step=args.grow_step,
+        )
+        return deduplicate_segments(segs, min_gap=args.min_gap)
+
+    segments = search(args.min_omega, args.max_relative_std, args.min_duration)
+
+    # Optionally relax the thresholds until the requested number of segments is
+    # reached (reported explicitly, so the relaxation is never silent).
+    if args.n_segments and len(segments) < args.n_segments:
+        print(f"\nOnly {len(segments)} segment(s) at the default thresholds; "
+              f"relaxing to reach {args.n_segments} ...")
+        for f_std, f_om, f_dur in [(1.4, 0.7, 1.0), (2.0, 0.5, 0.7), (3.0, 0.3, 0.5)]:
+            cand = search(args.min_omega * f_om,
+                          args.max_relative_std * f_std,
+                          max(0.2, args.min_duration * f_dur))
+            print(f"  min_omega={args.min_omega*f_om:.2f} "
+                  f"max_rel_std={args.max_relative_std*f_std:.2f} "
+                  f"min_duration={max(0.2, args.min_duration*f_dur):.2f}s "
+                  f"-> {len(cand)} segments")
+            if len(cand) >= args.n_segments:
+                segments = cand
+                break
+        else:
+            segments = cand if len(cand) > len(segments) else segments
 
     if not segments:
         print(f"\nNo segments found! Try: --min-omega 0.15 --max-relative-std 0.35")
         sys.exit(1)
 
-    segments = deduplicate_segments(segments, min_gap=args.min_gap)
     print(f"\nFound {len(segments)} non-overlapping segments")
 
     top = print_segments(segments, top_n=args.top)
@@ -361,7 +420,9 @@ if __name__ == '__main__':
     generate_config(segments, dataset_name, top_n=min(args.top, 5), frame_duration=args.dt)
 
     if args.export:
-        export_to_config(segments, dataset_name, top_n=5, frame_duration=args.dt)
+        export_to_config(segments, dataset_name,
+                         top_n=args.n_segments or 5, frame_duration=args.dt,
+                         target_n_frames=args.max_n_frames)
 
     if not args.no_plot:
         plot_imu_with_segments(imu_data, segments, top_n=min(5, len(segments)))
