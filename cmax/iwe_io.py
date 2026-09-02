@@ -65,9 +65,14 @@ def plot_contrast_curve(out_dir):
     plt.close()
 
 
-def make_gif(out_dir, fps=15):
-    """Assemble frame_*.png -> iwe_sequence.gif (per-frame brightness). Best-effort."""
-    files = sorted(glob.glob(os.path.join(out_dir, 'frame_*.png')))
+def make_gif(out_dir, fps=15, name='iwe_sequence.gif', pattern='frame_*.png'):
+    """
+    Assemble a directory of PNGs into a GIF. Best-effort (needs imageio).
+
+    Generic: any directory of `pattern` files works, so this is reused for the
+    per-iteration convergence GIF as well as the per-frame IWE sequence.
+    """
+    files = sorted(glob.glob(os.path.join(out_dir, pattern)))
     if not files:
         return
     try:
@@ -76,6 +81,6 @@ def make_gif(out_dir, fps=15):
         except ImportError:
             import imageio
         frames = [imageio.imread(f) for f in files]
-        imageio.mimsave(os.path.join(out_dir, 'iwe_sequence.gif'), frames, fps=fps)
+        imageio.mimsave(os.path.join(out_dir, name), frames, fps=fps)
     except Exception as e:
         print(f"  (GIF skipped: {e})")

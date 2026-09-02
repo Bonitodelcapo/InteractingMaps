@@ -527,12 +527,20 @@ def normalise_robust(x, lo_pct=1.0, hi_pct=99.0):
         return np.full_like(x, 0.5, dtype=np.float64)
     return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
 
-def flow_to_rgb(flow):
+def flow_to_rgb(flow, max_mag=None):
+    """
+    Colour-wheel rendering of a flow field: hue = direction, value = magnitude.
+
+    max_mag fixes the magnitude normalisation. Without it each call normalises by
+    its own max, so a sequence of frames (a GIF, or several models side by side)
+    flickers and cannot be compared -- pass a shared max_mag in those cases.
+    """
     from matplotlib.colors import hsv_to_rgb
     fx, fy = flow[..., 0], flow[..., 1]
     angle = (np.arctan2(fy, fx) + np.pi) / (2 * np.pi)
     mag = np.sqrt(fx**2 + fy**2)
-    mag_norm = mag / (mag.max() + 1e-10)
+    denom = (mag.max() if max_mag is None else max_mag) + 1e-10
+    mag_norm = np.clip(mag / denom, 0.0, 1.0)
     hsv = np.stack([angle, np.ones_like(angle), mag_norm], axis=-1)
     return hsv_to_rgb(hsv)
 
@@ -1887,6 +1895,428 @@ def experiment_report_table(dataset_filter=None, models=None, segments='all',
     return rows
 
 
+
+# ===========================================================================
+# SHARED MAP RENDERING (used by exp 10 maps panel and exp 11 iteration GIF)
+# ===========================================================================
+
+def _draw_maps_row(axes, V, I, G, F, omega_est, omega_ref=None,
+                   max_mag=None, gmax=None, titles=False, row_label=None,
+                   note=None):
+    """
+    Draw one row of the map set: V | I | |G| | F | omega bars.
+
+    max_mag / gmax fix the F and |G| colour scales. Pass shared values when
+    several rows (models) or frames (GIF iterations) must be comparable --
+    otherwise every panel self-normalises and neither comparison nor animation
+    is meaningful.
+    """
+    ax = axes[0]
+    ax.imshow(V, cmap='RdBu', vmin=-1, vmax=1)
+    ax.set_xticks([]); ax.set_yticks([])
+    if titles:
+        ax.set_title('V  (events)', fontsize=10)
+    if row_label:
+        ax.set_ylabel(row_label, fontsize=10, rotation=90, labelpad=6)
+
+    ax = axes[1]
+    ax.imshow(normalise_robust(I), cmap='gray', vmin=0, vmax=1)
+    ax.set_xticks([]); ax.set_yticks([])
+    if titles:
+        ax.set_title('I  (intensity)', fontsize=10)
+
+    ax = axes[2]
+    gm = np.linalg.norm(G, axis=-1)
+    ax.imshow(gm, cmap='hot', vmin=0,
+              vmax=(gmax if gmax else gm.max() + 1e-10))
+    ax.set_xticks([]); ax.set_yticks([])
+    if titles:
+        ax.set_title('|G|  (gradient)', fontsize=10)
+
+    ax = axes[3]
+    ax.imshow(flow_to_rgb(F, max_mag=max_mag))
+    ax.set_xticks([]); ax.set_yticks([])
+    if titles:
+        ax.set_title('F  (flow)', fontsize=10)
+
+    ax = axes[4]
+    x = np.arange(3)
+    ax.bar(x - 0.2, omega_est, 0.4, label='est', color='tab:blue')
+    if omega_ref is not None:
+        ax.bar(x + 0.2, omega_ref, 0.4, label='GT', color='none',
+               edgecolor='black', linewidth=1.4)
+    ax.set_xticks(x); ax.set_xticklabels(['wx', 'wy', 'wz'], fontsize=9)
+    ax.axhline(0, color='0.6', linewidth=0.8)
+    ax.grid(alpha=0.25, axis='y')
+    if titles:
+        ax.set_title('omega (rad/s)', fontsize=10)
+    if note:
+        ax.set_xlabel(note, fontsize=8)
+    if omega_ref is not None:
+        err, dir_err, beta = compute_metrics(omega_est, omega_ref)
+        ax.text(0.02, 0.97, f'err {err:.1f}\ndir {dir_err:.1f}\nb {beta:.2f}',
+                transform=ax.transAxes, va='top', ha='left', fontsize=7,
+                bbox=dict(fc='white', alpha=0.7, lw=0))
+
+
+# ===========================================================================
+# EXPERIMENT 10: final maps panel (D1)  -- assembles maps_*.npz, no re-runs
+# ===========================================================================
+
+def experiment_maps_panel(dataset, segment_id, models=None, which='center',
+                          n_frames=25, run_missing=True):
+    """
+    One figure: rows = models, columns = V | I | |G| | F | omega.
+
+    Reads the maps_{which}.npz that experiment_tracking dumps, so after the
+    report-table run this costs seconds and needs no network execution.
+    |G| and F share a colour scale across rows so the models are comparable.
+    """
+    import glob as _glob
+    print("\n" + "=" * 70)
+    print(f"EXPERIMENT 10: maps panel  {dataset}/{segment_id}  ({which})")
+    print("=" * 70)
+
+    models = models or list(ALL_MODELS)
+    data = {}
+    for m in models:
+        pat = os.path.join('results', dataset, m, f'{segment_id}_*',
+                           f'maps_{which}.npz')
+        hits = sorted(_glob.glob(pat))
+        if not hits and run_missing:
+            print(f"  {m}: no maps found - running it")
+            try:
+                segs = resolve_segments(dataset, segment_id)
+                if not segs:
+                    print(f"  {m}: segment '{segment_id}' unknown - skipping")
+                    continue
+                nf = segment_n_frames(segs[0], segs[0].get('frame_duration', 0.02),
+                                      requested=n_frames)
+                rc = RunConfig(dataset=dataset, model=m, segment=segs[0], n_frames=nf)
+                experiment_tracking(rc, save_frames=False)
+                hits = sorted(_glob.glob(pat))
+            except Exception as e:
+                print(f"  {m}: failed ({e}) - skipping")
+                continue
+        if hits:
+            # Newest by mtime, NOT lexicographic: '..._n25_...' sorts before
+            # '..._n3_...', so sorted()[-1] would pick a stale 3-frame run.
+            data[m] = np.load(max(hits, key=os.path.getmtime), allow_pickle=True)
+        else:
+            print(f"  {m}: no maps - skipping")
+
+    if not data:
+        print("  Nothing to plot.")
+        return None
+
+    # Shared scales (99th percentile: robust to a few hot pixels).
+    gmax = max(float(np.percentile(np.linalg.norm(d['G'], axis=-1), 99))
+               for d in data.values()) + 1e-10
+    max_mag = max(float(np.percentile(np.linalg.norm(d['F'], axis=-1), 99))
+                  for d in data.values()) + 1e-10
+
+    names = [m for m in models if m in data]
+    fig, axes = plt.subplots(len(names), 5,
+                             figsize=(15, 2.9 * len(names)), squeeze=False)
+    for i, m in enumerate(names):
+        d = data[m]
+        _draw_maps_row(axes[i], d['V'], d['I'], d['G'], d['F'],
+                       d['omega_est'], d['omega_ref'],
+                       max_mag=max_mag, gmax=gmax,
+                       titles=(i == 0), row_label=m)
+    fig.suptitle(f'Maps after relaxation - {dataset} / {segment_id} '
+                 f'({which} frame; |G| and F share a scale across rows)',
+                 fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+
+    out_dir = os.path.join('results', 'report')
+    os.makedirs(out_dir, exist_ok=True)
+    stem = os.path.join(out_dir, f'maps_panel_{dataset}_{segment_id}_{which}')
+    fig.savefig(stem + '.png', dpi=150)
+    fig.savefig(stem + '.pdf')
+    plt.close(fig)
+    print(f"  wrote {stem}.png / .pdf   ({len(names)} models)")
+    return stem + '.png'
+
+
+# ===========================================================================
+# EXPERIMENT 11: map evolution across relaxation iterations (D2)
+# ===========================================================================
+
+def experiment_iteration_gif(rc: RunConfig, max_iters=100, fps=10, every=1):
+    """
+    Render one PNG per relaxation iteration for the frame at the SEGMENT CENTRE,
+    then assemble a GIF.
+
+    Cold start: a fresh network relaxes just that frame, which is the
+    "convergence from scratch" story the animation is meant to tell.
+
+    Runs the relaxation TWICE: pass 1 measures the final |G| and |F| magnitudes
+    so pass 2 can render every iteration on a FIXED colour scale. Without that
+    each frame self-normalises and the GIF flickers instead of showing the maps
+    actually forming. One frame, so the extra pass is cheap.
+    """
+    print("\n" + "=" * 70)
+    print(f"EXPERIMENT 11: iteration GIF  {rc.dataset}/{rc.segment_id}/{rc.model}")
+    print("=" * 70)
+
+    k_center = rc.n_frames // 2
+    seq = EventFrameSequence(
+        rc.paths['events'], rc.paths['calib'],
+        frame_duration=rc.frame_duration, t_start=rc.t_start,
+        n_frames=k_center + 1, clip_value=10.0,
+        undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
+    )
+    frames = list(seq)
+    V, t_mid = frames[k_center]
+    H, W = seq.H, seq.W
+    fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
+
+    t_lo = rc.t_start + k_center * rc.frame_duration
+    t_hi = t_lo + rc.frame_duration
+    imu_data = load_imu(rc.paths['imu'])
+    gt_data = load_groundtruth(rc.paths['groundtruth'])
+    omega_gt_data = load_omega_gt(rc.paths.get('omega_gt'))
+    omega_ref, ref_src = get_reference_omega(gt_data, imu_data, t_lo, t_hi,
+                                             omega_gt_data)
+    omega_imu = get_gyro_for_frame(imu_data, t_lo, t_hi)
+    print(f"  centre frame {k_center}, t={t_mid:.3f}s, ref={ref_src}")
+
+    # Raw events for the CMax variants.
+    win, cmax_est = None, None
+    if getattr(rc, 'use_cmax', False):
+        from data_loader import load_events_fast, undistort_events
+        ev = undistort_events(
+            load_events_fast(rc.paths['events'], t_start=t_lo,
+                             duration=rc.frame_duration + 0.02), seq.calib)
+        win = ev[(ev[:, 0] >= t_lo) & (ev[:, 0] < t_hi)] if len(ev) else ev
+        if not getattr(rc, 'use_cmax_v2', False):
+            from cmax import CMaxAngularVelocity
+            cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
+
+    def fresh_net():
+        return make_network(rc, H, W, fx, fy, cx, cy)
+
+    # ---- pass 1: fix the colour scales -------------------------------
+    net = fresh_net()
+    _net_step(net, rc, V, n_iters=max_iters, omega_imu=omega_imu, win=win,
+              cmax_est=cmax_est, state={'t_ref': 0.5 * (t_lo + t_hi)})
+    gmax = float(np.percentile(np.linalg.norm(net.G, axis=-1), 99)) + 1e-10
+    max_mag = float(np.percentile(np.linalg.norm(net.F, axis=-1), 99)) + 1e-10
+
+    # ---- pass 2: render one PNG per iteration ------------------------
+    out_dir = os.path.join(rc.output_dir, 'iter_frames')
+    os.makedirs(out_dir, exist_ok=True)
+    for old in os.listdir(out_dir):
+        if old.startswith('frame_') and old.endswith('.png'):
+            os.remove(os.path.join(out_dir, old))
+
+    hist = []
+    net = fresh_net()
+
+    def cb(it, n):
+        w = n.R / rc.frame_duration
+        err, dir_err, beta = compute_metrics(w, omega_ref)
+        try:
+            res = n.residual_VFG(V)
+        except Exception:
+            res = float('nan')
+        hist.append((it, err, dir_err, beta, res))
+        if it % every:
+            return
+        I = n.I[:H, :W] if n.I.shape != (H, W) else n.I
+        # Fixed figsize + dpi and NO tight_layout: every frame must have
+        # identical pixel dimensions or the GIF jitters.
+        fig, axes = plt.subplots(1, 5, figsize=(15, 3.1))
+        fig.subplots_adjust(left=0.04, right=0.99, top=0.86, bottom=0.12,
+                            wspace=0.18)
+        _draw_maps_row(axes, V, I, n.G, n.F, w, omega_ref,
+                       max_mag=max_mag, gmax=gmax, titles=True)
+        fig.suptitle(f'{rc.model} - iteration {it + 1}/{max_iters}   '
+                     f'err {err:.1f} deg/s   residual {res:.4f}', fontsize=11)
+        fig.savefig(os.path.join(out_dir, f'frame_{it:04d}.png'), dpi=90)
+        plt.close(fig)
+
+    _net_step(net, rc, V, n_iters=max_iters, omega_imu=omega_imu, win=win,
+              cmax_est=cmax_est, state={'t_ref': 0.5 * (t_lo + t_hi)},
+              on_iter=cb)
+
+    from cmax.iwe_io import make_gif
+    make_gif(out_dir, fps=fps, name='iteration_evolution.gif')
+
+    # Quantitative companion: the per-iteration histories exp 1 used to discard.
+    h = np.array(hist)
+    fig, ax = plt.subplots(1, 2, figsize=(11, 3.6))
+    ax[0].plot(h[:, 0] + 1, h[:, 1], color='tab:red')
+    ax[0].set_xlabel('iteration'); ax[0].set_ylabel('error (deg/s)')
+    ax[0].set_title('omega error vs iteration'); ax[0].grid(alpha=0.3)
+    ax[1].plot(h[:, 0] + 1, h[:, 4], color='tab:blue')
+    ax[1].set_xlabel('iteration'); ax[1].set_ylabel('residual |V + F.G|')
+    ax[1].set_title('OFCE residual vs iteration'); ax[1].grid(alpha=0.3)
+    fig.suptitle(f'{rc.dataset}/{rc.segment_id}/{rc.model} - convergence')
+    fig.tight_layout()
+    fig.savefig(os.path.join(rc.output_dir, 'exp11_iter_convergence.png'), dpi=140)
+    plt.close(fig)
+
+    np.savetxt(os.path.join(rc.output_dir, 'exp11_iter_history.csv'), h,
+               delimiter=',', header='iter,err_deg_s,dir_err_deg,beta,residual',
+               comments='')
+    n_png = len([f for f in os.listdir(out_dir) if f.endswith('.png')])
+    print(f"  {n_png} frames -> {os.path.join(out_dir, 'iteration_evolution.gif')}")
+    print(f"  err {h[0, 1]:.1f} -> {h[-1, 1]:.1f} deg/s over {max_iters} iterations")
+    return out_dir
+
+
+# ===========================================================================
+# EXPERIMENT 13: one-at-a-time parameter sweep (D4)
+# ===========================================================================
+
+OAT_AXES = {
+    'n_iters':         [10, 25, 50, 75, 100, 150],
+    'delta_FR':        [0.05, 0.10, 0.20, 0.30, 0.50, 0.80],
+    'delta_IMU':       [0.05, 0.10, 0.20, 0.30, 0.50, 0.80],
+    'frame_duration':  [0.005, 0.010, 0.020, 0.030, 0.050],
+    'delta_VFG':       [0.04, 0.08, 0.12, 0.20, 0.30],
+    'delta_IG':        [0.03, 0.10, 0.20, 0.30],
+    'delta_GI':        [0.02, 0.05, 0.10, 0.20],
+    'delta_RF':        [0.01, 0.03, 0.05, 0.10, 0.20],
+    'cmax_lr':         [1e-5, 3e-5, 1e-4, 3e-4],
+    'distortion_mode': ['undistort_events', 'C_full'],
+}
+
+
+def clone_rc(rc: RunConfig, tag=None, **overrides):
+    """
+    Copy a RunConfig, changing only the named fields.
+
+    The old distortion-ablation clone passed just a handful of fields, silently
+    resetting delta_VFG/IG/GI/RF and cmax_lr to defaults. This carries every
+    parameter across. Spatial deltas equal to the model default are passed as
+    None so they do not add a suffix to output_dir (keeping baseline folder
+    names stable); only genuinely non-default values are marked explicit.
+    """
+    base = COOK_PARAMS if rc.model == 'cook' else THESIS_PARAMS
+    kw = dict(dataset=rc.dataset, model=rc.model, segment=rc.segment,
+              t_start=rc.t_start, frame_duration=rc.frame_duration,
+              n_frames=rc.n_frames, n_iters=rc.n_iters,
+              delta_IMU=(rc.params.get('delta_IMU') if rc.use_imu else None),
+              delta_FR=rc.params.get('delta_FR'),
+              cmax_lr=rc.cmax_lr, distortion_mode=rc.distortion_mode)
+    for k in ('delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF'):
+        v = rc.params.get(k)
+        d = base.get(k)
+        kw[k] = v if (v is not None and d is not None
+                      and abs(v - d) > 1e-12) else None
+    kw.update(overrides)
+    out = RunConfig(**kw)
+    out.tag = tag
+    return out
+
+
+def experiment_oat_sweep(rc_base: RunConfig, axes=None, save_frames=False):
+    """
+    D4: hold everything fixed, vary ONE parameter at a time.
+
+    Two rules that make the results interpretable:
+      * every clone gets a unique tag -> unique output_dir, so runs cannot
+        overwrite each other (this is what previously made cmax_lr sweeps
+        silently produce identical rows);
+      * the frame_duration axis keeps the PHYSICAL duration constant by
+        rescaling n_frames, otherwise the axis confounds "shorter time window"
+        with "fewer events per bin".
+    """
+    print("\n" + "=" * 70)
+    print(f"EXPERIMENT 13: OAT sweep  {rc_base.dataset}/{rc_base.segment_id}"
+          f"/{rc_base.model}")
+    print("=" * 70)
+
+    if axes is None:
+        axes = ['n_iters', 'delta_FR', 'delta_IMU', 'frame_duration',
+                'delta_VFG', 'delta_IG', 'delta_GI', 'cmax_lr']
+    base_duration = rc_base.n_frames * rc_base.frame_duration
+    out_root = os.path.join('results', 'oat',
+                            f'{rc_base.dataset}_{rc_base.segment_id}_{rc_base.model}')
+    os.makedirs(out_root, exist_ok=True)
+    all_rows = []
+
+    for axis in axes:
+        if axis not in OAT_AXES:
+            print(f"  unknown axis '{axis}' - skipping")
+            continue
+        if axis == 'delta_IMU' and not rc_base.use_imu:
+            print(f"  {axis}: n/a for {rc_base.model} - skipping")
+            continue
+        if axis == 'cmax_lr' and not getattr(rc_base, 'use_cmax_v2', False):
+            print(f"  {axis}: n/a for {rc_base.model} - skipping")
+            continue
+
+        print(f"\n  --- axis: {axis} ---")
+        rows = []
+        for v in OAT_AXES[axis]:
+            ov = {axis: v}
+            if axis == 'frame_duration':
+                ov['n_frames'] = max(1, int(round(base_duration / v)))
+            try:
+                rc = clone_rc(rc_base, tag=f'oat_{axis}_{v}', **ov)
+                summ = experiment_tracking(rc, save_frames=save_frames)
+                row = {'axis': axis, 'value': v, 'n_frames': rc.n_frames,
+                       'frame_duration': rc.frame_duration}
+                row.update(summ)
+                rows.append(row)
+                print(f"    {axis}={v}: mean_err={summ['mean_err_deg_s']:.2f} "
+                      f"beta={summ['mean_beta']:.3f}")
+            except Exception as e:
+                print(f"    {axis}={v}: FAILED - {e}")
+
+        if not rows:
+            continue
+        all_rows.extend(rows)
+
+        csv_p = os.path.join(out_root, f'{axis}.csv')
+        keys = sorted({k for r in rows for k in r})
+        with open(csv_p, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+
+        xs = [r['value'] for r in rows]
+        ys = [r['mean_err_deg_s'] for r in rows]
+        bs = [r['mean_beta'] for r in rows]
+        fig, ax = plt.subplots(figsize=(6, 3.8))
+        numeric = all(isinstance(x, (int, float)) for x in xs)
+        if numeric:
+            ax.plot(xs, ys, 'o-', color='tab:red', label='mean err')
+            if axis in ('n_iters', 'cmax_lr'):
+                ax.set_xscale('log')
+        else:
+            ax.bar([str(x) for x in xs], ys, color='tab:red', alpha=0.8)
+        ax.set_xlabel(axis); ax.set_ylabel('mean error (deg/s)', color='tab:red')
+        ax.grid(alpha=0.3)
+        ax2 = ax.twinx()
+        if numeric:
+            ax2.plot(xs, bs, 's--', color='tab:blue', alpha=0.8)
+        else:
+            ax2.plot([str(x) for x in xs], bs, 's--', color='tab:blue', alpha=0.8)
+        ax2.set_ylabel('mean beta', color='tab:blue')
+        ax2.axhline(1.0, color='tab:blue', ls=':', alpha=0.5)
+        ax.set_title(f'{rc_base.model} - sensitivity to {axis}')
+        fig.tight_layout()
+        fig.savefig(os.path.join(out_root, f'oat_{axis}.png'), dpi=140)
+        plt.close(fig)
+
+    if all_rows:
+        summary_p = os.path.join(out_root, 'oat_all.csv')
+        keys = sorted({k for r in all_rows for k in r})
+        with open(summary_p, 'w', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=keys, extrasaction='ignore')
+            w.writeheader()
+            for r in all_rows:
+                w.writerow(r)
+        print(f"\n  wrote {out_root}/  ({len(all_rows)} runs)")
+    return all_rows
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -1932,6 +2362,15 @@ if __name__ == '__main__':
                         help="Comma list of segment ids, or 'all'")
     parser.add_argument('--no-resume', action='store_true',
                         help='Recompute even when summary.json already exists')
+    parser.add_argument('--max-iters', type=int, default=100,
+                        help='exp 11: relaxation iterations to animate')
+    parser.add_argument('--gif-fps', type=int, default=10)
+    parser.add_argument('--every', type=int, default=1,
+                        help='exp 11: render every Nth iteration')
+    parser.add_argument('--maps-which', type=str, default='center',
+                        choices=['center', 'final'], help='exp 10: which frame')
+    parser.add_argument('--oat-axes', type=str, default=None,
+                        help='exp 13: comma list of axes to sweep')
     parser.add_argument('--best', action='store_true',
                         help='Fill unspecified params from best_config.py '
                              '(best grid params for this dataset/segment/model). '
@@ -1946,7 +2385,7 @@ if __name__ == '__main__':
 
     # Build config ONLY for experiments that need it (1-6)
     rc = None
-    need_rc = args.exp in (1, 2, 3, 4, 5, 6, 9)
+    need_rc = args.exp in (1, 2, 3, 4, 5, 6, 9, 11, 13)
     if args.exp == 9 and args.segment == 'all':
         need_rc = False                       # all-segments path builds its own configs
     if need_rc:
@@ -1982,6 +2421,19 @@ if __name__ == '__main__':
         rc.save_iwe = args.save_iwe
 
     experiments = {
+        10: lambda: experiment_maps_panel(
+                dataset=args.dataset or 'poster_rotation',
+                segment_id=args.segment or 'seg_A',
+                models=resolve_models(effective_model, args.models),
+                which=args.maps_which,
+                n_frames=args.n_frames if args.n_frames else 25),
+        11: lambda: experiment_iteration_gif(
+                rc, max_iters=args.max_iters, fps=args.gif_fps, every=args.every),
+        13: lambda: experiment_oat_sweep(
+                rc,
+                axes=[a.strip() for a in args.oat_axes.split(',')]
+                     if args.oat_axes else None,
+                save_frames=False),
         12: lambda: experiment_report_table(
                 dataset_filter=args.dataset,
                 models=resolve_models(effective_model, args.models),
