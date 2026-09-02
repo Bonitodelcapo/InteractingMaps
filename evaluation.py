@@ -679,6 +679,57 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
 # ===========================================================================
 # EXPERIMENT 2: Multi-Frame Tracking
 # ===========================================================================
+def _net_step(net, rc: RunConfig, V, n_iters=None, omega_imu=None,
+              win=None, cmax_est=None, state=None, on_iter=None):
+    """
+    Run ONE frame through the network, dispatching per model variant.
+
+    This is the single place that knows how each of the five models must be
+    driven. It previously lived inline in experiment_tracking while exp 1
+    re-implemented the loop by hand -- and that hand-rolled copy never called
+    Cost_CMax.set_frame(), so `thesis_cmax_v2` silently produced results with
+    the CMax gradient disabled (its `_bearings is None` guard returns early).
+    Every experiment now shares this function, so a model is driven identically
+    everywhere.
+
+    Parameters
+    ----------
+    win       : (N,4) raw events for this frame window (CMax variants only)
+    cmax_est  : CMaxAngularVelocity for V1 (full solve per frame)
+    state     : dict carrying cross-frame state; uses 'omega_cmax_prev' as the
+                V1 warm start
+    on_iter   : forwarded to net.step() -> per-iteration callback (D2 GIF)
+
+    Returns
+    -------
+    (omega_est, aux) : omega_est in rad/s; aux carries e.g. the V1 CMax anchor.
+    """
+    n_iters = rc.n_iters if n_iters is None else n_iters
+    state = {} if state is None else state
+    aux = {}
+
+    if getattr(rc, 'use_cmax_v2', False):
+        # V2: CMax drives R from inside the message passing (needs raw events).
+        net.step(V, n_iters=n_iters, events=win, on_iter=on_iter)
+    elif cmax_est is not None:
+        # V1: full CMax solve -> R anchor (reuses the Cost_IMU mechanism).
+        t_ref = state.get('t_ref')
+        omega_anchor = cmax_est.estimate(
+            win, t_ref=t_ref, omega_init=state.get('omega_cmax_prev'))
+        state['omega_cmax_prev'] = omega_anchor.copy()
+        aux['omega_anchor'] = omega_anchor
+        net.step(V, n_iters=n_iters, omega_imu=omega_anchor, on_iter=on_iter)
+    elif rc.use_thesis and rc.use_imu:
+        net.step(V, n_iters=n_iters, omega_imu=omega_imu, on_iter=on_iter)
+    elif rc.use_thesis:
+        net.step(V, n_iters=n_iters, on_iter=on_iter)
+    else:
+        # Cook network: no omega_imu/events kwargs.
+        net.step(V, n_iters=n_iters, on_iter=on_iter)
+
+    return net.R / rc.frame_duration, aux
+
+
 def experiment_tracking(rc: RunConfig, save_frames=True):
     """
     Main experiment: ω tracking over time.
@@ -730,6 +781,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     cmax_events = None
     omega_cmax_prev = np.zeros(3)
     omega_anchor = None
+    _step_state = {}          # cross-frame state carried through _net_step
     if getattr(rc, 'use_cmax', False):
         from data_loader import load_events_fast, undistort_events
         dur = rc.n_frames * rc.frame_duration + 0.1
@@ -779,21 +831,15 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         if cmax_events is not None:
             win = cmax_events[(cmax_events[:, 0] >= t_lo) & (cmax_events[:, 0] < t_hi)]
 
-        if getattr(rc, 'use_cmax_v2', False):
-            # V2: CMax drives R inside the message passing.
-            net.step(V, n_iters=rc.n_iters, events=win)
-        elif cmax_est is not None:
-            # V1: full CMax solve → R anchor (via Cost_IMU mechanism).
-            omega_anchor = cmax_est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
-                                             omega_init=omega_cmax_prev)
-            omega_cmax_prev = omega_anchor.copy()
-            net.step(V, n_iters=rc.n_iters, omega_imu=omega_anchor)
-        elif rc.use_thesis and rc.use_imu:
-            net.step(V, n_iters=rc.n_iters, omega_imu=omega_imu)
-        else:
-            net.step(V, n_iters=rc.n_iters)
-
-        omega_est = net.R / rc.frame_duration
+        # Single shared dispatch for all five model variants (see _net_step).
+        _step_state['t_ref'] = 0.5 * (t_lo + t_hi)
+        _step_state['omega_cmax_prev'] = omega_cmax_prev
+        omega_est, _aux = _net_step(net, rc, V, n_iters=rc.n_iters,
+                                    omega_imu=omega_imu, win=win,
+                                    cmax_est=cmax_est, state=_step_state)
+        if 'omega_anchor' in _aux:
+            omega_anchor = _aux['omega_anchor']
+            omega_cmax_prev = _step_state['omega_cmax_prev']
         err, dir_err, beta = compute_metrics(omega_est, omega_ref)
 
         # ─── Save the final contrast-maximized IWE for this frame ────
@@ -1688,6 +1734,159 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
 # Main
 # ===========================================================================
 
+
+# ===========================================================================
+# EXPERIMENT 12: report results table (all models x datasets x segments)
+# ===========================================================================
+
+# Fixed CSV header. Written up-front and used with extrasaction='ignore' so a
+# failure on the FIRST run can no longer truncate the header (the old exp 7
+# derived fieldnames from all_results[0].keys(), which then made every later
+# full row raise).
+RUN_FIELDS = (
+    'dataset', 'segment_id', 'model', 'status',
+    'n_frames', 'frame_duration', 'duration_s', 'n_iters',
+    'delta_FR', 'delta_IMU', 'cmax_lr', 'distortion_mode', 'ref_source',
+    'omega_gt_mag_mean',
+    'mean_err_deg_s', 'median_err_deg_s', 'std_err_deg_s',
+    'min_err_deg_s', 'max_err_deg_s', 'p90_err_deg_s', 'final_err_deg_s',
+    'mean_dir_err_deg', 'median_dir_err_deg',
+    'mean_beta', 'std_beta', 'median_beta',
+    'mean_frame_time_s', 'total_runtime_s',
+)
+
+
+def _omega_gt_mag_mean(out_dir):
+    """Mean |omega_ref| over the run, read back from tracking.csv."""
+    path = os.path.join(out_dir, 'tracking.csv')
+    if not os.path.exists(path):
+        return float('nan')
+    try:
+        with open(path) as f:
+            mags = [np.linalg.norm([float(r['gt_wx']), float(r['gt_wy']),
+                                    float(r['gt_wz'])])
+                    for r in csv.DictReader(f)]
+        return float(np.mean(mags)) if mags else float('nan')
+    except Exception:
+        return float('nan')
+
+
+def experiment_report_table(dataset_filter=None, models=None, segments='all',
+                            n_frames=25, save_frames=False, resume=True,
+                            distortion_mode=None, out_csv=None):
+    """
+    D3: the main report table. All models x datasets x segments.
+
+    Every cell uses IDENTICAL settings (dt, n_iters, deltas, distortion mode) so
+    the comparison is fair; the only thing that varies is model/dataset/segment.
+    Deliberately does NOT use --best: BEST_CONFIGS covers one dataset and three
+    models, so it would tune a few cells and leave the rest at defaults.
+
+    n_frames is clamped per segment by segment_n_frames() so no run ever extends
+    past the segment's validated constant-omega duration.
+
+    Loops dataset -> segment -> model, appending and flushing one row per run, so
+    an interrupted overnight job still leaves a valid CSV. With resume=True a run
+    whose summary.json already exists is loaded instead of recomputed.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 12: report results table")
+    print("=" * 70)
+
+    models = models or list(ALL_MODELS)
+    datasets = available_datasets(dataset_filter)
+    if not datasets:
+        print("  No datasets with data available - nothing to do.")
+        return []
+
+    out_csv = out_csv or os.path.join('results', 'report', 'report_runs.csv')
+    os.makedirs(os.path.dirname(out_csv), exist_ok=True)
+
+    # Keep rows from a previous invocation so re-runs accumulate rather than
+    # clobber (resume across nights).
+    existing = {}
+    if resume and os.path.exists(out_csv):
+        with open(out_csv) as f:
+            for r in csv.DictReader(f):
+                existing[(r['dataset'], r['segment_id'], r['model'])] = r
+
+    rows = []
+    f_out = open(out_csv, 'w', newline='')
+    writer = csv.DictWriter(f_out, fieldnames=RUN_FIELDS, extrasaction='ignore',
+                            restval='')
+    writer.writeheader()
+    f_out.flush()
+
+    n_total = sum(len(resolve_segments(d, segments)) for d in datasets) * len(models)
+    n_done = 0
+
+    for dataset in datasets:
+        for seg in resolve_segments(dataset, segments):
+            for model in models:
+                n_done += 1
+                key = (dataset, seg['id'], model)
+                tag = f"[{n_done}/{n_total}] {dataset}/{seg['id']}/{model}"
+
+                row = {'dataset': dataset, 'segment_id': seg['id'],
+                       'model': model, 'status': 'ok'}
+                try:
+                    nf = segment_n_frames(seg, seg.get('frame_duration', 0.02),
+                                          requested=n_frames)
+                    rc = RunConfig(dataset=dataset, model=model, segment=seg,
+                                   n_frames=nf, distortion_mode=distortion_mode)
+
+                    summ = None
+                    if resume:
+                        sp = os.path.join(rc.output_dir, 'summary.json')
+                        if os.path.exists(sp):
+                            try:
+                                summ = json.load(open(sp))
+                                print(f"  {tag}: cached")
+                            except Exception:
+                                summ = None
+                    if summ is None:
+                        print(f"  {tag}: running ({nf} frames)")
+                        summ = experiment_tracking(rc, save_frames=save_frames)
+
+                    row.update(summ)
+                    row.update({
+                        'n_frames': rc.n_frames,
+                        'frame_duration': rc.frame_duration,
+                        'duration_s': rc.duration_s,
+                        'n_iters': rc.n_iters,
+                        'delta_FR': rc.params.get('delta_FR'),
+                        'delta_IMU': rc.delta_IMU if rc.use_imu else '',
+                        'cmax_lr': rc.cmax_lr if rc.use_cmax_v2 else '',
+                        'distortion_mode': rc.distortion_mode,
+                        'omega_gt_mag_mean': _omega_gt_mag_mean(rc.output_dir),
+                    })
+                except Exception as e:
+                    # Never let one bad cell kill an overnight batch.
+                    row['status'] = f'failed: {type(e).__name__}: {e}'[:200]
+                    print(f"  {tag}: FAILED - {e}")
+
+                writer.writerow(row)
+                f_out.flush()
+                rows.append(row)
+
+    # Carry over rows from earlier invocations that this batch did not touch,
+    # so running one dataset per night accumulates into a single table instead
+    # of each run clobbering the previous night's results.
+    done = {(r['dataset'], r['segment_id'], r['model']) for r in rows}
+    carried = 0
+    for key, old in existing.items():
+        if key not in done:
+            writer.writerow(old)
+            carried += 1
+    f_out.flush()
+    f_out.close()
+
+    ok = sum(1 for r in rows if r['status'] == 'ok')
+    extra = f", {carried} carried over from previous runs" if carried else ""
+    print(f"\n  {ok}/{len(rows)} runs ok{extra}  ->  {out_csv}")
+    return rows
+
+
 if __name__ == '__main__':
     import argparse
 
@@ -1713,6 +1912,26 @@ if __name__ == '__main__':
     parser.add_argument('--distortion-mode', type=str, default=None,
                         choices=['undistort_events', 'C_full'],
                         help='Override distortion handling (exp 1-6, 8). Exp 9 sweeps both.')
+    # --- parameter overrides (needed by the OAT sweep, exp 13) ---
+    parser.add_argument('--frame_duration', type=float, default=None,
+                        help='Event window length dt in seconds')
+    parser.add_argument('--t_start', type=float, default=None)
+    parser.add_argument('--delta_fr', type=float, default=None)
+    parser.add_argument('--delta_vfg', type=float, default=None)
+    parser.add_argument('--delta_ig', type=float, default=None)
+    parser.add_argument('--delta_gi', type=float, default=None)
+    parser.add_argument('--delta_rf', type=float, default=None)
+    parser.add_argument('--cmax_lr', type=float, default=None,
+                        help='V2 CMax ascent step (stable ~1e-5..1e-4)')
+    parser.add_argument('--tag', type=str, default=None,
+                        help='Suffix appended to output_dir')
+    # --- batch selection ---
+    parser.add_argument('--models', type=str, default=None,
+                        help="Comma list, e.g. 'cook,thesis_imu'. Overrides --model.")
+    parser.add_argument('--segments', type=str, default='all',
+                        help="Comma list of segment ids, or 'all'")
+    parser.add_argument('--no-resume', action='store_true',
+                        help='Recompute even when summary.json already exists')
     parser.add_argument('--best', action='store_true',
                         help='Fill unspecified params from best_config.py '
                              '(best grid params for this dataset/segment/model). '
@@ -1741,6 +1960,15 @@ if __name__ == '__main__':
             n_iters=args.n_iters,
             delta_IMU=args.delta_imu,
             distortion_mode=args.distortion_mode,
+            t_start=args.t_start,
+            frame_duration=args.frame_duration,
+            delta_FR=args.delta_fr,
+            delta_VFG=args.delta_vfg,
+            delta_IG=args.delta_ig,
+            delta_GI=args.delta_gi,
+            delta_RF=args.delta_rf,
+            cmax_lr=args.cmax_lr,
+            tag=args.tag,
         )
         if args.best:
             if args.segment in (None, 'all'):
@@ -1754,6 +1982,14 @@ if __name__ == '__main__':
         rc.save_iwe = args.save_iwe
 
     experiments = {
+        12: lambda: experiment_report_table(
+                dataset_filter=args.dataset,
+                models=resolve_models(effective_model, args.models),
+                segments=args.segments,
+                n_frames=args.n_frames if args.n_frames else 25,
+                save_frames=save_frames,
+                resume=not args.no_resume,
+                distortion_mode=args.distortion_mode),
         1: lambda: experiment_single_frame_convergence(rc, frame_idx=args.frame),
         2: lambda: experiment_tracking(rc, save_frames=save_frames),
         3: lambda: experiment_parameter_influence(rc, frame_idx=args.frame),

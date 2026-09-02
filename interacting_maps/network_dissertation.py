@@ -377,7 +377,7 @@ class InteractingMapsThesis:
         self.q_R.value = np.zeros(3, dtype=np.float64)
 
     def step(self, V: np.ndarray, n_iters: int = 50, omega_imu: np.ndarray = None,
-             events: np.ndarray = None):
+             events: np.ndarray = None, on_iter=None):
         """
         Two-Phase Message Passing (Algorithm 6.5).
         Thesis uses 50-75 iterations per time-slice (Section 6.8).
@@ -403,7 +403,7 @@ class InteractingMapsThesis:
             else:
                 self.cost_cmax.set_frame(None, 0.0)
 
-        for _ in range(n_iters):
+        for _it in range(n_iters):
             # PHASE 1: All costs compute gradients
             for q in [self.q_I, self.q_G, self.q_F, self.q_R]:
                 q.reset_gradient()
@@ -423,6 +423,14 @@ class InteractingMapsThesis:
             self.q_G.value = np.clip(self.q_G.value, -5.0, 5.0)
             self.q_F.value = np.clip(self.q_F.value, -10.0, 10.0)
             self.q_R.value = np.clip(self.q_R.value, -1.0, 1.0)
+
+            # Optional per-iteration observer (used to render the convergence
+            # GIF). No-op when None -> behaviour is unchanged for every
+            # existing caller. Kept here so the per-FRAME setup above
+            # (notably Cost_CMax.set_frame, which is O(N_events)) runs once
+            # per frame rather than once per iteration.
+            if on_iter is not None:
+                on_iter(_it, self)
 
     # ------------------------------------------------------------------
     # Diagnostics

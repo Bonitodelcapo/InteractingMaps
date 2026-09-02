@@ -202,7 +202,7 @@ class InteractingMaps:
     # Main loop
     # ------------------------------------------------------------------
 
-    def step(self, V: np.ndarray, n_iters: int = 20) -> None:
+    def step(self, V: np.ndarray, n_iters: int = 20, on_iter=None) -> None:
         """
         Process one input frame V by running n_iters relaxation cycles.
 
@@ -213,8 +213,11 @@ class InteractingMaps:
         ----------
         V       : (H, W) temporal intensity derivative (the sole input)
         n_iters : number of update cycles per frame
+        on_iter : optional callback on_iter(iteration, net) run after each
+                  cycle (used to render the convergence GIF). No-op when None,
+                  so existing behaviour is unchanged.
         """
-        for _ in range(n_iters):
+        for _it in range(n_iters):
             # FIRST: R reads current F (which was moved by OFCE last iteration)
             self.update_R_from_FC()
             
@@ -242,6 +245,11 @@ class InteractingMaps:
             np.clip(self.G, -5.0, 5.0, out=self.G)
             np.clip(self.I[:self.H, :self.W], -10.0, 10.0,
                     out=self.I[:self.H, :self.W])
+
+            # Optional per-iteration observer (convergence GIF). No-op when
+            # None, so existing callers are unaffected.
+            if on_iter is not None:
+                on_iter(_it, self)
 
     # ------------------------------------------------------------------
     # Diagnostics
