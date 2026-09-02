@@ -64,6 +64,89 @@ from interacting_maps.network_dissertation import InteractingMapsThesis
 
 
 # ===========================================================================
+# MODEL / DATASET RESOLUTION
+# ===========================================================================
+
+# The full model roster. Batch runners used to hardcode only the first three,
+# which silently dropped both CMax variants from `--model all`.
+ALL_MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
+CLASSIC_MODELS = ['cook', 'thesis', 'thesis_imu']
+
+
+def resolve_models(model_arg=None, models_arg=None):
+    """
+    Resolve the model list for a batch run.
+
+    models_arg : comma-separated list (wins over model_arg) e.g. 'thesis,cook'
+    model_arg  : 'all' -> ALL_MODELS, 'classic' -> CLASSIC_MODELS,
+                 None  -> ALL_MODELS, a single name -> [name]
+    """
+    if models_arg:
+        names = [m.strip() for m in models_arg.split(',') if m.strip()]
+        unknown = [m for m in names if m not in ALL_MODELS]
+        if unknown:
+            raise ValueError(f"Unknown model(s) {unknown}; valid: {ALL_MODELS}")
+        return names
+    if model_arg in (None, 'all'):
+        return list(ALL_MODELS)
+    if model_arg == 'classic':
+        return list(CLASSIC_MODELS)
+    return [model_arg]
+
+
+def available_datasets(dataset_filter=None):
+    """
+    Datasets from DATASET_SEGMENTS whose events.txt actually exists.
+
+    Missing data is skipped with a warning instead of raising, so an overnight
+    batch keeps going when one dataset was not downloaded/converted.
+    """
+    names = [dataset_filter] if dataset_filter else list(DATASET_SEGMENTS.keys())
+    out = []
+    for name in names:
+        if name not in DATASET_SEGMENTS:
+            print(f"  WARNING: '{name}' is not in DATASET_SEGMENTS - skipping")
+            continue
+        if not os.path.exists(get_dataset_paths(name)['events']):
+            print(f"  WARNING: no events.txt for '{name}' - skipping")
+            continue
+        out.append(name)
+    return out
+
+
+def resolve_segments(dataset, segments_arg=None):
+    """Segment dicts for a dataset. segments_arg: None/'all' or 'seg_A,seg_C'."""
+    segs = DATASET_SEGMENTS[dataset]
+    if segments_arg in (None, 'all'):
+        return list(segs)
+    wanted = [s.strip() for s in segments_arg.split(',') if s.strip()]
+    out = []
+    for w in wanted:
+        match = [s for s in segs if s['id'] == w]
+        if not match:
+            print(f"  WARNING: segment '{w}' not found in {dataset} - skipping")
+            continue
+        out.append(match[0])
+    return out
+
+
+def segment_n_frames(seg, frame_duration, requested=None):
+    """
+    Frames to run for a segment.
+
+    A segment defines an interval where omega is quasi-constant; n_frames and
+    frame_duration are hyperparameters. If the segment carries a validated
+    'duration', never run past it -- otherwise the "constant-omega" premise is
+    violated (this is how 0.5 s segments ended up being run for 3.0 s).
+    """
+    n = requested if requested is not None else seg.get('n_frames', 75)
+    dur = seg.get('duration')
+    if dur:
+        n = min(n, int(dur / frame_duration))
+    return max(1, int(n))
+
+
+# ===========================================================================
 # RUN CONFIGURATION (override via CLI args)
 # ===========================================================================
 
@@ -71,11 +154,14 @@ class RunConfig:
     """All parameters for a single evaluation run."""
     def __init__(self, dataset='boxes_rotation', model='thesis_imu',
                  segment=None, t_start=None, frame_duration=None, n_frames=None,
-                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None):
+                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None,
+                 delta_VFG=None, delta_IG=None, delta_GI=None, delta_RF=None,
+                 cmax_lr=None, tag=None):
 
         self.dataset = dataset
-        self.model = model  # 'cook', 'thesis', 'thesis_imu'
+        self.model = model  # 'cook', 'thesis', 'thesis_imu', 'thesis_cmax[_v2]'
         self.distortion_mode = distortion_mode or DISTORTION_MODE
+        self.tag = tag      # free-form suffix for output_dir (used by OAT sweeps)
         
         if segment is None:
             # Fallback: erstes Segment bzw. DATASET_CONFIGS
@@ -106,9 +192,10 @@ class RunConfig:
         self.use_cmax = False       # load raw events + compute per-frame CMax ω
         self.use_cmax_v2 = False    # V2: CMax drives R inside the MP loop
         self.save_iwe = False       # save the final CMax IWE per frame (V1/V2)
-        self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
-                                    # ≳5e-4 diverges. Scales with event count² —
-                                    # lower it for denser streams (see cmax.md).
+        self.save_maps = True       # dump maps_{center,final}.npz for the D1 panel
+        # V2 ascent step. STABLE range ~[1e-5, 1e-4]; >=5e-4 diverges. Scales
+        # with event count^2 - lower it for denser streams (see cmax/cmax.md).
+        self.cmax_lr = 1e-4 if cmax_lr is None else cmax_lr
         if model == 'cook':
             self.params = COOK_PARAMS.copy()
             self.use_thesis = False
@@ -139,14 +226,24 @@ class RunConfig:
             self.use_thesis = True
             self.use_imu = True
         
-        # Override delta_IMU if specified
+        # ---- Parameter overrides -------------------------------------
+        # delta_IMU only applies to models that actually run Cost_IMU.
         if delta_IMU is not None and self.use_imu:
             self.params['delta_IMU'] = delta_IMU
-
-        # Override delta_FR if specified
         if delta_FR is not None:
             self.params['delta_FR'] = delta_FR
-        
+
+        # Spatial / OFCE relaxation weights (no CLI flags before; needed by the
+        # OAT sweep). `_explicit` records which ones were set on purpose so that
+        # output_dir only grows a suffix for non-default runs -> existing result
+        # folder names stay byte-identical (resume-safe).
+        self._explicit = {}
+        for name, val in (('delta_VFG', delta_VFG), ('delta_IG', delta_IG),
+                          ('delta_GI', delta_GI), ('delta_RF', delta_RF)):
+            if val is not None:
+                self.params[name] = val
+                self._explicit[name] = val
+
         # Paths
         self.paths = get_dataset_paths(dataset)
         
@@ -167,7 +264,16 @@ class RunConfig:
     
     @property
     def output_dir(self):
-        """Folder now includes dt."""
+        """
+        Unique folder per configuration.
+
+        Backwards compatible: the base name is unchanged, and the extra
+        suffixes below only appear for NON-default runs, so folders written by
+        earlier versions keep their exact names (and --resume still finds them).
+        The extra parts exist so that OAT sweeps (which vary one parameter at a
+        time) do not overwrite each other -- notably cmax_lr, which was not
+        encoded at all before and made two V2 runs collide.
+        """
         folder_name = (f"{self.segment_id}_t{self.t_start:.3f}"
                     f"_dt{self.frame_duration*1000:.0f}ms"
                     f"_n{self.n_frames}_i{self.n_iters}")
@@ -176,6 +282,15 @@ class RunConfig:
         # Also encode delta_FR to distinguish configs
         folder_name += f"_dFR{self.params.get('delta_FR', 0):.2f}"
         folder_name += f"_{self.distortion_mode}"
+        # Non-default spatial/OFCE weights (empty for every pre-existing run).
+        for name in ('delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF'):
+            if name in self._explicit:
+                folder_name += f"_{name.replace('delta_', 'd')}{self._explicit[name]:.3f}"
+        # cmax_lr matters only for V2 (the only model that uses it).
+        if self.use_cmax_v2:
+            folder_name += f"_lr{self.cmax_lr:.0e}"
+        if self.tag:
+            folder_name += f"_{self.tag}"
         return os.path.join('results', self.dataset, self.model, folder_name)
     
     def to_dict(self):
@@ -650,6 +765,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
 
     rows = []
     for k, (V, t_mid) in enumerate(seq):
+        _t_frame0 = time_module.time()   # wall-clock per frame (runtime study)
         t_lo = rc.t_start + k * rc.frame_duration
         t_hi = t_lo + rc.frame_duration
 
@@ -701,7 +817,21 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
             'imu_wx': omega_imu[0], 'imu_wy': omega_imu[1], 'imu_wz': omega_imu[2],
             'err_deg_s': err, 'dir_err_deg': dir_err, 'beta': beta,
             'ref_source': ref_src,
+            't_frame_s': time_module.time() - _t_frame0,
         })
+
+        # ─── Dump the full map set at the centre / last frame (D1) ───
+        # ~2 MB per run; lets the maps panel (exp 10) be assembled later without
+        # re-running the network.
+        if getattr(rc, 'save_maps', True):
+            which = None
+            if k == rc.n_frames // 2:
+                which = 'center'
+            elif k == rc.n_frames - 1:
+                which = 'final'
+            if which is not None:
+                _save_maps_npz(rc, which, V, net, H, W,
+                               omega_est, omega_ref, t_mid, k)
 
         # ─── Save 3-column frame ─────────────────────────────────────
         if save_frames:
@@ -738,7 +868,22 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         'median_dir_err_deg': float(np.median(dir_all)),
         'mean_beta': float(np.mean(beta_all)),
         'std_beta': float(np.std(beta_all)),
+        # --- added for the report table (D3 needs min/max across frames) ---
+        'min_err_deg_s': float(np.min(err_all)),
+        'max_err_deg_s': float(np.max(err_all)),
+        'std_err_deg_s': float(np.std(err_all)),
+        'p90_err_deg_s': float(np.percentile(err_all, 90)),
+        'median_beta': float(np.median(beta_all)),
+        # error on the LAST frame: drift indicator (does it diverge over time?)
+        'final_err_deg_s': float(err_all[-1]),
+        'n_frames_run': int(len(err_all)),
+        'ref_source': rows[0].get('ref_source', 'unknown'),
     }
+    # Timing (present when the per-frame loop recorded it; see t_frame_s).
+    if 't_frame_s' in rows[0]:
+        t_all = np.array([r['t_frame_s'] for r in rows])
+        summary['mean_frame_time_s'] = float(np.mean(t_all))
+        summary['total_runtime_s'] = float(np.sum(t_all))
 
     with open(os.path.join(rc.output_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)
@@ -1055,6 +1200,30 @@ def _try_load_gt_images(rc: RunConfig):
     return img_list
 
 
+def _save_maps_npz(rc: RunConfig, which, V, net, H, W,
+                   omega_est, omega_ref, t_mid, frame_idx):
+    """
+    Dump the full inferred map set for one frame -> {output_dir}/maps_{which}.npz.
+
+    Written during experiment_tracking so the maps panel (exp 10) can be
+    assembled afterwards without re-running any network. `which` is 'center' or
+    'final'. I is cropped to (H, W) because the Cook network carries an
+    (H+1, W+1) intensity map (extra row/col for the forward differences).
+    """
+    os.makedirs(rc.output_dir, exist_ok=True)
+    I = net.I[:H, :W] if net.I.shape != (H, W) else net.I
+    np.savez_compressed(
+        os.path.join(rc.output_dir, f'maps_{which}.npz'),
+        V=V.astype(np.float32), I=np.asarray(I, np.float32),
+        G=np.asarray(net.G, np.float32), F=np.asarray(net.F, np.float32),
+        R=np.asarray(net.R, np.float64),
+        omega_est=np.asarray(omega_est, np.float64),
+        omega_ref=np.asarray(omega_ref, np.float64),
+        t_mid=float(t_mid), frame_idx=int(frame_idx),
+        dataset=rc.dataset, model=rc.model, segment_id=rc.segment_id,
+    )
+
+
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     """Fixed-size 3-column frame."""
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
@@ -1260,8 +1429,8 @@ def experiment_full_evaluation(dataset_filter=None, model_filter=None, save_fram
     else:
         datasets = DATASET_SEGMENTS
 
-    # Models auswählen
-    models = [model_filter] if model_filter else ['cook', 'thesis', 'thesis_imu']
+    # Models auswählen (includes the CMax variants; see resolve_models)
+    models = resolve_models(model_filter)
 
     all_results = []
 
@@ -1356,10 +1525,9 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
         datasets = list(DATASET_SEGMENTS.keys())
 
     # ─── MODELS ───────────────────────────────────────────────────────
-    if model_filter is None:
-        models = ['cook', 'thesis', 'thesis_imu']
-    else:
-        models = [model_filter]
+    # Grid sweeps stay on the classic 3 by default: the CMax models are ~1.6x
+    # slower and delta_IMU/delta_FR are not their governing knobs (use exp 13).
+    models = resolve_models(model_filter or 'classic')
 
     all_results = []
     run_idx = 0
