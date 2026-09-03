@@ -3,15 +3,20 @@ Synthetic event (DVS) simulation utilities.
 
 Provides:
   - make_synthetic_image : create a test image (checkerboard / gradient / noise)
-  - rotation_flow        : ground-truth optical flow from camera rotation R
+  - rotation_flow        : ground-truth optical flow from camera rotation R,
+                           via the kinematic matrix (F = C_mat·R)
   - compute_V            : temporal intensity derivative V = −F · ∇I
   - DVSSimulator         : wraps a sequence of warped frames into V frames
+
+Not used by the real-data pipeline (evaluation.py); kept as a lightweight
+synthetic playground. Flow projection uses `build_kinematic_matrix`
+(interacting_maps.camera) — the same rotational-flow model as the networks.
 """
 
 import numpy as np
 from scipy.ndimage import map_coordinates
 
-from interacting_maps.camera import compute_calibration, m32
+from interacting_maps.camera import build_kinematic_matrix
 
 
 # ---------------------------------------------------------------------------
@@ -57,29 +62,22 @@ def make_synthetic_image(
 
 def rotation_flow(
     R_vec: np.ndarray,
-    C: np.ndarray,
-    f: float,
+    C_mat: np.ndarray,
 ) -> np.ndarray:
     """
-    Compute the ground-truth optical flow (pixels/frame) produced by
-    camera rotation R_vec (3-D angular velocity vector, rad/frame).
-
-    F_{x,y} = m32(R × C_{x,y})
+    Ground-truth optical flow (pixels/frame) produced by camera rotation R_vec
+    (3-D angular velocity, rad/frame):  F = C_mat · R.
 
     Parameters
     ----------
     R_vec : (3,)
-    C     : (H, W, 3)  calibration map
-    f     : focal length
+    C_mat : (H, W, 2, 3)  kinematic matrix from build_kinematic_matrix
 
     Returns
     -------
     F : (H, W, 2)
     """
-    H, W = C.shape[:2]
-    R_bc = np.broadcast_to(R_vec, (H, W, 3))
-    RxC = np.cross(R_bc, C)       # (H, W, 3)
-    return m32(RxC, C, f)         # (H, W, 2)
+    return np.einsum('hwij,j->hwi', C_mat, R_vec)   # (H, W, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +160,8 @@ class DVSSimulator:
         self.noise_std = noise_std
         self.rng = np.random.default_rng(rng_seed)
 
-        self.C = compute_calibration(H, W, f)
+        # Kinematic matrix for an ideal pinhole (fx=fy=f, principal point centred).
+        self.C_mat = build_kinematic_matrix(H, W, f, f, W / 2.0, H / 2.0)
         self.image = make_synthetic_image(H, W, kind=image_kind)
 
     def frame_from_rotation(self, R_vec: np.ndarray) -> np.ndarray:
@@ -170,7 +169,7 @@ class DVSSimulator:
         Return V for a single rotation R_vec (rad/frame) applied to the
         stored reference image.
         """
-        flow = rotation_flow(R_vec, self.C, self.f)
+        flow = rotation_flow(R_vec, self.C_mat)
         return compute_V(self.image, flow, noise_std=self.noise_std, rng=self.rng)
 
     def warp_image(self, R_vec: np.ndarray) -> np.ndarray:
@@ -179,7 +178,7 @@ class DVSSimulator:
         temporal difference as V.  Provides a more accurate V for large
         rotations (uses bilinear interpolation).
         """
-        flow = rotation_flow(R_vec, self.C, self.f)
+        flow = rotation_flow(R_vec, self.C_mat)
 
         v_coords, u_coords = np.meshgrid(
             np.arange(self.H, dtype=np.float64),

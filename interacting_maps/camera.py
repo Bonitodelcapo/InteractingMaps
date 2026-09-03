@@ -1,3 +1,21 @@
+"""
+Camera geometry for the InteractingMaps pipeline.
+
+Provides:
+  - compute_calibration    : per-pixel unit ray directions C (H,W,3), the
+                             general-calibration map used by the Cook network.
+  - build_kinematic_matrix : the (H,W,2,3) matrix that maps angular velocity ω
+                             to pixel flow (F = C_mat·ω), thesis Eq. 6.37/6.38.
+
+Distortion (build_kinematic_matrix, dist_coeffs)
+  - dist_coeffs=None            → ideal pinhole (events assumed pre-undistorted).
+  - dist_coeffs=[k1,k2,p1,p2,k3]→ "Way 2": the native (distorted) pixel grid is
+    back-projected to true undistorted rays, and (if include_jacobian) the flow
+    is mapped into distorted-pixel space via the Brown–Conrady Jacobian J_D:
+        C_mat = diag(fx,fy) · J_D(x',y') · A(x',y')
+    This matches the distortion-aware warp in cmax/angular_velocity.py.
+"""
+
 import numpy as np
 import cv2
 
