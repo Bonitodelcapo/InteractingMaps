@@ -126,7 +126,11 @@ def load_events_fast(
     # Estimate max rows (events/sec * duration from first scan).
     # Cap raised 5M→30M: long segments (dt=0.05 × 150 frames = 7.5s at
     # ~2 Mev/s ≈ 16 Mev) were silently truncated at 5M, blanking later frames.
-    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=30_000_000, dtype=np.float32)
+    # Raised again 30M→40M for street_sinthetic (~10.4 Mev/s): a 3 s segment
+    # needs ~31 Mev, and at 30M the last 31 of 150 frames came out EMPTY with
+    # no warning. 40M covers 3 s there; costs ~0.64 GB and ~12 s to read.
+    # If a denser sequence is added, check for empty frames before trusting it.
+    chunk = np.loadtxt(events_txt, skiprows=skip, max_rows=40_000_000, dtype=np.float32)
     if chunk.ndim == 1:
         chunk = chunk.reshape(1, -1)
 

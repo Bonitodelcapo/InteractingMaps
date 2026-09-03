@@ -136,7 +136,14 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    ]
+    ],
+    # Synthetic (ECRot, ESIM) — pinhole, clean steady GT. From convert_ecrot.py.
+    # dt=10ms: fast rotation (~100 deg/s) => ~1 deg/frame, avoids intra-frame
+    # motion blur in the reconstruction (20ms gives ~2 deg/frame and blurs).
+    'bycicle_sinthetic': [
+        {'id': 'seg_A', 't_start': 0.001, 'frame_duration': 0.01,
+         'n_frames': 499, 'initial_R': None, 'sensor_size': (180, 240)},
+    ],
 }
 
 # Backward-compatible: single config = first segment per dataset
@@ -144,13 +151,21 @@ DATASET_CONFIGS = {
     name: segs[0] for name, segs in DATASET_SEGMENTS.items()
 }
 
+# Adopted configuration — these are the values every result in the report uses.
+#
+# delta_FR and delta_IMU were changed from the values we started with
+# (0.50 / 0.30) after the parameter sweep: lowering the kinematic weight and
+# raising the anchor weight improved the error on all five sequences
+# independently, most sharply on the synthetic ones (25.6 -> 7.2 deg/s). The
+# sweep in the report varies each parameter from the ORIGINAL values, so the
+# bold row there is 0.50 / 0.30, not the values below.
 THESIS_PARAMS = dict(
     delta_VFG=0.12,    # OFCE, 0.15
     delta_IG=0.10,     # G from I: moderate
     delta_GI=0.05,     # I from G: gentle (Poisson step, needs stability)
     delta_RF=0.05,     # F from R: WEAK (let OFCE build local structure) 0.03
-    delta_FR=0.50,     # R from F: strong (global aggregate, stable)  0.50
-    delta_IMU=0.30     
+    delta_FR=0.10,     # R from F: was 0.50; lower = less magnitude shrinkage
+    delta_IMU=0.50     # anchor weight: was 0.30; stronger is better throughout
 )
 
 COOK_PARAMS = dict(
@@ -158,7 +173,8 @@ COOK_PARAMS = dict(
     delta_IG=0.12,
     delta_GI=0.08,
     delta_RF=0.03,  #0.10
-    delta_FR=0.30,   #0.10,
+    delta_FR=0.10,  # was 0.30; matched to THESIS_PARAMS so the two networks
+                    # differ only in the update scheme, as the report requires
 )
 
 ITERS_PER_FRAME = 75   # Thesis use 50-75; 
@@ -184,6 +200,10 @@ def get_dataset_paths(dataset_name: str, base_dir: str = None):
         'calib': os.path.join(data_dir, 'calib.txt'),
         'imu': os.path.join(data_dir, 'imu.txt'),
         'groundtruth': os.path.join(data_dir, 'groundtruth.txt'),
+        # Exact angular velocity, written by convert_ecrot.py when the bag has a
+        # twist topic (ECRot synthetic). Absent for the ECD sequences, whose
+        # poses must be differenced instead. evaluation.py prefers it when present.
+        'omega_gt': os.path.join(data_dir, 'omega_gt.txt'),
         'images': os.path.join(data_dir, 'images.txt'),
 
     }

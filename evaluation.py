@@ -266,6 +266,11 @@ def get_gyro_for_frame(imu_data, t_lo, t_hi):
 # thesis_imu is always the gyro regardless of this setting.
 SCORE_AGAINST = 'groundtruth'
 
+# Half-width (seconds) of the bracket used to difference Vicon poses into an
+# angular velocity. 0.05 -> a +-50 ms bracket around the frame midpoint.
+# Set to frame_duration/2 to recover the old (noisy) per-frame differencing.
+GT_DIFF_HALFWIDTH = 0.05
+
 
 def load_groundtruth(path: str):
     """Load groundtruth.txt: [t tx ty tz qx qy qz qw] → (N, 8), or None."""
@@ -310,14 +315,50 @@ def gt_omega_body(gt_data, t_lo, t_hi):
     return axis * angle / actual_dt    # rad/s, body frame
 
 
-def get_reference_omega(gt_data, imu_data, t_lo, t_hi):
+def load_omega_gt(path):
+    """
+    Load omega_gt.txt (t wx wy wz) if the dataset provides one. Returns None if
+    absent. Written by convert_ecrot.py: for the ECRot synthetic bags this is
+    the simulator's EXACT angular velocity, taken from the twist topic.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    data = np.loadtxt(path, dtype=np.float64)
+    return data.reshape(1, -1) if data.ndim == 1 else data
+
+
+def omega_gt_at(omega_data, t_lo, t_hi):
+    """Exact reference omega at the midpoint of the frame window (rad/s)."""
+    t_mid = 0.5 * (t_lo + t_hi)
+    i = int(np.argmin(np.abs(omega_data[:, 0] - t_mid)))
+    return omega_data[i, 1:4]
+
+
+def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
     """
     Angular velocity used to SCORE the estimate (independent of model input).
-    Prefers groundtruth.txt (Vicon); falls back to gyro if unavailable.
     Returns (omega_ref, source_str).
+
+    Preference order:
+      1. omega_gt.txt, when the dataset ships one. For the ECRot synthetic bags
+         this is the simulator's exact angular velocity, so it carries no
+         differencing error at all.
+      2. groundtruth.txt poses, differenced. Over a single 20 ms frame window
+         that difference is dominated by pose noise -- the gyro itself scores
+         8-25 deg/s against such a reference -- so we difference over a wider
+         bracket CENTRED on the frame midpoint (GT_DIFF_HALFWIDTH). Even then
+         the differencing costs ~0.8 deg/s, measured against the exact twist on
+         the synthetic sequences.
+      3. the gyro, for datasets with neither.
     """
+    if SCORE_AGAINST == 'groundtruth' and omega_data is not None:
+        return omega_gt_at(omega_data, t_lo, t_hi), 'omega_gt'
     if SCORE_AGAINST == 'groundtruth' and gt_data is not None:
-        return gt_omega_body(gt_data, t_lo, t_hi), 'groundtruth'
+        t_mid = 0.5 * (t_lo + t_hi)
+        return (gt_omega_body(gt_data,
+                              t_mid - GT_DIFF_HALFWIDTH,
+                              t_mid + GT_DIFF_HALFWIDTH),
+                'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
 
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
@@ -382,6 +423,25 @@ def flow_to_rgb(flow):
     mag_norm = mag / (mag.max() + 1e-10)
     hsv = np.stack([angle, np.ones_like(angle), mag_norm], axis=-1)
     return hsv_to_rgb(hsv)
+
+def grad_to_rgb(G, pct=99.0):
+    """
+    Spatial gradient as colour: HUE = direction, VALUE = magnitude.
+
+    Showing only |G| hides the thing the gradient map is for -- which way the
+    intensity is changing -- so an edge and its mirror image look identical.
+    Hue makes direction visible (each orientation its own colour) while
+    brightness still carries magnitude. Magnitude is scaled by a percentile so
+    one hot pixel cannot black out the rest of the frame.
+    """
+    from matplotlib.colors import hsv_to_rgb
+    gx, gy = G[..., 0], G[..., 1]
+    ang = (np.arctan2(gy, gx) + np.pi) / (2 * np.pi)     # direction -> hue
+    mag = np.hypot(gx, gy)
+    hi = np.percentile(mag, pct)
+    val = np.clip(mag / (hi + 1e-12), 0.0, 1.0)
+    return hsv_to_rgb(np.stack([ang, np.ones_like(ang), val], axis=-1))
+
 
 def compute_metrics(omega_est, omega_gt):
     """Compute all metrics for a single frame."""
@@ -526,7 +586,7 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
 # ===========================================================================
 # EXPERIMENT 2: Multi-Frame Tracking
 # ===========================================================================
-def experiment_tracking(rc: RunConfig, save_frames=True):
+def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     """
     Main experiment: ω tracking over time.
     ALWAYS saves:
@@ -555,13 +615,22 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
     fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
     imu_data = load_imu(rc.paths['imu'])            # model INPUT (gyro)
     gt_data  = load_groundtruth(rc.paths['groundtruth'])  # SCORING ref (Vicon)
+    om_data  = load_omega_gt(rc.paths.get('omega_gt'))     # exact omega, if shipped
 
-    ref_src = 'groundtruth' if (SCORE_AGAINST == 'groundtruth' and gt_data is not None) else 'imu'
+    if SCORE_AGAINST == 'groundtruth' and om_data is not None:
+        ref_src = 'omega_gt'
+    elif SCORE_AGAINST == 'groundtruth' and gt_data is not None:
+        ref_src = 'groundtruth'
+    else:
+        ref_src = 'imu'
     if ref_src == 'imu':
         print("  ⚠ Scoring against IMU gyro (no groundtruth.txt). "
               "For thesis_imu this is circular — the model is graded on its own input.")
+    elif ref_src == 'omega_gt':
+        print("  Scoring against omega_gt.txt (exact angular velocity, no differencing).")
     else:
-        print("  Scoring against groundtruth.txt (Vicon, independent of the IMU input).")
+        print(f"  Scoring against groundtruth.txt (Vicon poses differenced over "
+              f"±{GT_DIFF_HALFWIDTH*1000:.0f} ms, independent of the IMU input).")
 
     net = make_network(rc, H, W, fx, fy, cx, cy)
 
@@ -604,7 +673,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
         # Model INPUT: gyro (the sensor being fused). Independent of scoring.
         omega_imu = get_gyro_for_frame(imu_data, t_lo, t_hi)
         # SCORING reference: Vicon (independent), falls back to gyro if absent.
-        omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi)
+        omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi, om_data)
 
         # Raw events for this window (V1 anchor and V2 in-loop both need them).
         win = None
@@ -641,7 +710,9 @@ def experiment_tracking(rc: RunConfig, save_frames=True):
 
         # ─── Save 3-column frame ─────────────────────────────────────
         if save_frames:
-            _save_3col_frame(frames_dir, k, V, net, H, W, gt_images, rc)
+            if frame_stride <= 1 or k % frame_stride == 0 \
+                    or k == rc.n_frames - 1:
+                _save_3col_frame(frames_dir, k, V, net, H, W, gt_images, rc)
 
         if (k + 1) % 10 == 0 or k == 0:
             print(f"  Frame {k+1:4d}/{rc.n_frames} | "
@@ -985,32 +1056,76 @@ def _try_load_gt_images(rc: RunConfig):
 
 
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
-    """Fixed-size 3-column frame."""
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    """
+    One inspection frame per time step: events | I | G (direction-coloured) |
+    flow | ground-truth APS.
+
+    Every quantity the network infers is shown, because the angular-velocity
+    number alone cannot tell you whether the interpretation behind it is sound.
+    G is coloured by direction rather than shown as magnitude only -- see
+    grad_to_rgb.
+    """
+    fig, axes = plt.subplots(1, 5, figsize=(19, 4))
 
     axes[0].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
     axes[0].set_title('Events (V)', fontsize=10)
     axes[0].axis('off')
 
     I_disp = net.I if net.I.shape == (H, W) else net.I[:H, :W]
-    axes[1].imshow(normalise_robust(I_disp), cmap='gray', vmin=0, vmax=1)
-    axes[1].set_title('Estimated I', fontsize=10)
+    # Display range is carried across frames with a slow EMA rather than
+    # recomputed per frame. Per-frame percentile normalisation removes flicker
+    # but also HIDES loss of contrast: when I collapses (which it does
+    # transiently at high rotation speed) a near-flat map gets stretched to full
+    # black-to-white, so amplified noise reads as texture. A slowly-adapting
+    # range keeps the video steady while letting a genuine collapse show up as
+    # what it is -- a washed-out frame. The measured contrast is printed in the
+    # title so it can be read off rather than inferred from appearance.
+    lo, hi = np.percentile(I_disp, [1.0, 99.0])
+    if hi - lo < 1e-9:
+        lo, hi = lo - 0.5, hi + 0.5
+    prev = getattr(rc, '_I_disp_range', None)
+    if prev is None or k == 0:
+        rng = [lo, hi]
+    else:
+        a = 0.05                      # slow: ~20 frames to follow a real change
+        rng = [prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1])]
+    rc._I_disp_range = rng
+    axes[1].imshow(I_disp, cmap='gray', vmin=rng[0], vmax=rng[1])
+    axes[1].set_title(f'Estimated I   (std {I_disp.std():.3f})', fontsize=10)
     axes[1].axis('off')
+
+    G = net.G
+    axes[2].imshow(grad_to_rgb(G))
+    axes[2].set_title(r'Gradient G   hue = direction'
+                      f'   (max |G| {np.abs(G).max():.2f})', fontsize=10)
+    axes[2].axis('off')
+
+    axes[3].imshow(flow_to_rgb(net.F))
+    axes[3].set_title(r'Flow F   hue = direction'
+                      f'   (|w| {np.linalg.norm(net.R)/rc.frame_duration:.2f} rad/s)',
+                      fontsize=10)
+    axes[3].axis('off')
 
     if gt_images is not None and len(gt_images) > 0:
         t_frame = rc.t_start + k * rc.frame_duration + rc.frame_duration / 2
         closest = min(gt_images, key=lambda x: abs(x[0] - t_frame))
         gt_img = plt.imread(closest[1])
-        axes[2].imshow(gt_img, cmap='gray')
-        axes[2].set_title('GT Image (APS)', fontsize=10)
+        axes[4].imshow(gt_img, cmap='gray')
+        axes[4].set_title(f'GT Image (APS)  dt {1000*abs(closest[0]-t_frame):.0f} ms',
+                          fontsize=10)
     else:
-        axes[2].text(0.5, 0.5, 'No GT', ha='center', va='center',
-                     fontsize=14, transform=axes[2].transAxes)
-        axes[2].set_facecolor('#f0f0f0')
-        axes[2].set_title('GT (N/A)', fontsize=10)
-    axes[2].axis('off')
+        axes[4].text(0.5, 0.5, 'No GT', ha='center', va='center',
+                     fontsize=14, transform=axes[4].transAxes)
+        axes[4].set_facecolor('#f0f0f0')
+        axes[4].set_title('GT (N/A)', fontsize=10)
+    axes[4].axis('off')
 
-    plt.suptitle(f'Frame {k:04d}', fontsize=10)
+    plt.suptitle(f'Frame {k:04d}    t = {rc.t_start + k*rc.frame_duration:.3f} s'
+                 f'    {rc.model}   dFR={rc.params["delta_FR"]:.2f}'
+                 + (f"  dAnchor={rc.params['delta_IMU']:.2f}"
+                    if getattr(rc, 'use_imu', False) else '')
+                 + f'   dt={1000*rc.frame_duration:.0f} ms  {rc.distortion_mode}',
+                 fontsize=10)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f'frame_{k:04d}.png'), dpi=100)
     plt.close(fig)
@@ -1190,7 +1305,8 @@ def experiment_full_evaluation(dataset_filter=None, model_filter=None, save_fram
         datasets = DATASET_SEGMENTS
 
     # Models auswählen
-    models = [model_filter] if model_filter else ['cook', 'thesis', 'thesis_imu']
+    models = ([model_filter] if model_filter
+              else ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2'])
 
     all_results = []
 
@@ -1274,7 +1390,7 @@ def experiment_parameter_grid(dataset_filter=None, model_filter=None,
         'frame_duration': [0.010, 0.020, 0.050],
         'n_frames':  [25, 150],       # short-track accuracy + long-track drift/reversal
         'n_iters':   [75],
-        'delta_FR':  [0.10, 0.20, 0.50],
+        'delta_FR':  [0.10, 0.20, 0.50],    # 0.9 add 
         'delta_IMU': [0.10, 0.20, 0.50],
     }
 
