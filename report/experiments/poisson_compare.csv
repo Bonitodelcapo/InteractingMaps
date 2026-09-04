@@ -1,0 +1,7 @@
+sequence,segment,model,dt_ms,n_frames,poisson,delta_VFG,delta_IG,delta_GI,delta_RF,delta_FR,delta_IMU,err,median,dir,beta,low_freq,contrast,secs
+poster_rotation,seg_C,thesis_cmax,20,50,iterative,0.12,0.1,0.05,0.05,0.1,0.5,10.81,9.38,7.43,0.86,0.0405,0.1231,226
+bycicle_sinthetic,seg_A,thesis_cmax,20,50,iterative,0.12,0.1,0.05,0.05,0.1,0.5,6.75,6.24,1.85,1.095,0.0187,0.4591,139
+poster_rotation,seg_C,thesis_cmax,20,50,fft,0.12,0.1,0.05,0.05,0.1,0.5,10.82,9.39,7.45,0.86,0.3334,0.7,138
+bycicle_sinthetic,seg_A,thesis_cmax,20,50,fft,0.12,0.1,0.05,0.05,0.1,0.5,6.87,6.4,1.86,1.097,0.5111,3.0492,172
+poster_rotation,seg_C,thesis_cmax,20,50,dct,0.12,0.1,0.05,0.05,0.1,0.5,10.83,9.39,7.45,0.86,0.3184,2.0616,345
+bycicle_sinthetic,seg_A,thesis_cmax,20,50,dct,0.12,0.1,0.05,0.05,0.1,0.5,6.85,6.39,1.86,1.097,0.3464,2.9317,151

@@ -103,22 +103,113 @@ class Cost_OFCE(Cost):
         self.q['G'].add_gradient(grad_G * self.delta_VFG)
 
 
+def solve_poisson_exact(G, mode='dct'):
+    """I* = argmin_I ‖∇I - G‖², in closed form (Thesis Eq. 6.64-6.65).
+
+    The exact counterpart of the Richardson step in Eq. 6.61: same objective,
+    same forward differences, but solved at every spatial frequency at once
+    instead of one step at a time. Returns a zero-mean I* -- the additive
+    constant is not determined by G.
+
+    mode : 'fft' periodic (the thesis' transform), 'dct' Neumann (reflecting),
+        which matches the zero-gradient border convention used here and has no
+        wrap-around seam.
+
+    Also usable as a read-out: given a G produced by any variant of the
+    network, this returns the intensity that G actually implies.
+    """
+    c = Cost_Spatial({}, 0.0, 0.0, poisson=mode)
+    H, W = G.shape[:2]
+    I = c._solve_exact(np.asarray(G, dtype=np.float64), H, W)
+    return I - I.mean()
+
+
 class Cost_Spatial(Cost):
     """
     Spatial Gradient Relation: G = ∇I  (Thesis Eq. 6.56-6.65)
 
     LINEAR relation → BLEND updates (Eq. 6.141):
         G: blend toward ∇I
-        I: iterative PDE step (Eq. 6.61)
+        I: either the iterative PDE step (Eq. 6.61) or the exact
+           frequency-domain solution (Eq. 6.64-6.65), see `poisson`.
 
     Convention:
         G[..., 0] = dI/dx  (horizontal, along columns)
         G[..., 1] = dI/dy  (vertical, along rows)
+
+    poisson : which of the thesis' two I-updates to use
+        'iterative' — Eq. 6.61. One Richardson step on ΔI = div G. Its
+            convergence factor per spatial frequency is (1 - delta_GI·|k|²),
+            so high frequencies settle within a few iterations while low ones
+            barely move: at delta_GI=0.05 and 75 iterations everything below
+            |k|² ≈ 0.27 is effectively frozen and I stays an edge map.
+        'fft' — Eq. 6.64-6.65. Solves the same least-squares problem
+            min_I ‖∇I - G‖² exactly in the frequency domain, in closed form,
+            so every frequency is recovered at once. Assumes a periodic grid.
+        'dct' — same exact solve under Neumann (reflecting) boundaries, which
+            match the zero-gradient convention used at the image border above
+            and avoid the wrap-around seam the periodic transform introduces.
+
+    For the exact solvers delta_GI keeps its meaning as a blend rate:
+    I ← (1-delta_GI)·I + delta_GI·I*, so delta_GI=1 adopts the solution
+    outright and smaller values ease into it. The mean of I is a free
+    parameter of the Poisson problem (the constant of integration, and part of
+    the same gauge freedom as the β scale ambiguity), so I* is re-centred on
+    the current mean rather than allowed to jump.
     """
-    def __init__(self, quantities_dict, delta_IG, delta_GI):
+    def __init__(self, quantities_dict, delta_IG, delta_GI, poisson='iterative'):
         super().__init__(quantities_dict)
         self.delta_IG = delta_IG
         self.delta_GI = delta_GI
+        if poisson not in ('iterative', 'fft', 'dct'):
+            raise ValueError(f"poisson must be iterative|fft|dct, got {poisson!r}")
+        self.poisson = poisson
+        self._denom = None          # cached spectral denominator
+        self._mult = None           # cached conj(D) multipliers (fft only)
+
+    # ---------------------------------------------------------------- exact
+    def _spectra(self, H, W):
+        """Eigenvalues of ∇ᵀ∇ for the forward-difference operator used above.
+
+        The same finite differences the iterative update descends, so the two
+        solvers minimise exactly the same cost -- they differ only in whether
+        they take one step or jump to the minimum.
+        """
+        if self._denom is not None and self._denom.shape == (H, W):
+            return
+        if self.poisson == 'fft':
+            # forward difference has DFT multiplier D = exp(2πi k/N) - 1
+            dx = np.exp(2j * np.pi * np.fft.fftfreq(W)[None, :]) - 1.0
+            dy = np.exp(2j * np.pi * np.fft.fftfreq(H)[:, None]) - 1.0
+            self._mult = (np.conj(dx), np.conj(dy))
+            denom = (np.abs(dx) ** 2 + np.abs(dy) ** 2).astype(np.float64)
+        else:                                   # 'dct' — Neumann boundaries
+            denom = ((2.0 * np.cos(np.pi * np.arange(W) / W) - 2.0)[None, :]
+                     + (2.0 * np.cos(np.pi * np.arange(H) / H) - 2.0)[:, None])
+            denom = -denom                      # -Δ, to match ∇ᵀ∇ above
+        denom[0, 0] = 1.0                       # DC is the gauge; excluded
+        self._denom = denom
+
+    def _solve_exact(self, g, H, W):
+        """I* = argmin ‖∇I - G‖², in closed form (Thesis Eq. 6.64-6.65)."""
+        self._spectra(H, W)
+        gx, gy = g[..., 0], g[..., 1]
+        if self.poisson == 'fft':
+            cdx, cdy = self._mult
+            rhs = cdx * np.fft.fft2(gx) + cdy * np.fft.fft2(gy)
+            rhs[0, 0] = 0.0
+            return np.real(np.fft.ifft2(rhs / self._denom))
+        # 'dct': build div G with the adjoint of the forward difference, then
+        # invert -Δ under Neumann boundaries with the DCT-II / DCT-III pair.
+        from scipy.fft import dctn, idctn
+        div = np.zeros((H, W))
+        div[:, 1:] += gx[:, 1:] - gx[:, :-1]
+        div[:, 0] += gx[:, 0]
+        div[1:, :] += gy[1:, :] - gy[:-1, :]
+        div[0, :] += gy[0, :]
+        c = dctn(-div, type=2, norm='ortho')
+        c[0, 0] = 0.0
+        return idctn(c / self._denom, type=2, norm='ortho')
 
     def compute_and_send_gradients(self):
         i_map = self.q['I'].value   # (H, W)
@@ -137,11 +228,19 @@ class Cost_Spatial(Cost):
         # G: blend toward ∇I (Eq. 6.57)
         self.q['G'].add_gradient(error * self.delta_IG)
 
-        # I: negative divergence (Eq. 6.61)
-        grad_I_update = np.zeros_like(i_map)
-        grad_I_update += error[:, :, 0] + error[:, :, 1]
-        grad_I_update[:, 1:] -= error[:, :-1, 0]
-        grad_I_update[1:, :] -= error[:-1, :, 1]
+        if self.poisson == 'iterative':
+            # I: negative divergence (Eq. 6.61)
+            grad_I_update = np.zeros_like(i_map)
+            grad_I_update += error[:, :, 0] + error[:, :, 1]
+            grad_I_update[:, 1:] -= error[:, :-1, 0]
+            grad_I_update[1:, :] -= error[:-1, :, 1]
+        else:
+            # I: exact solve (Eq. 6.64-6.65), then blend at rate delta_GI.
+            # Quantity.update subtracts, so send (I - I*) to move I toward I*.
+            H, W = i_map.shape
+            i_star = self._solve_exact(g, H, W)
+            i_star += i_map.mean() - i_star.mean()     # keep the current gauge
+            grad_I_update = i_map - i_star
 
         self.q['I'].add_gradient(grad_I_update * self.delta_GI)
 
@@ -283,7 +382,8 @@ class InteractingMapsThesis:
     def __init__(self, H, W, fx, fy, cx, cy, frame_duration=0.005,
                  delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
                  delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3,
-                 dist_coeffs=None, include_jacobian=True):
+                 dist_coeffs=None, include_jacobian=True,
+                 poisson='iterative'):
 
         self.H = H
         self.W = W
@@ -314,7 +414,7 @@ class InteractingMapsThesis:
         self.cost_kin = Cost_Kinematics(q_dict, delta_RF, delta_FR, self._C_mat)
         self.costs = [
             Cost_OFCE(q_dict, delta_VFG, max_grad=5.0),
-            Cost_Spatial(q_dict, delta_IG, delta_GI),
+            Cost_Spatial(q_dict, delta_IG, delta_GI, poisson=poisson),
             self.cost_kin,
         ]
         self.cost_imu = Cost_IMU(q_dict, delta_IMU)

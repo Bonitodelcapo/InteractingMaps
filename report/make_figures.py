@@ -79,7 +79,8 @@ def _save(fig, name, **kw):
     print(f'  wrote {name}.pdf / .png')
 
 
-def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75):
+def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
+             poisson='iterative', deltas=None):
     """Locate the results/ directory matching this configuration exactly.
 
     Matching on the step sizes ALONE is not enough. results/ accumulates runs
@@ -89,6 +90,11 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75):
     sorted() can return one of them first (e.g. 'i100' sorts before 'i75').
     Every field that changes the result is therefore checked, and an ambiguous
     match is reported rather than silently resolved.
+
+    `poisson` and `deltas` extend that guard to the parameters added for the
+    solver comparison: a run differing only in the I-update or in one of the
+    remaining relaxation rates must not be picked up as if it were this one.
+    Older runs carry no 'poisson' key and are treated as 'iterative'.
     """
     hits = []
     for d in sorted(glob.glob(f'results/{ds}/{model}/{sid}_t{t0}_dt20ms_n150_*')):
@@ -104,6 +110,11 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75):
         if abs(pr['delta_FR'] - d_fr) > 1e-9:
             continue
         if d_anchor is not None and abs(pr.get('delta_IMU', -1) - d_anchor) > 1e-9:
+            continue
+        if cfg.get('poisson', 'iterative') != poisson:
+            continue
+        if any(abs(pr.get(k, float('nan')) - v) > 1e-9
+               for k, v in (deltas or {}).items()):
             continue
         hits.append(d)
     if len(hits) > 1:

@@ -6,6 +6,10 @@ Run from the repository root:
     python report/run_experiments.py --what window      # dt / n_frames choice
     python report/run_experiments.py --what main        # Table III, 5 models
     python report/run_experiments.py --what converge    # per-iteration figure data
+    python report/run_experiments.py --what baseline    # CMax / gyro alone, no network
+    python report/run_experiments.py --what sweep \
+        --vary 'delta_GI=0.05,0.5,1.0;poisson=iterative,fft,dct' \
+        --base 'delta_FR=0.10,delta_IMU=0.50' --mode coord
 
 Every run uses the reported segments (SEGMENTS below, = Table II) and carries
 lens distortion in the C matrix (distortion_mode='C_full'). Nothing is looked up
@@ -26,6 +30,13 @@ import argparse
 import traceback
 
 import numpy as np
+
+# evaluation.py prints the thesis' symbols; a cp1252 console cannot encode them
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -49,6 +60,57 @@ def _cfg(E, ds, sid, t0, model, dt, nf, **kw):
            'initial_R': None, 'sensor_size': (180, 240)}
     return E.RunConfig(dataset=ds, model=model, segment=seg, n_frames=nf,
                        distortion_mode='C_full', **kw)
+
+
+# ------------------------------------------------------------- sweep plumbing
+#: every relaxation rate the thesis network exposes, plus the anchor weight.
+#: delta_IMU is the anchor (gyro for thesis_imu, CMax for thesis_cmax).
+ALL_DELTAS = ['delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF', 'delta_FR',
+              'delta_IMU']
+
+
+def _parse_vary(spec):
+    """'delta_GI=0.05,0.2;poisson=fft,dct' -> [('delta_GI',[0.05,0.2]), ...]"""
+    axes = []
+    for part in spec.split(';'):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, vals = part.partition('=')
+        name = name.strip()
+        if name == 'poisson':
+            axes.append((name, [v.strip() for v in vals.split(',')]))
+        elif name in ALL_DELTAS:
+            axes.append((name, [float(v) for v in vals.split(',')]))
+        else:
+            raise SystemExit(f"unknown sweep axis {name!r}; "
+                             f"choose from {ALL_DELTAS + ['poisson']}")
+    return axes
+
+
+def _points(axes, mode, base):
+    """The configurations to run: full factorial, or one axis at a time."""
+    if mode == 'grid':
+        pts, stack = [], [{}]
+        for name, vals in axes:
+            stack = [dict(p, **{name: v}) for p in stack for v in vals]
+        pts = stack
+    else:                                    # 'coord': vary one, hold the rest
+        pts, seen = [], set()
+        for name, vals in axes:
+            for v in vals:
+                p = {name: v}
+                key = tuple(sorted({**base, **p}.items()))
+                if key not in seen:
+                    seen.add(key)
+                    pts.append(p)
+    return [dict(base, **p) for p in pts]
+
+
+def _split(point):
+    """Separate the network kwargs RunConfig takes separately."""
+    p = dict(point)
+    return p.pop('poisson', None), p
 
 
 def _run(E, rc, save_frames, stride):
@@ -273,8 +335,214 @@ def cmd_converge(E, args):
         print(f"-> fig_converge_{lab}.pdf / .png")
 
 
+# -------------------------------------------------------------- generic sweep
+def cmd_sweep(E, args):
+    """Sweep any of the relaxation rates, and the choice of Poisson solver.
+
+    --mode coord varies one axis at a time around --base (cheap: sum of the
+    axis lengths); --mode grid takes the full factorial (the product). Every
+    run records the omega error AND two descriptors of the reconstruction, so
+    the two metrics can be compared rather than assumed to agree.
+    """
+    axes = _parse_vary(args.vary)
+    base = {}
+    for part in filter(None, (s.strip() for s in args.base.split(','))):
+        k, _, v = part.partition('=')
+        base[k.strip()] = v.strip() if k.strip() == 'poisson' else float(v)
+    pts = _points(axes, args.mode, base)
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    nf = int(round(args.duration / args.dt))
+
+    path = os.path.join(OUTDIR, args.out or f'sweep_{args.mode}.csv')
+    f = open(path, 'w', newline='', encoding='utf-8')
+    wr = csv.writer(f)
+    cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'poisson'] \
+        + ALL_DELTAS + ['err', 'median', 'dir', 'beta', 'low_freq', 'contrast', 'secs']
+    wr.writerow(cols)
+    print(f"{len(pts)} configs x {len(seqs)} sequences = {len(pts)*len(seqs)} runs "
+          f"| dt={args.dt*1000:.0f}ms, {nf} frames, C_full, {args.model}", flush=True)
+    for i, pt in enumerate(pts):
+        print(f"\n### [{i+1}/{len(pts)}] " +
+              ' '.join(f'{k}={v}' for k, v in sorted(pt.items())), flush=True)
+        for ds, sid, t0, lab in seqs:
+            poisson, deltas = _split(pt)
+            try:
+                rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
+                          poisson=poisson, deltas=deltas)
+                s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
+                wr.writerow([ds, sid, args.model, int(args.dt*1000), nf,
+                             rc.poisson]
+                            + [rc.params.get(d, '') for d in ALL_DELTAS]
+                            + [round(s['mean_err_deg_s'], 2),
+                               round(s['median_err_deg_s'], 2),
+                               round(s['mean_dir_err_deg'], 2),
+                               round(s['mean_beta'], 3),
+                               round(s.get('low_freq_share', float('nan')), 4),
+                               round(s.get('contrast', float('nan')), 4),
+                               round(secs)])
+                f.flush()
+                print(f"    {lab:<9} err={s['mean_err_deg_s']:7.2f}  "
+                      f"beta={s['mean_beta']:5.3f}  "
+                      f"lowf={s.get('low_freq_share', float('nan')):.3f}  "
+                      f"contrast={s.get('contrast', float('nan')):.3f}", flush=True)
+            except Exception:
+                print(f"    {lab:<9} FAIL"); traceback.print_exc()
+    f.close()
+    print(f"\n-> {path}")
+
+
+# ---------------------------------------------- Poisson solver: loop vs readout
+def cmd_poisson(E, args):
+    """Where should the exact solve of Eq. 6.64-6.65 be applied?
+
+    Two places are possible, and they behave very differently:
+
+    in-loop  — Cost_Spatial solves exactly on every iteration (poisson=fft/dct).
+        I then feeds back into G through the delta_IG blend, and because the
+        exact solve amplifies each spatial frequency of G by 1/|k|², any
+        low-frequency error in G is integrated into large spurious blobs which
+        then corrupt G in turn.
+    read-out — the network runs with the iterative update (Eq. 6.61) and the
+        exact solve is applied once, at the end, to the G it produced. The
+        feedback path is absent, so the same closed-form solution recovers the
+        low frequencies without the network chasing them.
+
+    Runs both for each sequence and writes a comparison panel, so the choice is
+    made on the images rather than on the argument above.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    nf = int(round(args.duration / args.dt))
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    base = {'delta_FR': 0.10, 'delta_IMU': 0.50}
+    for part in filter(None, (s.strip() for s in args.base.split(','))):
+        k, _, v = part.partition('=')
+        base[k.strip()] = float(v)
+
+    for ds, sid, t0, lab in seqs:
+        maps = {}
+        for mode in args.modes.split(','):
+            rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
+                      poisson=mode, deltas=dict(base))
+            npz = os.path.join(rc.output_dir, 'maps_final.npz')
+            if not os.path.exists(npz):
+                print(f"  running {lab}/{mode} ...", flush=True)
+                _run(E, rc, not args.no_frames, args.frame_stride)
+            maps[mode] = np.load(npz)
+
+        panels = [('APS reference', _aps(E, ds, t0 + nf * args.dt), None)]
+        for m in maps:
+            panels.append((f'{m} in-loop' if m != 'iterative'
+                           else 'iterative (Eq. 6.61)', maps[m]['I'], None))
+        for m in ('fft', 'dct'):
+            panels.append((f'{m} read-out',
+                           solve_poisson_exact(maps['iterative']['G'], m), None))
+
+        print(f"\n{lab}: {'low_freq':>10} {'contrast':>10}")
+        fig, ax = plt.subplots(1, len(panels), figsize=(2.4 * len(panels), 2.6))
+        for a, (ttl, img, _) in zip(ax, panels):
+            if img is None:
+                a.axis('off'); continue
+            st = E._intensity_stats(img)
+            print(f"  {ttl:<22} {st['low_freq_share']:10.3f} {st['contrast']:10.3f}")
+            lo, hi = np.percentile(img, [1, 99])
+            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
+            a.set_title(ttl, fontsize=8)
+            a.set_xticks([]); a.set_yticks([])
+        fig.suptitle(f'{lab}: the same G, five ways of turning it into I',
+                     fontsize=10)
+        fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.9))
+        out = os.path.join(OUTDIR, f'poisson_{lab}{args.tag}.png')
+        fig.savefig(out, dpi=130, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  -> {out}")
+
+
+def _aps(E, ds, t):
+    """The APS frame nearest time t, for visual reference."""
+    import matplotlib.pyplot as plt
+    p = E.get_dataset_paths(ds)
+    try:
+        rows = [l.split() for l in open(p['images']) if l.strip()]
+        at = np.array([float(r[0]) for r in rows])
+        j = int(np.argmin(np.abs(at - t)))
+        img = plt.imread(os.path.join(p['data_dir'], rows[j][1].replace('\\', '/')))
+        return img.mean(-1) if img.ndim == 3 else img
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------- front-end baselines
+def cmd_baseline(E, args):
+    """What do the two anchor signals score on their own, without the network?
+
+    thesis_cmax feeds the network a per-frame CMax omega and thesis_imu feeds it
+    the gyroscope. Neither table means anything until we know what those inputs
+    score by themselves: if the network cannot beat its own anchor, the maps are
+    not contributing to the omega estimate. Scored exactly as in
+    experiment_tracking -- same undistorted events into CMax, same warm start
+    from the previous frame, same reference omega, same compute_metrics.
+    """
+    from data_loader import load_events_fast, undistort_events, CameraCalibration
+    from cmax import CMaxAngularVelocity
+
+    nf = int(round(args.duration / args.dt))
+    path = os.path.join(OUTDIR, f'baseline_dt{int(args.dt*1000)}ms.csv')
+    f = open(path, 'w', newline='', encoding='utf-8')
+    wr = csv.writer(f)
+    wr.writerow(['sequence', 'segment', 'source', 'dt_ms', 'n_frames',
+                 'err', 'median', 'dir', 'beta', 'secs'])
+    print(f"{'sequence':<10} {'source':<6} {'err':>7} {'med':>7} {'dir':>6} "
+          f"{'beta':>6}", flush=True)
+    print('-' * 46, flush=True)
+    for ds, sid, t0, lab in SEGMENTS:
+        p = E.get_dataset_paths(ds)
+        calib = CameraCalibration(p['calib'])
+        gt = E.load_groundtruth(p['groundtruth'])
+        imu = E.load_imu(p['imu'])
+        om = E.load_omega_gt(p.get('omega_gt'))
+        ev = undistort_events(
+            load_events_fast(p['events'], t_start=t0,
+                             duration=nf * args.dt + 0.1), calib)
+        est = CMaxAngularVelocity(180, 240, calib.fx, calib.fy,
+                                  calib.cx, calib.cy, use_polarity=True)
+        acc = {'cmax': [], 'gyro': []}
+        w_prev = np.zeros(3)
+        t = time.time()
+        for k in range(nf):
+            t_lo, t_hi = t0 + k * args.dt, t0 + (k + 1) * args.dt
+            w_ref, _ = E.get_reference_omega(gt, imu, t_lo, t_hi, om)
+            win = ev[(ev[:, 0] >= t_lo) & (ev[:, 0] < t_hi)]
+            if len(win) > 10:
+                w_prev = est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
+                                      omega_init=w_prev)
+            acc['cmax'].append(E.compute_metrics(w_prev, w_ref))
+            acc['gyro'].append(E.compute_metrics(
+                E.get_gyro_for_frame(imu, t_lo, t_hi), w_ref))
+        secs = time.time() - t
+        for src in ('cmax', 'gyro'):
+            a = np.array(acc[src])                      # (n, 3): err, dir, beta
+            wr.writerow([ds, sid, src, int(args.dt * 1000), nf,
+                         round(a[:, 0].mean(), 2), round(np.median(a[:, 0]), 2),
+                         round(a[:, 1].mean(), 2), round(a[:, 2].mean(), 3),
+                         round(secs)])
+            print(f"{lab:<10} {src:<6} {a[:, 0].mean():7.2f} "
+                  f"{np.median(a[:, 0]):7.2f} {a[:, 1].mean():6.2f} "
+                  f"{a[:, 2].mean():6.3f}", flush=True)
+        f.flush()
+    f.close()
+    print(f"\n-> {path}")
+    print('gyro on the synthetic sequences is meaningless (ESIM writes no IMU).')
+
+
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
-            'converge': cmd_converge}
+            'converge': cmd_converge, 'baseline': cmd_baseline,
+            'sweep': cmd_sweep, 'poisson': cmd_poisson}
 
 
 def main():
@@ -295,7 +563,17 @@ def main():
     ap.add_argument('--checkpoints', default='1,3,10,25,50,75',
                     help='converge: iteration checkpoints to show')
     ap.add_argument('--sequences', default='poster,bicycle',
-                    help='converge: which sequences (labels from SEGMENTS)')
+                    help='converge/sweep: which sequences (labels from SEGMENTS)')
+    ap.add_argument('--vary', default='',
+                    help="sweep axes, e.g. 'delta_GI=0.05,0.2;poisson=fft,dct'")
+    ap.add_argument('--base', default='',
+                    help="sweep: held-fixed values, e.g. 'delta_FR=0.10,delta_IMU=0.50'")
+    ap.add_argument('--mode', default='coord', choices=['coord', 'grid'],
+                    help='sweep: one axis at a time, or the full factorial')
+    ap.add_argument('--out', default='', help='sweep: output csv name')
+    ap.add_argument('--modes', default='iterative,fft,dct',
+                    help='poisson: which in-loop solvers to include')
+    ap.add_argument('--tag', default='', help='poisson: suffix for the figure name')
     args = ap.parse_args()
     sys.argv = [sys.argv[0]]              # evaluation.py parses argv
     import evaluation as E

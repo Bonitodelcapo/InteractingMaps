@@ -196,6 +196,16 @@ ITERS_PER_FRAME = 75   # Thesis use 50-75;
 #   'C_full'           : raw events; distortion-aware coords + Jacobian in C  (best)
 DISTORTION_MODE = 'C_full'
 
+# Which of the thesis' two intensity updates recovers I from G:
+#   'iterative' : Eq. 6.61, one Richardson step per iteration. Converges as
+#                 (1 - delta_GI*|k|^2) per frequency, so at delta_GI=0.05 and
+#                 75 iterations the low frequencies never form and I is an
+#                 edge map.
+#   'fft'       : Eq. 6.64-6.65, the exact frequency-domain solution. Periodic.
+#   'dct'       : the same exact solve under Neumann boundaries (no wrap seam).
+# Applies to the thesis network only; Cook's variant has its own I update.
+POISSON_MODE = 'iterative'
+
 # ---------------------------------------------------------------------------
 # Helper: resolve paths for a dataset
 # ---------------------------------------------------------------------------

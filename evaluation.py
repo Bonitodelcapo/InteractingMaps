@@ -56,7 +56,8 @@ import json
 import time as time_module
 
 from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
-                    ITERS_PER_FRAME, DISTORTION_MODE, get_dataset_paths, get_initial_R_from_imu)
+                    ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
+                    get_dataset_paths, get_initial_R_from_imu)
 from best_config import best_params
 from data_loader import EventFrameSequence
 from interacting_maps.network import InteractingMaps
@@ -71,11 +72,16 @@ class RunConfig:
     """All parameters for a single evaluation run."""
     def __init__(self, dataset='boxes_rotation', model='thesis_imu',
                  segment=None, t_start=None, frame_duration=None, n_frames=None,
-                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None):
+                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None,
+                 poisson=None, deltas=None):
 
         self.dataset = dataset
         self.model = model  # 'cook', 'thesis', 'thesis_imu'
         self.distortion_mode = distortion_mode or DISTORTION_MODE
+        # Which of the thesis' two I-updates to use: 'iterative' (Eq. 6.61) or
+        # the exact frequency-domain solve, 'fft'/'dct' (Eq. 6.64-6.65).
+        # Thesis network only; Cook's variant has its own intensity update.
+        self.poisson = poisson or POISSON_MODE
         
         if segment is None:
             # Fallback: erstes Segment bzw. DATASET_CONFIGS
@@ -146,6 +152,15 @@ class RunConfig:
         # Override delta_FR if specified
         if delta_FR is not None:
             self.params['delta_FR'] = delta_FR
+
+        # Generic override for any relaxation rate, so a sweep can vary the
+        # deltas the two named arguments above do not cover. Unknown keys are
+        # rejected here rather than surfacing as a TypeError from the network.
+        for k, v in (deltas or {}).items():
+            if k not in self.params:
+                raise ValueError(f"{model!r} has no parameter {k!r} "
+                                 f"(has: {sorted(self.params)})")
+            self.params[k] = v
         
         # Paths
         self.paths = get_dataset_paths(dataset)
@@ -176,6 +191,17 @@ class RunConfig:
         # Also encode delta_FR to distinguish configs
         folder_name += f"_dFR{self.params.get('delta_FR', 0):.2f}"
         folder_name += f"_{self.distortion_mode}"
+        # Any OTHER relaxation rate that deviates from this model's defaults,
+        # so a sweep over the remaining deltas cannot overwrite a run that
+        # differs only in a parameter the name above does not carry.
+        base = COOK_PARAMS if self.model == 'cook' else THESIS_PARAMS
+        extra = [f"{k.replace('delta_', '')}{v:g}"
+                 for k, v in sorted(self.params.items())
+                 if k not in ('delta_FR', 'delta_IMU') and base.get(k) != v]
+        if extra:
+            folder_name += '_' + '-'.join(extra)
+        if self.use_thesis and self.poisson != 'iterative':
+            folder_name += f"_{self.poisson}"
         return os.path.join('results', self.dataset, self.model, folder_name)
     
     def to_dict(self):
@@ -187,6 +213,7 @@ class RunConfig:
             'frame_duration': self.frame_duration,
             'n_frames': self.n_frames,
             'distortion_mode': self.distortion_mode,
+            'poisson': self.poisson,
             'n_iters': self.n_iters,
             'duration_s': self.duration_s,
             'sensor_size': list(self.sensor_size),
@@ -376,6 +403,24 @@ def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
                 'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
 
+def _intensity_stats(I, radius=10):
+    """Two numbers that separate a photograph from an edge map.
+
+    low_freq_share : fraction of |FFT(I)| inside a disc of `radius` cycles.
+        The iterative Poisson update (Eq. 6.61) cannot build these modes, so
+        an edge map scores near zero while a real intensity image does not.
+    contrast       : std of I, the quantity the beta scale ambiguity acts on.
+    """
+    I = np.asarray(I, dtype=np.float64)
+    F = np.abs(np.fft.fftshift(np.fft.fft2(I - I.mean())))
+    h, w = I.shape
+    yy, xx = np.mgrid[0:h, 0:w]
+    r = np.hypot(yy - h // 2, xx - w // 2)
+    tot = F.sum()
+    return {'low_freq_share': float(F[r < radius].sum() / tot) if tot > 0 else 0.0,
+            'contrast': float(I.std())}
+
+
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig; distortion handling from rc.distortion_mode."""
     from data_loader import CameraCalibration
@@ -392,6 +437,7 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
             H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
             frame_duration=rc.frame_duration,
             dist_coeffs=dist_coeffs,
+            poisson=getattr(rc, 'poisson', 'iterative'),
             **rc.params
         )
         # V2: CMax drives R inside the loop (kinematics → F only, no IMU).
@@ -782,6 +828,13 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
         'mean_beta': float(np.mean(beta_all)),
         'std_beta': float(np.std(beta_all)),
     }
+
+    # ─── Reconstruction quality: keep the final maps and two cheap ────
+    # descriptors of I. These do not replace looking at the frames -- they let
+    # many runs be ranked and re-examined without running them again.
+    np.savez_compressed(os.path.join(rc.output_dir, 'maps_final.npz'),
+                        I=net.I[:H, :W], G=net.G[:H, :W], F=net.F[:H, :W])
+    summary.update(_intensity_stats(net.I[:H, :W]))
 
     with open(os.path.join(rc.output_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)
