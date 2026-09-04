@@ -35,6 +35,7 @@ import json
 import time
 import argparse
 import traceback
+import collections
 
 import numpy as np
 
@@ -500,6 +501,101 @@ def _aps(E, ds, t):
         return None
 
 
+# ------------------------------------------------- fft vs dct, as a read-out
+def cmd_readout(E, args):
+    """Which exact solver reconstructs the better image: fft or dct?
+
+    They differ only in what they assume beyond the image border -- fft that it
+    wraps around (periodic), dct that it mirrors (Neumann, zero gradient across
+    the edge). On a synthetic test dct is exact and fft is off by a wrap-around
+    ramp, yet on real runs fft has so far looked better. This decides it on
+    data instead of on the argument.
+
+    Scoring: Pearson correlation between the reconstruction and log APS.
+    Correlation is invariant to scale and offset, which is exactly the freedom
+    the reconstruction has -- the beta ambiguity fixes neither the contrast of
+    I nor its constant of integration, so any metric that is not invariant to
+    both would be measuring the gauge rather than the image.
+
+    Each sequence is scored at several track lengths, because a single
+    end-of-run snapshot is not representative: quality varies with where the
+    run happens to stop. The comparison is paired -- same run, same G, the two
+    solvers applied to it -- so an APS misalignment or a bad G penalises both
+    equally and cancels out of the difference.
+    """
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    root = _root(args, 'readout_fft_vs_dct')
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    durations = [float(d) for d in args.durations.split(',')]
+    base = {'delta_FR': 0.10, 'delta_IMU': 0.50}
+
+    path = os.path.join(root, 'readout.csv')
+    f = open(path, 'w', newline='', encoding='utf-8')
+    wr = csv.writer(f)
+    wr.writerow(['sequence', 'duration_s', 'n_frames', 'variant',
+                 'r_full', 'r_crop', 'low_freq', 'contrast'])
+    print(f"{'sequence':<9} {'dur':>5} {'variant':<10} {'r_full':>7} {'r_crop':>7}",
+          flush=True)
+    print('-' * 44, flush=True)
+    tally = collections.Counter()
+    for ds, sid, t0, lab in seqs:
+        for dur in durations:
+            nf = int(round(dur / args.dt))
+            rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
+                      out_root=root, poisson='iterative', deltas=dict(base))
+            npz = os.path.join(rc.output_dir, 'maps_final.npz')
+            if not os.path.exists(npz):
+                _run(E, rc, not args.no_frames, args.frame_stride)
+            m = np.load(npz)
+            aps = _aps(E, ds, t0 + nf * args.dt)
+            if aps is None:
+                print(f"  {lab}: no APS, skipped"); continue
+            ref = np.log(aps.astype(np.float64) + 1.0)
+            variants = {'iterative': m['I'],
+                        'fft': solve_poisson_exact(m['G'], 'fft'),
+                        'dct': solve_poisson_exact(m['G'], 'dct')}
+            got = {}
+            for name, I in variants.items():
+                st = E._intensity_stats(I)
+                r_full = _corr(I, ref)
+                r_crop = _corr(_crop(I), _crop(ref))
+                got[name] = r_crop
+                wr.writerow([ds, dur, nf, name, round(r_full, 4),
+                             round(r_crop, 4), round(st['low_freq_share'], 4),
+                             round(st['contrast'], 4)])
+                print(f"{lab:<9} {dur:5.2f} {name:<10} {r_full:7.3f} {r_crop:7.3f}",
+                      flush=True)
+            tally['fft' if got['fft'] > got['dct'] else 'dct'] += 1
+            f.flush()
+    f.close()
+    print(f"\npaired wins on r_crop:  fft {tally['fft']}   dct {tally['dct']}")
+    print(f"-> {path}")
+
+
+def _crop(a, frac=0.1):
+    """Drop a border: the reconstruction is worst where the solvers' boundary
+    assumptions differ most, and we want the comparison to hold in the interior
+    too, not only because of the edges."""
+    h, w = a.shape[:2]
+    dy, dx = int(h * frac), int(w * frac)
+    return a[dy:h - dy, dx:w - dx]
+
+
+def _corr(a, b):
+    """Pearson r, invariant to the scale and offset the reconstruction is
+    free in. |r| is used: I is log-intensity up to a sign-free scale, but a
+    negative correlation would mean an inverted image, so the sign is kept."""
+    a = np.asarray(a, dtype=np.float64).ravel()
+    b = np.asarray(b, dtype=np.float64).ravel()
+    if a.size != b.size:
+        return float('nan')
+    a = a - a.mean(); b = b - b.mean()
+    d = np.sqrt((a * a).sum() * (b * b).sum())
+    return float((a * b).sum() / d) if d > 0 else float('nan')
+
+
 # ------------------------------------------------------- front-end baselines
 def cmd_baseline(E, args):
     """What do the two anchor signals score on their own, without the network?
@@ -565,7 +661,8 @@ def cmd_baseline(E, args):
 
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
-            'sweep': cmd_sweep, 'poisson': cmd_poisson}
+            'sweep': cmd_sweep, 'poisson': cmd_poisson,
+            'readout': cmd_readout}
 
 
 def main():
@@ -594,6 +691,8 @@ def main():
     ap.add_argument('--mode', default='coord', choices=['coord', 'grid'],
                     help='sweep: one axis at a time, or the full factorial')
     ap.add_argument('--out', default='', help='sweep: output csv name')
+    ap.add_argument('--durations', default='0.4,0.8,1.2',
+                    help='readout: track lengths to score at (s)')
     ap.add_argument('--name', default='',
                     help='experiment name; runs go to experiments/<name>/ '
                          'instead of results/ (searches only, not --what main)')
