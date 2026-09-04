@@ -16,6 +16,13 @@ lens distortion in the C matrix (distortion_mode='C_full'). Nothing is looked up
 in results/ -- each cell is computed -- because results/ mixes runs from
 configurations that have since changed.
 
+Where the runs land:
+    results/                    -- only --what main, the runs the tables cite
+    experiments/<name>/         -- everything exploratory (grid, sweep, poisson)
+Each search gets its own directory via --name, so its runs and frames can be
+browsed, compared, or deleted as a unit without disturbing results/. The csv
+and figures for a search go to experiments/<name>/ as well.
+
 Video frames are written for every run unless --no-frames is given, so any
 number in the report can be checked against the maps that produced it. Frames
 are the slow part; --frame-stride N writes every Nth frame.
@@ -55,11 +62,24 @@ OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 os.makedirs(OUTDIR, exist_ok=True)
 
 
-def _cfg(E, ds, sid, t0, model, dt, nf, **kw):
+def _cfg(E, ds, sid, t0, model, dt, nf, out_root=None, **kw):
     seg = {'id': sid, 't_start': t0, 'frame_duration': dt, 'n_frames': nf,
            'initial_R': None, 'sensor_size': (180, 240)}
     return E.RunConfig(dataset=ds, model=model, segment=seg, n_frames=nf,
-                       distortion_mode='C_full', **kw)
+                       distortion_mode='C_full', out_root=out_root, **kw)
+
+
+def _root(args, default):
+    """Where this experiment's runs go: experiments/<name>/...
+
+    Search runs vastly outnumber reported ones and would otherwise bury
+    results/, which holds the runs the report's tables and figures point at.
+    Each experiment gets its own directory, named for what it is.
+    """
+    name = args.name or default
+    root = os.path.join('experiments', name)
+    os.makedirs(root, exist_ok=True)
+    return root
 
 
 # ------------------------------------------------------------- sweep plumbing
@@ -165,7 +185,8 @@ def cmd_grid(E, args):
     d_fr = [float(x) for x in args.d_fr.split(',')]
     d_anc = [float(x) for x in args.d_anchor.split(',')]
     nf = int(round(args.duration / args.dt))
-    path = os.path.join(OUTDIR, f'grid_dt{int(args.dt*1000)}ms.csv')
+    root = _root(args, 'grid_FR_anchor')
+    path = os.path.join(root, f'grid_dt{int(args.dt*1000)}ms.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
     wr = csv.writer(f)
     wr.writerow(['sequence', 'segment', 'model', 'dt_ms', 'n_frames',
@@ -181,7 +202,7 @@ def cmd_grid(E, args):
             for anc in d_anc:
                 try:
                     rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
-                              delta_FR=fr, delta_IMU=anc)
+                              out_root=root, delta_FR=fr, delta_IMU=anc)
                     s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                     wr.writerow([ds, sid, args.model, int(args.dt*1000), nf, fr, anc,
                                  round(s['mean_err_deg_s'], 2),
@@ -354,7 +375,8 @@ def cmd_sweep(E, args):
             if not args.sequences or s[3] in args.sequences.split(',')]
     nf = int(round(args.duration / args.dt))
 
-    path = os.path.join(OUTDIR, args.out or f'sweep_{args.mode}.csv')
+    root = _root(args, f'sweep_{args.mode}')
+    path = os.path.join(root, args.out or 'sweep.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
     wr = csv.writer(f)
     cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'poisson'] \
@@ -369,7 +391,7 @@ def cmd_sweep(E, args):
             poisson, deltas = _split(pt)
             try:
                 rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
-                          poisson=poisson, deltas=deltas)
+                          out_root=root, poisson=poisson, deltas=deltas)
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                 wr.writerow([ds, sid, args.model, int(args.dt*1000), nf,
                              rc.poisson]
@@ -417,6 +439,7 @@ def cmd_poisson(E, args):
     from interacting_maps.network_dissertation import solve_poisson_exact
 
     nf = int(round(args.duration / args.dt))
+    root = _root(args, 'poisson_solvers')
     seqs = [s for s in SEGMENTS
             if not args.sequences or s[3] in args.sequences.split(',')]
     base = {'delta_FR': 0.10, 'delta_IMU': 0.50}
@@ -428,7 +451,7 @@ def cmd_poisson(E, args):
         maps = {}
         for mode in args.modes.split(','):
             rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
-                      poisson=mode, deltas=dict(base))
+                      out_root=root, poisson=mode, deltas=dict(base))
             npz = os.path.join(rc.output_dir, 'maps_final.npz')
             if not os.path.exists(npz):
                 print(f"  running {lab}/{mode} ...", flush=True)
@@ -457,7 +480,7 @@ def cmd_poisson(E, args):
         fig.suptitle(f'{lab}: the same G, five ways of turning it into I',
                      fontsize=10)
         fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.9))
-        out = os.path.join(OUTDIR, f'poisson_{lab}{args.tag}.png')
+        out = os.path.join(root, f'poisson_{lab}{args.tag}.png')
         fig.savefig(out, dpi=130, bbox_inches='tight')
         plt.close(fig)
         print(f"  -> {out}")
@@ -571,6 +594,9 @@ def main():
     ap.add_argument('--mode', default='coord', choices=['coord', 'grid'],
                     help='sweep: one axis at a time, or the full factorial')
     ap.add_argument('--out', default='', help='sweep: output csv name')
+    ap.add_argument('--name', default='',
+                    help='experiment name; runs go to experiments/<name>/ '
+                         'instead of results/ (searches only, not --what main)')
     ap.add_argument('--modes', default='iterative,fft,dct',
                     help='poisson: which in-loop solvers to include')
     ap.add_argument('--tag', default='', help='poisson: suffix for the figure name')

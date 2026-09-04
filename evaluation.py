@@ -73,8 +73,13 @@ class RunConfig:
     def __init__(self, dataset='boxes_rotation', model='thesis_imu',
                  segment=None, t_start=None, frame_duration=None, n_frames=None,
                  n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None,
-                 poisson=None, deltas=None):
+                 poisson=None, deltas=None, out_root=None):
 
+        # Where this run's directory goes. 'results' holds the runs behind the
+        # reported tables; a sweep passes e.g. 'experiments/sweep_deltas' so its
+        # hundreds of throwaway runs stay out of the way and can be deleted as
+        # a unit without touching anything the report depends on.
+        self.out_root = out_root or 'results'
         self.dataset = dataset
         self.model = model  # 'cook', 'thesis', 'thesis_imu'
         self.distortion_mode = distortion_mode or DISTORTION_MODE
@@ -202,7 +207,7 @@ class RunConfig:
             folder_name += '_' + '-'.join(extra)
         if self.use_thesis and self.poisson != 'iterative':
             folder_name += f"_{self.poisson}"
-        return os.path.join('results', self.dataset, self.model, folder_name)
+        return os.path.join(self.out_root, self.dataset, self.model, folder_name)
     
     def to_dict(self):
         """Serialize all parameters for JSON."""
@@ -214,6 +219,7 @@ class RunConfig:
             'n_frames': self.n_frames,
             'distortion_mode': self.distortion_mode,
             'poisson': self.poisson,
+            'out_root': self.out_root,
             'n_iters': self.n_iters,
             'duration_s': self.duration_s,
             'sensor_size': list(self.sensor_size),
