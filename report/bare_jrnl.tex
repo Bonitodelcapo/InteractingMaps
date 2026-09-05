@@ -443,6 +443,29 @@ and the update $\wvec \leftarrow \wvec - \eta(\wvec - M^{-1}v)$. Since $M$
 depends only on the pixel grid and the intrinsics, $M^{-1}$ is a $3\times3$
 matrix that can be precomputed once.
 
+The relation $\Gmap=\nabla\Imap$ is linear in the same sense, and the thesis
+gives its closed-form optimum too. Recovering $\Imap$ from $\Gmap$ means solving
+$\min_{\Imap}\lVert\nabla\Imap-\Gmap\rVert^2$, whose normal equations are the
+Poisson equation $\Delta\Imap = \operatorname{div}\Gmap$. Because the Laplacian
+is a convolution it is diagonal in the frequency domain, so the minimiser is one
+division per spatial frequency $k$,
+\begin{equation}
+\widehat{\Imap}(k) \;=\;
+  \frac{\overline{D_x(k)}\,\widehat{\Gmap}_x(k)
+      + \overline{D_y(k)}\,\widehat{\Gmap}_y(k)}
+       {\lvert D_x(k)\rvert^2+\lvert D_y(k)\rvert^2},
+\label{eq:poisson_exact}
+\end{equation}
+with $D$ the transform of the difference operator. The denominator vanishes at
+$k=0$: the mean of $\Imap$ is the constant of integration and is not determined
+by $\Gmap$, which is the same gauge freedom as the $\beta$-ambiguity of
+Sec.~\ref{sec:scale}. Equation~\eqref{eq:cook_poisson} is one gradient step on
+the same objective, and~\eqref{eq:poisson_exact} jumps to its minimum; the two
+differ only in that the step of~\eqref{eq:cook_poisson} converges at a rate
+$(1-\delta_{G\!I}\lvert k\rvert^2)$ per frequency, so the low frequencies move
+far more slowly than the high ones. Sec.~\ref{sec:reconstruction} shows this is
+what separates a recognisable intensity image from an edge map.
+
 The decisive difference to Cook is that Phase~2 happens \textbf{simultaneously}:
 all messages are computed from one common snapshot before anything is written.
 This is a Jacobi scheme. It removes the dependence on update order and is the
@@ -684,11 +707,13 @@ ours explicitly, since some of them affect the comparison.
   of~\eqref{eq:energy} is not implemented: $\Vmap$ is identified with the
   normalised event frame rather than inferred from $E$ through the sensor
   nonlinearity. $\Vmap$ is therefore treated as observed, as in~\cite{cook2011}.
-\item \textbf{Intensity update.} We implement
-  $\Imap \leftarrow \Imap - \eta\operatorname{div}(\Gmap-\nabla \Imap)$ in both
-  networks, i.e.\ Cook's~\eqref{eq:cook_poisson}, omitting the additional
-  shrinkage term of the thesis' iterative form. The frequency-domain variant is
-  not implemented.
+\item \textbf{Intensity update.} Inside the message passing both networks use
+  $\Imap \leftarrow \Imap - \eta\operatorname{div}(\Gmap-\nabla \Imap)$, i.e.\
+  Cook's~\eqref{eq:cook_poisson}, omitting the additional shrinkage term of the
+  thesis' iterative form. The thesis' exact frequency-domain
+  solution~\eqref{eq:poisson_exact} is also implemented, but as a read-out
+  rather than as the in-loop update; Sec.~\ref{sec:reconstruction} measures both
+  and explains why.
 \item \textbf{Step sizes.} Neither source reports the values of the relaxation
   step sizes. Ours were tuned by grid search (Table~\ref{tab:params}) and are
   examined in Sec.~\ref{sec:experiments}.
@@ -1407,6 +1432,145 @@ corresponding figure for \texttt{poster}, where the sequential scheme remains
 stable, is in Appendix~\ref{app:converge}.}
 \label{fig:converge}
 \end{figure*}
+
+\subsection{Reconstruction Quality}
+\label{sec:reconstruction}
+
+The intensity map is the one inferred quantity we have so far judged only by
+eye. It is also the quantity in which our results looked least like the
+published ones: where Martel and Cook show a recognisable photograph, our
+$\Imap$ was closer to a relief map of the scene edges. This section identifies
+what that depends on. Three factors turn out to matter, and none of them is the
+angular velocity.
+
+We score $\Imap$ by the Pearson correlation $r$ between the reconstruction and
+the logarithm of the APS frame nearest the end of the track, over the interior
+$80\%$ of the image. Correlation is used because it is invariant to scale and
+offset, which is exactly the freedom the reconstruction has: neither the
+$\beta$-ambiguity of Sec.~\ref{sec:scale} nor the constant of integration
+in~\eqref{eq:poisson_exact} is determined by the data, so a metric sensitive to
+either would be measuring the gauge rather than the image. Each sequence is
+scored at three track lengths ($0.4$, $0.8$, $1.2$\,s), since the reconstruction
+is not uniform in time and one end-of-run snapshot is not representative. This
+is a comparison between reconstructions, not an absolute quality measure: the
+APS differs in exposure and is offset in time, so the attainable $r$ is well
+below unity even for a good map.
+
+\subsubsection{The accumulation window}
+$\Vmap$ is formed by binning events over $\Delta t$, during which the scene
+moves. At the $20$\,ms used everywhere else in this report, the image travels
+$3.4$\,px per window on the real sequences and $5.0$\,px on the synthetic ones
+--- wider than the structures $\Gmap$ is meant to resolve. The event frame is
+therefore a smeared edge rather than a sharp one, and $\Gmap$ inherits the
+smear before any intensity update sees it. The signature is visible in the
+frames: the artefacts are streaks aligned with the direction of motion, running
+vertically on \texttt{boxes\_rotation}, whose segment is $\omega_x$-dominant and
+therefore moves the image vertically.
+
+Halving the window to $10$\,ms halves the travel and improves the reconstruction
+on $11$ of the $12$ runs (Table~\ref{tab:recon}). The mean correlation of the
+best variant rises from $0.28$ to $0.54$, and the plain iterative update
+improves as well, from $0.08$ to $0.21$ --- so this is $\Gmap$ becoming cleaner,
+not an artefact of one intensity update. The effect is uneven, however, and
+tracks how much the smear was actually costing: on \texttt{boxes\_rotation},
+where the streaks are conspicuous, $r$ rises from $0.35$ to $0.48$, whereas on
+\texttt{poster\_rotation}, whose texture is finer and whose artefacts are less
+directional, it is unchanged at $0.42$ and $0.41$ (Fig.~\ref{fig:recon}). The
+gain is also not free: at $10$\,ms each window holds half the events, so $\Vmap$
+is sparser, and what is measured is the net of the two effects.
+
+\subsubsection{The intensity update}
+Given the same $\Gmap$, solving the Poisson equation
+exactly~\eqref{eq:poisson_exact} instead of taking one gradient
+step~\eqref{eq:cook_poisson} recovers the low frequencies the step cannot reach
+in $75$ iterations. The exact solution beats the iterative update on $11$ of
+$12$ runs at $20$\,ms and on all $12$ at $10$\,ms, and the difference is the
+difference between a relief and an image: the stones of \texttt{poster} acquire
+flat interiors, and \texttt{boxes\_rotation} reaches $r=0.84$, at which point the
+log pile, the boxes and the calibration target are all legible
+(Fig.~\ref{fig:recon}).
+
+Where the exact solve is applied matters more than which transform it uses.
+Substituted for~\eqref{eq:cook_poisson} \emph{inside} the message passing it
+destabilises the network: the solve amplifies each frequency of $\Gmap$ by
+$\lvert k\rvert^{-2}$, so low-frequency error in $\Gmap$ integrates into large
+spurious blobs, which then corrupt $\Gmap$ itself through the $\delta_{I\!G}$
+coupling --- on \texttt{poster} the peak of $\lvert\Gmap\rvert$ falls from
+$3.96$ to $1.40$ and the texture is lost. Applied once to the $\Gmap$ the
+network has converged to, with no feedback path, the same equation behaves.
+We therefore use~\eqref{eq:cook_poisson} in the loop and~\eqref{eq:poisson_exact}
+as a read-out.
+
+The transform's boundary assumption is the remaining choice, and here the
+measurement contradicts the theory. The discrete cosine transform assumes
+reflecting boundaries, which is what the zero-gradient border convention of our
+forward differences implies, and on a synthetic test with an exact gradient
+field it is exact (relative RMS $2\!\times\!10^{-13}$) where the periodic Fourier
+transform is off by a wrap-around ramp (relative RMS $0.63$). On real data the
+Fourier transform nevertheless wins $9$ of $12$ runs at $20$\,ms and $12$ of
+$12$ at $10$\,ms. The explanation consistent with both observations is that
+$\Gmap$ produced by the network is not a gradient field at all: it is
+inconsistent and carries low-frequency error, which the exact solve amplifies by
+$\lvert k\rvert^{-2}$, and the periodic transform's wrap artefact happens to
+suppress part of it. The cosine transform integrates that error faithfully,
+which is correct and worse. We report the Fourier read-out.
+
+\subsubsection{The anchor}
+The third factor is the one already visible in Sec.~\ref{sec:mainresults}: the
+external anchor, which is what makes the angular velocity usable at all,
+degrades $\Imap$. With the anchor the standard deviation of $\Imap$ excurses
+between $0.03$ and $1.59$ across a track of \texttt{poster}; without it the same
+network stays between $0.02$ and $0.05$. The anchor makes the system
+inconsistent --- it forces $\wvec$, hence $\Fmap$, to a value the flow
+constraint would not have chosen --- and $\Imap$ absorbs the disagreement.
+
+\subsubsection{Why none of this shows up in $\wvec$}
+Across the three intensity updates on the same sequence the angular-velocity
+error is $10.98$, $10.96$ and $10.98$\,$^\circ$/s. A change that moves the
+reconstruction by a factor of twenty leaves the quantity we score untouched,
+because the intensity map influences $\wvec$ only through $\Gmap$ and the flow
+constraint, and $\wvec$ is determined by a least-squares fit over the whole flow
+field that is dominated by the anchor. This is the clearest evidence for the
+observation running through this section: the two things the model is asked to
+produce --- an angular velocity and a picture --- are not improved by the same
+choices, and a configuration tuned for one should not be assumed good for the
+other.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Reconstruction Quality. \textnormal{Mean correlation $r$ against the
+log APS frame, over two real (\texttt{boxes}, \texttt{poster}) and two synthetic
+(\texttt{bicycle}, \texttt{street}) sequences at three track lengths each, $12$
+runs per column. The rightmost column counts how often the Fourier read-out
+beats the cosine one on the same $\Gmap$.}}
+\label{tab:recon}
+\centering
+\footnotesize
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+$\Delta t$ & iterative~\eqref{eq:cook_poisson}
+           & exact, FFT & exact, DCT & FFT $>$ DCT \\
+\midrule
+$20$\,ms & $+0.08$ & $+0.28$ & $+0.20$ & $9/12$ \\
+$10$\,ms & $+0.21$ & $\mathbf{+0.54}$ & $+0.24$ & $12/12$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig_recon}
+\caption{What the intensity map depends on, after $0.8$\,s of tracking. Reading
+across a row separates two effects: halving the accumulation window removes the
+motion-aligned smear from $\Gmap$ --- pronounced on \texttt{boxes}, whose
+vertical streaks follow its $\omega_x$-dominant motion, and absent on
+\texttt{poster} --- and solving the Poisson equation exactly instead of by one
+gradient step recovers the low frequencies that step leaves behind, which is the
+larger effect on both. $\Imap$ is never observed; the APS column is shown for
+reference only. Correlations are against the log APS over the interior of the
+image.}
+\label{fig:recon}
+\end{figure}
 
 \subsection{Handling Lens Distortion}
 \label{sec:distortion}

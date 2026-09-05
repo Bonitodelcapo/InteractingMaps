@@ -501,6 +501,75 @@ def _aps(E, ds, t):
         return None
 
 
+# --------------------------------------------- report figure: reconstruction
+def cmd_recon(E, args):
+    """Figure for Sec. 'Reconstruction Quality': what the intensity map depends on.
+
+    Two sequences, four columns: the APS reference, the iterative update at
+    dt=20ms and at dt=10ms (the accumulation window, i.e. how far the scene
+    smears inside one event frame), and the exact frequency-domain read-out at
+    dt=10ms. Reading across a row separates the two effects -- halving the
+    window cleans up G, and solving the Poisson equation exactly recovers the
+    low frequencies the iterative update leaves out of it.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    root = _root(args, 'recon_figure')
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    base = {'delta_FR': 0.10, 'delta_IMU': 0.50}
+    dur = args.duration
+
+    fig, axes = plt.subplots(len(seqs), 4, figsize=(7.1, 1.85 * len(seqs)))
+    axes = np.atleast_2d(axes)
+    for row, (ds, sid, t0, lab) in enumerate(seqs):
+        got = {}
+        for dt in (0.02, 0.01):
+            nf = int(round(dur / dt))
+            rc = _cfg(E, ds, sid, t0, args.model, dt, nf, out_root=root,
+                      poisson='iterative', deltas=dict(base))
+            npz = os.path.join(rc.output_dir, 'maps_final.npz')
+            if not os.path.exists(npz):
+                print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
+                _run(E, rc, not args.no_frames, args.frame_stride)
+            got[dt] = np.load(npz)
+        aps = _aps(E, ds, t0 + dur)
+        ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
+        panels = [
+            ('APS', aps),
+            (r'iterative, $\Delta t = 20$ ms', got[0.02]['I']),
+            (r'iterative, $\Delta t = 10$ ms', got[0.01]['I']),
+            (r'exact read-out, $\Delta t = 10$ ms',
+             solve_poisson_exact(got[0.01]['G'], 'fft')),
+        ]
+        for col, (ttl, img) in enumerate(panels):
+            a = axes[row, col]
+            a.set_xticks([]); a.set_yticks([])
+            if img is None:
+                a.axis('off'); continue
+            lo, hi = np.percentile(img, [1, 99])
+            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
+            if row == 0:
+                a.set_title(ttl, fontsize=7.5)
+            if col == 0:
+                a.set_ylabel(lab, fontsize=8)
+            if col > 0 and ref is not None:
+                r = _corr(_crop(img), _crop(ref))
+                a.set_xlabel(f'$r={r:.2f}$', fontsize=7, labelpad=1.5)
+        print(f"  {lab}: done", flush=True)
+    fig.tight_layout(pad=0.25, h_pad=0.5, w_pad=0.2)
+    out = os.path.join(ROOT, 'report', 'figures', 'fig_recon.pdf')
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    for ext in ('pdf', 'png'):
+        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
+                    bbox_inches='tight', pad_inches=0.02)
+    plt.close(fig)
+    print(f"-> fig_recon.pdf / .png")
+
+
 # ------------------------------------------------- fft vs dct, as a read-out
 def cmd_readout(E, args):
     """Which exact solver reconstructs the better image: fft or dct?
@@ -662,7 +731,7 @@ def cmd_baseline(E, args):
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
-            'readout': cmd_readout}
+            'readout': cmd_readout, 'recon': cmd_recon}
 
 
 def main():
