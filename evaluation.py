@@ -409,6 +409,39 @@ def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
                 'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
 
+def curl_share(G):
+    """Fraction of G's energy that is NOT any image's gradient.
+
+    G is a gradient field only if it is curl-free: walking a closed loop and
+    summing the steps must return zero, since the two endpoints are the same
+    pixel and must have the same intensity. Nothing in the model enforces that.
+    Cost_Spatial pulls G towards grad(I), but Cost_OFCE only needs F.G = -V at
+    each pixel separately and couples no neighbours, so the two costs settle on
+    a compromise that is generally not curl-free -- and the aperture problem
+    leaves the component of G perpendicular to F free to drift.
+
+    Recovering I from G is a least-squares projection onto the gradient fields,
+    so whatever curl G carries is silently discarded. This measures how much
+    that is, by Helmholtz decomposition: project G onto the gradient subspace
+    and return the relative energy of the residual. 0 means G is exactly some
+    image's gradient; 0.4 means nearly half of it describes no image at all.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    H, W = G.shape[:2]
+    gx, gy = G[..., 0], G[..., 1]
+    dx = np.exp(2j * np.pi * np.fft.fftfreq(W)[None, :]) - 1.0
+    dy = np.exp(2j * np.pi * np.fft.fftfreq(H)[:, None]) - 1.0
+    den = np.abs(dx) ** 2 + np.abs(dy) ** 2
+    den[0, 0] = 1.0
+    phi = (np.conj(dx) * np.fft.fft2(gx) + np.conj(dy) * np.fft.fft2(gy)) / den
+    px = np.real(np.fft.ifft2(dx * phi))
+    py = np.real(np.fft.ifft2(dy * phi))
+    tot = float((gx ** 2 + gy ** 2).sum())
+    if tot <= 0:
+        return 0.0
+    return float(((gx - px) ** 2 + (gy - py) ** 2).sum() / tot)
+
+
 def _intensity_stats(I, radius=10):
     """Two numbers that separate a photograph from an edge map.
 
@@ -841,6 +874,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     np.savez_compressed(os.path.join(rc.output_dir, 'maps_final.npz'),
                         I=net.I[:H, :W], G=net.G[:H, :W], F=net.F[:H, :W])
     summary.update(_intensity_stats(net.I[:H, :W]))
+    summary['curl_share'] = curl_share(net.G[:H, :W])
 
     with open(os.path.join(rc.output_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)

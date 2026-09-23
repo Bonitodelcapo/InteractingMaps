@@ -101,11 +101,13 @@ def _parse_vary(spec):
         name = name.strip()
         if name == 'poisson':
             axes.append((name, [v.strip() for v in vals.split(',')]))
-        elif name in ALL_DELTAS:
+        elif name == 'n_iters':
+            axes.append((name, [int(v) for v in vals.split(',')]))
+        elif name in ALL_DELTAS + ['dt']:
             axes.append((name, [float(v) for v in vals.split(',')]))
         else:
-            raise SystemExit(f"unknown sweep axis {name!r}; "
-                             f"choose from {ALL_DELTAS + ['poisson']}")
+            raise SystemExit(f"unknown sweep axis {name!r}; choose from "
+                             f"{ALL_DELTAS + ['dt', 'n_iters', 'poisson']}")
     return axes
 
 
@@ -129,9 +131,15 @@ def _points(axes, mode, base):
 
 
 def _split(point):
-    """Separate the network kwargs RunConfig takes separately."""
+    """Separate the axes RunConfig takes as its own arguments from the deltas.
+
+    dt is returned separately because changing it also changes n_frames: a
+    sweep over the accumulation window must hold the tracked DURATION fixed,
+    not the frame count, or it would confound the window size with how much of
+    the sequence was seen.
+    """
     p = dict(point)
-    return p.pop('poisson', None), p
+    return p.pop('poisson', None), p.pop('dt', None), p.pop('n_iters', None), p
 
 
 def _run(E, rc, save_frames, stride):
@@ -380,22 +388,27 @@ def cmd_sweep(E, args):
     path = os.path.join(root, args.out or 'sweep.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
     wr = csv.writer(f)
-    cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'poisson'] \
-        + ALL_DELTAS + ['err', 'median', 'dir', 'beta', 'low_freq', 'contrast', 'secs']
+    cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'n_iters',
+            'poisson'] + ALL_DELTAS + ['err', 'median', 'dir', 'beta',
+            'low_freq', 'contrast', 'curl', 'secs']
     wr.writerow(cols)
     print(f"{len(pts)} configs x {len(seqs)} sequences = {len(pts)*len(seqs)} runs "
-          f"| dt={args.dt*1000:.0f}ms, {nf} frames, C_full, {args.model}", flush=True)
+          f"| {args.duration:.1f}s tracked, C_full, {args.model}", flush=True)
     for i, pt in enumerate(pts):
         print(f"\n### [{i+1}/{len(pts)}] " +
               ' '.join(f'{k}={v}' for k, v in sorted(pt.items())), flush=True)
         for ds, sid, t0, lab in seqs:
-            poisson, deltas = _split(pt)
+            poisson, dt, n_iters, deltas = _split(pt)
+            dt = dt or args.dt
+            # hold the tracked duration fixed, not the frame count
+            nfr = int(round(args.duration / dt))
             try:
-                rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
-                          out_root=root, poisson=poisson, deltas=deltas)
+                rc = _cfg(E, ds, sid, t0, args.model, dt, nfr,
+                          out_root=root, poisson=poisson, deltas=deltas,
+                          n_iters=n_iters)
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
-                wr.writerow([ds, sid, args.model, int(args.dt*1000), nf,
-                             rc.poisson]
+                wr.writerow([ds, sid, args.model, round(dt*1000, 1), nfr,
+                             rc.n_iters, rc.poisson]
                             + [rc.params.get(d, '') for d in ALL_DELTAS]
                             + [round(s['mean_err_deg_s'], 2),
                                round(s['median_err_deg_s'], 2),
@@ -403,12 +416,13 @@ def cmd_sweep(E, args):
                                round(s['mean_beta'], 3),
                                round(s.get('low_freq_share', float('nan')), 4),
                                round(s.get('contrast', float('nan')), 4),
+                               round(s.get('curl_share', float('nan')), 4),
                                round(secs)])
                 f.flush()
                 print(f"    {lab:<9} err={s['mean_err_deg_s']:7.2f}  "
                       f"beta={s['mean_beta']:5.3f}  "
                       f"lowf={s.get('low_freq_share', float('nan')):.3f}  "
-                      f"contrast={s.get('contrast', float('nan')):.3f}", flush=True)
+                      f"curl={s.get('curl_share', float('nan')):.3f}", flush=True)
             except Exception:
                 print(f"    {lab:<9} FAIL"); traceback.print_exc()
     f.close()

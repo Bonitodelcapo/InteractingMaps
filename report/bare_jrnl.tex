@@ -1456,6 +1456,34 @@ is a comparison between reconstructions, not an absolute quality measure: the
 APS differs in exposure and is offset in time, so the attainable $r$ is well
 below unity even for a good map.
 
+\subsubsection{How much of $\Gmap$ is an image at all}
+\label{sec:curl}
+One quantity explains most of what follows, so we introduce it first. Recovering
+$\Imap$ from $\Gmap$ presupposes that $\Gmap$ \emph{is} the gradient of
+something, and a vector field is a gradient only if it is curl-free,
+$\partial_y\Gmap^{(x)} = \partial_x\Gmap^{(y)}$. Equivalently: summing $\Gmap$
+around any closed path must give zero, since the path returns to the pixel it
+started from and that pixel has one intensity. A field with curl describes an
+impossible staircase, and no image has it as its gradient.
+
+Nothing in the model enforces this. $\Gmap$ is pulled by two costs with
+different concerns: the spatial cost blends it towards $\nabla\Imap$, which is
+curl-free by construction, while the flow constraint~\eqref{eq:ofce} only
+requires $\Vmap+\Fmap\!\cdot\!\Gmap=0$ at each pixel independently and couples
+no neighbours at all. Their compromise is in general not curl-free, and the
+aperture problem compounds it: \eqref{eq:ofce} constrains only the component of
+$\Gmap$ along $\Fmap$, leaving the perpendicular component to drift. Solving
+for $\Imap$ is a least-squares projection onto the gradient fields, so whatever
+curl $\Gmap$ carries is discarded, and the discarded part is the error the
+reconstruction inherits.
+
+Decomposing $\Gmap$ into its curl-free and divergence-free parts measures this
+directly. At $\Delta t = 20$\,ms, $40$--$46\%$ of the energy of $\Gmap$ on
+\texttt{boxes\_rotation} is curl --- close to half of the inferred gradient map
+describes no image whatever. At $10$\,ms the same quantity falls to $7$--$9\%$.
+The remaining sequences lie between, at $21$--$32\%$. This single number orders
+the reconstruction results below.
+
 \subsubsection{The accumulation window}
 $\Vmap$ is formed by binning events over $\Delta t$, during which the scene
 moves. At the $20$\,ms used everywhere else in this report, the image travels
@@ -1478,6 +1506,12 @@ where the streaks are conspicuous, $r$ rises from $0.35$ to $0.48$, whereas on
 directional, it is unchanged at $0.42$ and $0.41$ (Fig.~\ref{fig:recon}). The
 gain is also not free: at $10$\,ms each window holds half the events, so $\Vmap$
 is sparser, and what is measured is the net of the two effects.
+
+The mechanism is the one of Sec.~\ref{sec:curl}, and it is stronger than
+blurring alone: on \texttt{boxes\_rotation} the curl share of $\Gmap$ falls from
+$0.46$ to $0.07$ when the window is halved. Smear does not merely soften
+$\Gmap$, it makes it less of a gradient field, and the sequence where that
+change is largest is also the sequence whose reconstruction improves most.
 
 \subsubsection{The intensity update}
 Given the same $\Gmap$, solving the Poisson equation
@@ -1508,9 +1542,11 @@ forward differences implies, and on a synthetic test with an exact gradient
 field it is exact (relative RMS $2\!\times\!10^{-13}$) where the periodic Fourier
 transform is off by a wrap-around ramp (relative RMS $0.63$). On real data the
 Fourier transform nevertheless wins $9$ of $12$ runs at $20$\,ms and $12$ of
-$12$ at $10$\,ms. The explanation consistent with both observations is that
-$\Gmap$ produced by the network is not a gradient field at all: it is
-inconsistent and carries low-frequency error, which the exact solve amplifies by
+$12$ at $10$\,ms. The explanation consistent with both observations is the
+measurement of Sec.~\ref{sec:curl}: the synthetic test hands both solvers a
+\emph{valid} gradient field, the regime the cosine transform is exact in,
+whereas the $\Gmap$ the network produces is $7$--$46\%$ curl and is therefore
+the gradient of no image at all. It carries low-frequency error, which the exact solve amplifies by
 $\lvert k\rvert^{-2}$, and the periodic transform's wrap artefact happens to
 suppress part of it. The cosine transform integrates that error faithfully,
 which is correct and worse. We report the Fourier read-out.
