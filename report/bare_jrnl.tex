@@ -1839,59 +1839,6 @@ frame, and relaxing the pure-rotation assumption, which would require depth to
 enter the network and would make the sequences we had to exclude admissible.
 
 
-\appendices
-\section{Inferred Maps for Every Sequence}
-\label{app:maps}
-
-Figure~\ref{fig:appendix} shows the full set of inferred quantities for each of
-the five sequences of Table~\ref{tab:main}, on the same segments and at the same
-configuration, after $40$ frames. Only the event map is observed. The angular
-velocity is the quantity we evaluate numerically because it is the one for which
-an independent reference exists, but it is not the only output of the model, and
-the maps are worth inspecting directly: the intensity map is recovered well
-enough for every scene to be recognised despite never being measured, the
-gradient concentrates on scene edges, and the flow field varies smoothly as a
-pure rotation requires. The reconstruction quality is visibly similar across
-real and synthetic data and is not obviously worse on \texttt{dynamic}, whose
-scene contains a person.
-
-These are single frames, chosen at the same point of each track, and as
-Sec.~\ref{sec:mainresults} notes the reconstruction is not uniform in time: at
-the peaks of the rotation the intensity map loses structure for a few tenths of
-a second before recovering. The panels above are representative of the majority
-of each track but not of its worst moments.
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{fig_appendix_maps}
-\caption{Inferred quantities for all five sequences after $40$ frames, at the
-configuration of Table~\ref{tab:main}. Only $\Vmap$ is observed; $\Imap$,
-$\Gmap$ and $\Fmap$ are inferred jointly with $\wvec$. Flow is coded as hue for
-direction and saturation for magnitude.}
-\label{fig:appendix}
-\end{figure*}
-
-
-\section{Convergence on a Real Sequence}
-\label{app:converge}
-
-Figure~\ref{fig:converge_poster} is the counterpart of
-Fig.~\ref{fig:converge} on a real sequence. The pattern is the same --- the
-sequential scheme has structure after one iteration, the simultaneous ones by
-about ten --- but here the sequential scheme does not diverge, so the two end in
-comparable states. Together the two figures show that the stability difference
-is sequence-dependent while the convergence-rate difference is not.
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{fig_converge_poster}
-\caption{Intensity map across the iterations of a single frame
-(\texttt{poster}, first frame), for all five models, initialised from noise at
-that frame as in Fig.~\ref{fig:converge}.}
-\label{fig:converge_poster}
-\end{figure*}
-
-
 \section*{Acknowledgment}
 The authors would like to thank Prof.\ Guillermo Gallego for supervising this
 project.
@@ -1958,5 +1905,60 @@ adjustment and SLAM system using contrast maximization,'' \emph{IEEE Trans.
 Robotics}, vol.~40, 2024.
 
 \end{thebibliography}
+
+
+\appendices
+\section{Inferred Maps for Every Sequence}
+\label{app:maps}
+
+Figure~\ref{fig:appendix} shows the full set of inferred quantities for each of
+the five sequences of Table~\ref{tab:main}, on the same segments and at the same
+configuration, after $40$ frames. Only the event map is observed. The angular
+velocity is the quantity we evaluate numerically because it is the one for which
+an independent reference exists, but it is not the only output of the model, and
+the maps are worth inspecting directly: the intensity map is recovered well
+enough for every scene to be recognised despite never being measured, the
+gradient concentrates on scene edges, and the flow field varies smoothly as a
+pure rotation requires. The reconstruction quality is visibly similar across
+real and synthetic data and is not obviously worse on \texttt{dynamic}, whose
+scene contains a person.
+
+These are single frames, chosen at the same point of each track, and as
+Sec.~\ref{sec:mainresults} notes the reconstruction is not uniform in time: at
+the peaks of the rotation the intensity map loses structure for a few tenths of
+a second before recovering. The panels above are representative of the majority
+of each track but not of its worst moments.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{fig_appendix_maps}
+\caption{Inferred quantities for all five sequences after $40$ frames, at the
+configuration of Table~\ref{tab:main}. Only $\Vmap$ is observed; $\Imap$,
+$\Gmap$ and $\Fmap$ are inferred jointly with $\wvec$. Flow is coded as hue for
+direction and saturation for magnitude.}
+\label{fig:appendix}
+\end{figure*}
+
+
+\section{Convergence on a Real Sequence}
+\label{app:converge}
+
+Figure~\ref{fig:converge_poster} is the counterpart of
+Fig.~\ref{fig:converge} on a real sequence. The pattern is the same --- the
+sequential scheme has structure after one iteration, the simultaneous ones by
+about ten --- but here the sequential scheme does not diverge, so the two end in
+comparable states. Together the two figures show that the stability difference
+is sequence-dependent while the convergence-rate difference is not.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{fig_converge_poster}
+\caption{Intensity map across the iterations of a single frame
+(\texttt{poster}, first frame), for all five models, initialised from noise at
+that frame as in Fig.~\ref{fig:converge}.}
+\label{fig:converge_poster}
+\end{figure*}
+
+
 
 \end{document}
