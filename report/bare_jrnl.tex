@@ -1478,11 +1478,22 @@ curl $\Gmap$ carries is discarded, and the discarded part is the error the
 reconstruction inherits.
 
 Decomposing $\Gmap$ into its curl-free and divergence-free parts measures this
-directly. At $\Delta t = 20$\,ms, $40$--$46\%$ of the energy of $\Gmap$ on
-\texttt{boxes\_rotation} is curl --- close to half of the inferred gradient map
-describes no image whatever. At $10$\,ms the same quantity falls to $7$--$9\%$.
-The remaining sequences lie between, at $21$--$32\%$. This single number orders
-the reconstruction results below.
+directly. At the $\Delta t=20$\,ms of Table~\ref{tab:params}, $40$--$59\%$ of
+the energy of $\Gmap$ is curl on the three real sequences and $29\%$ on the
+synthetic one: about half of the inferred gradient map describes no image
+whatever. This is not a defect of our implementation but a property of the
+model, and any faithful implementation of either source will show it.
+
+Two cautions on reading the quantity. It is \emph{not} a quality measure: at
+$\Delta t=5$\,ms the curl share falls below $10\%$ on every sequence while the
+angular-velocity error is the worst anywhere in this study
+(Sec.~\ref{sec:sensitivity}), because at that window $\Gmap$ barely develops at
+all and a field of nearly zero is trivially curl-free. Nor is it monotone in the
+window: $40$\,ms carries twice the intra-frame motion of $20$\,ms and a quarter
+of the curl. What the quantity does measure is how far $\Gmap$ has been pulled
+out of the gradient subspace by the flow constraint relative to its own
+magnitude, and we use it below only to compare reconstructions at a fixed
+window, not across windows.
 
 \subsubsection{The accumulation window}
 $\Vmap$ is formed by binning events over $\Delta t$, during which the scene
@@ -1507,11 +1518,13 @@ directional, it is unchanged at $0.42$ and $0.41$ (Fig.~\ref{fig:recon}). The
 gain is also not free: at $10$\,ms each window holds half the events, so $\Vmap$
 is sparser, and what is measured is the net of the two effects.
 
-The mechanism is the one of Sec.~\ref{sec:curl}, and it is stronger than
-blurring alone: on \texttt{boxes\_rotation} the curl share of $\Gmap$ falls from
-$0.46$ to $0.07$ when the window is halved. Smear does not merely soften
-$\Gmap$, it makes it less of a gradient field, and the sequence where that
-change is largest is also the sequence whose reconstruction improves most.
+The improvement is confined to the reconstruction, and it is bought at the
+expense of the quantity this report is principally about: halving the window
+more than doubles the angular-velocity error, from $9.0$ to $20.6$\,$^\circ$/s
+averaged over the same four sequences, and quartering it to $5$\,ms raises the
+error to $42.6$ (Sec.~\ref{sec:sensitivity}). The two requirements are opposed
+here rather than merely uncorrelated, and Sec.~\ref{sec:sensitivity} returns to
+the choice this forces.
 
 \subsubsection{The intensity update}
 Given the same $\Gmap$, solving the Poisson equation
