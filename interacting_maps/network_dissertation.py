@@ -103,24 +103,6 @@ class Cost_OFCE(Cost):
         self.q['G'].add_gradient(grad_G * self.delta_VFG)
 
 
-def gradient_part(G):
-    """The curl-free part of G: the closest field that IS some image's gradient.
-
-    Helmholtz projection. G - gradient_part(G) is the curl, the component of G
-    that no image can account for and that the Poisson solve discards.
-    """
-    G = np.asarray(G, dtype=np.float64)
-    H, W = G.shape[:2]
-    dx = np.exp(2j * np.pi * np.fft.fftfreq(W)[None, :]) - 1.0
-    dy = np.exp(2j * np.pi * np.fft.fftfreq(H)[:, None]) - 1.0
-    den = np.abs(dx) ** 2 + np.abs(dy) ** 2
-    den[0, 0] = 1.0
-    phi = (np.conj(dx) * np.fft.fft2(G[..., 0])
-           + np.conj(dy) * np.fft.fft2(G[..., 1])) / den
-    return np.stack([np.real(np.fft.ifft2(dx * phi)),
-                     np.real(np.fft.ifft2(dy * phi))], axis=-1)
-
-
 class Cost_MapPrior(Cost):
     """Shrinkage prior on the gradient map: C = eta * ||G||^2.
 
@@ -128,22 +110,22 @@ class Cost_MapPrior(Cost):
     every pixel is pulled towards zero by a constant fraction each iteration,
     and only the costs that actively support a pixel keep it away from zero.
 
-    Three separate reasons to include it, none of them ours:
+    This is the shrinkage on G; its counterpart on I is the `shrink` argument
+    of Cost_Spatial, which restores the leading I of thesis Eq. 6.61.
 
-    1. The thesis' iterative intensity update carries a shrinkage term which we
-       had omitted (Sec. III-D). This restores its counterpart on G.
-    2. Guo and Gallego add exactly this prior, eta*||grad M||^2, to their
+    Two reasons to include it, neither of them ours:
+
+    1. Guo and Gallego add exactly this prior, eta*||grad M||^2, to their
        event-based mosaicing bundle adjustment [guo2024emba], because each of
        their error terms touches the gradient at a single map pixel, so
        "the values ... at some pixels may grow rapidly, suppressing the update
        of other pixels". Our flow constraint has the same per-pixel structure
        and the same failure mode.
-    3. We measure that failure directly: |G| reaches the clipping bound and the
+    2. We measure that failure directly: |G| reaches the clipping bound and the
        standard deviation of I excurses from 0.03 to 1.59 at the peaks of the
        rotation, while the same network without an anchor stays near 0.03.
 
-    Unlike Cost_Integrability this does not ask G to be a gradient field; it
-    only asks it to stay small. The two are independent and can be combined.
+    It does not ask G to be a gradient field, only to stay small.
     """
     def __init__(self, quantities_dict, delta_map):
         super().__init__(quantities_dict)
@@ -151,39 +133,6 @@ class Cost_MapPrior(Cost):
 
     def compute_and_send_gradients(self):
         self.q['G'].add_gradient(2.0 * self.delta_map * self.q['G'].value)
-
-
-class Cost_Integrability(Cost):
-    """Regulariser: pull G towards being an actual gradient field.
-
-    C = ||G - P G||^2, with P the projection onto the curl-free fields. Since P
-    is an orthogonal projection the derivative is just 2(G - P G), so the update
-    removes a fraction delta_curl of the curl each iteration.
-
-    The model constrains G through two costs that disagree about it: the spatial
-    cost pulls it towards grad(I), which is curl-free by construction, while the
-    flow constraint only requires V + F.G = 0 at each pixel separately and
-    couples no neighbours, so it is free to create curl -- and does, 29-59% of
-    G's energy at the window we use. Because recovering I from G discards the
-    curl, that fraction is error the reconstruction inherits.
-
-    This term makes integrability an explicit constraint rather than something
-    the spatial cost achieves only incidentally. It is a deviation from both
-    sources, which have no such term, and is reported as one.
-
-    The failure it targets is sharpest where the motion reverses: as omega
-    passes through zero so does F, and V + F.G = 0 is then satisfied by ANY G,
-    leaving it unconstrained by the flow cost exactly when the stale value it
-    carries from before the reversal is wrong. The streak artefacts concentrate
-    there.
-    """
-    def __init__(self, quantities_dict, delta_curl):
-        super().__init__(quantities_dict)
-        self.delta_curl = delta_curl
-
-    def compute_and_send_gradients(self):
-        g = self.q['G'].value
-        self.q['G'].add_gradient((g - gradient_part(g)) * self.delta_curl)
 
 
 def solve_poisson_exact(G, mode='dct'):
@@ -487,7 +436,7 @@ class InteractingMapsThesis:
     """
     def __init__(self, H, W, fx, fy, cx, cy, frame_duration=0.005,
                  delta_VFG=0.15, delta_IG=0.10, delta_GI=0.05,
-                 delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3, delta_curl=0.0,
+                 delta_RF=0.03, delta_FR=0.50, delta_IMU=0.3,
                  delta_map=0.0, delta_shrinkI=0.0,
                  dist_coeffs=None, include_jacobian=True,
                  poisson='iterative'):
@@ -528,12 +477,9 @@ class InteractingMapsThesis:
         self.cost_imu = Cost_IMU(q_dict, delta_IMU)
         self.costs.append(self.cost_imu)
 
-        # Regularisers on G, both off by default so the network is still
+        # Shrinkage prior on G, off by default so the network is still
         # exactly the two published ones unless asked otherwise.
-        self.delta_curl = delta_curl
         self.delta_map = delta_map
-        if delta_curl > 0:
-            self.costs.append(Cost_Integrability(q_dict, delta_curl))
         if delta_map > 0:
             self.costs.append(Cost_MapPrior(q_dict, delta_map))
 

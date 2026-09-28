@@ -182,16 +182,11 @@ THESIS_PARAMS = dict(
                        # thesis' iterative intensity update that Sec. III-D
                        # records us as having omitted. Bounds the
                        # low-frequency excursions of I (0.03 -> 1.59).
-    delta_map=0.0,     # shrinkage prior on G, eta*||G||^2 (EMBA Eq. 10).
+    delta_map=0.0      # shrinkage prior on G, eta*||G||^2 (EMBA Eq. 10).
                        # The thesis' iterative I-update carries a shrinkage
                        # term we had omitted; Guo & Gallego add this one because
                        # per-pixel error terms let a few pixels grow and
                        # suppress the rest, which is the blow-up we measure.
-    delta_curl=0.0     # integrability regulariser: pull G towards curl-free.
-                       # 0 = the published model. Recovering I from G discards
-                       # whatever curl G carries, and that is 29-59% of its
-                       # energy at dt=20ms, so this makes integrability an
-                       # explicit constraint instead of an incidental one.
 )
 
 COOK_PARAMS = dict(

@@ -87,7 +87,7 @@ def _root(args, default):
 #: every relaxation rate the thesis network exposes, plus the anchor weight.
 #: delta_IMU is the anchor (gyro for thesis_imu, CMax for thesis_cmax).
 ALL_DELTAS = ['delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF', 'delta_FR',
-              'delta_IMU', 'delta_curl', 'delta_map', 'delta_shrinkI']
+              'delta_IMU', 'delta_map', 'delta_shrinkI']
 
 
 def _parse_vary(spec):
