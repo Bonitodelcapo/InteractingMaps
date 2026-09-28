@@ -33,6 +33,8 @@ class InteractingMaps:
         delta_GI: float = 0.1,
         delta_RF: float = 0.1,
         delta_FR: float = 0.5,
+        delta_map: float = 0.0,
+        delta_shrinkI: float = 0.0,
         dist_coeffs=None,
         include_jacobian: bool = True,
     ):
@@ -49,6 +51,13 @@ class InteractingMaps:
         self.delta_GI = delta_GI    # I from G (Eq. 9)
         self.delta_RF = delta_RF    # F from R,C (Eq. 10)
         self.delta_FR = delta_FR    # R from F,C (Eq. 13)
+        # Regularisers. Neither appears in Cook et al.: Eq. 9 is a convex
+        # blend whose two I terms cancel, leaving no prior on I, and there is
+        # no prior on G either. Both default to 0, so the published model is
+        # unchanged, and are exposed so the same term can be measured on both
+        # networks rather than only on the thesis one.
+        self.delta_map = delta_map        # eta*||G||^2, as in EMBA Eq. 10
+        self.delta_shrinkI = delta_shrinkI  # the I term of thesis Eq. 6.61
 
         # Constant calibration map (unit direction per pixel)
         #self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3) is UNUSED
@@ -148,7 +157,11 @@ class InteractingMaps:
         Psi_hat_y[1:, :] = Psi_y[1:, :] - Psi_y[:-1, :]
 
         # I[v,u] ← I[v,u] - δ·(Ψ̂_x + Ψ̂_y)
-        self.I[:self.H, :self.W] -= self.delta_GI * (Psi_hat_x + Psi_hat_y)
+        step = Psi_hat_x + Psi_hat_y
+        if self.delta_shrinkI > 0.0:
+            # the leading I of thesis Eq. 6.61, absent from Cook's Eq. 9
+            step = step + self.delta_shrinkI * self.I[:self.H, :self.W]
+        self.I[:self.H, :self.W] -= self.delta_GI * step
 
     # ------------------------------------------------------------------
     # Constraint 3:  F = C_mat @ R  (Eqs. 3, 10-13)
@@ -228,6 +241,11 @@ class InteractingMaps:
             
             # LAST: Kinematics gently pulls F toward new R
             self.update_F_from_RC()
+
+            # Shrinkage prior on G: G <- (1 - 2*delta_map) G (EMBA Eq. 10).
+            # Applied once per cycle, as one more relation would be.
+            if self.delta_map > 0.0:
+                self.G *= (1.0 - 2.0 * self.delta_map)
         
             #self.update_F_from_VG(V)
             #self.update_G_from_VF(V)

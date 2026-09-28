@@ -87,7 +87,7 @@ def _root(args, default):
 #: every relaxation rate the thesis network exposes, plus the anchor weight.
 #: delta_IMU is the anchor (gyro for thesis_imu, CMax for thesis_cmax).
 ALL_DELTAS = ['delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF', 'delta_FR',
-              'delta_IMU']
+              'delta_IMU', 'delta_curl', 'delta_map', 'delta_shrinkI']
 
 
 def _parse_vary(spec):
@@ -390,7 +390,8 @@ def cmd_sweep(E, args):
     wr = csv.writer(f)
     cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'n_iters',
             'poisson'] + ALL_DELTAS + ['err', 'median', 'dir', 'beta',
-            'low_freq', 'contrast', 'curl', 'secs']
+            'low_freq', 'contrast', 'curl', 'recon_mean', 'recon_min',
+            'blowup', 'secs']
     wr.writerow(cols)
     print(f"{len(pts)} configs x {len(seqs)} sequences = {len(pts)*len(seqs)} runs "
           f"| {args.duration:.1f}s tracked, C_full, {args.model}", flush=True)
@@ -417,12 +418,17 @@ def cmd_sweep(E, args):
                                round(s.get('low_freq_share', float('nan')), 4),
                                round(s.get('contrast', float('nan')), 4),
                                round(s.get('curl_share', float('nan')), 4),
+                               round(s.get('recon_r_mean', float('nan')), 4),
+                               round(s.get('recon_r_min', float('nan')), 4),
+                               round(s.get('blowup_frac', float('nan')), 4),
                                round(secs)])
                 f.flush()
                 print(f"    {lab:<9} err={s['mean_err_deg_s']:7.2f}  "
                       f"beta={s['mean_beta']:5.3f}  "
                       f"lowf={s.get('low_freq_share', float('nan')):.3f}  "
-                      f"curl={s.get('curl_share', float('nan')):.3f}", flush=True)
+                      f"r={s.get('recon_r_mean', float('nan')):.3f}"
+                      f"/{s.get('recon_r_min', float('nan')):.3f}  "
+                      f"blow={s.get('blowup_frac', float('nan')):.2f}", flush=True)
             except Exception:
                 print(f"    {lab:<9} FAIL"); traceback.print_exc()
     f.close()

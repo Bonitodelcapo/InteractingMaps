@@ -177,7 +177,21 @@ THESIS_PARAMS = dict(
     delta_GI=0.05,     # I from G: gentle (Poisson step, needs stability)
     delta_RF=0.05,     # F from R: WEAK (let OFCE build local structure) 0.03
     delta_FR=0.10,     # R from F: was 0.50; lower = less magnitude shrinkage
-    delta_IMU=0.50     # anchor weight: was 0.30; stronger is better throughout
+    delta_IMU=0.50,    # anchor weight: was 0.30; stronger is better throughout
+    delta_shrinkI=0.0, # Tikhonov weight on I, the shrinkage term of the
+                       # thesis' iterative intensity update that Sec. III-D
+                       # records us as having omitted. Bounds the
+                       # low-frequency excursions of I (0.03 -> 1.59).
+    delta_map=0.0,     # shrinkage prior on G, eta*||G||^2 (EMBA Eq. 10).
+                       # The thesis' iterative I-update carries a shrinkage
+                       # term we had omitted; Guo & Gallego add this one because
+                       # per-pixel error terms let a few pixels grow and
+                       # suppress the rest, which is the blow-up we measure.
+    delta_curl=0.0     # integrability regulariser: pull G towards curl-free.
+                       # 0 = the published model. Recovering I from G discards
+                       # whatever curl G carries, and that is 29-59% of its
+                       # energy at dt=20ms, so this makes integrability an
+                       # explicit constraint instead of an incidental one.
 )
 
 COOK_PARAMS = dict(
@@ -187,6 +201,8 @@ COOK_PARAMS = dict(
     delta_RF=0.03,  #0.10
     delta_FR=0.10,  # was 0.30; matched to THESIS_PARAMS so the two networks
                     # differ only in the update scheme, as the report requires
+    delta_map=0.0,      # see THESIS_PARAMS; 0 = Cook et al. as published
+    delta_shrinkI=0.0,  # Cook's Eq. 9 has no such term (its two I terms cancel)
 )
 
 ITERS_PER_FRAME = 75   # Thesis use 50-75; 

@@ -376,8 +376,22 @@ def load_omega_gt(path):
 
 
 def omega_gt_at(omega_data, t_lo, t_hi):
-    """Exact reference omega at the midpoint of the frame window (rad/s)."""
+    """Exact reference omega for a frame window (rad/s).
+
+    Averaged over the SAME +-GT_DIFF_HALFWIDTH bracket the differenced-pose
+    reference uses. The bracket exists because Vicon gives poses, not rates, and
+    differencing them over one 20 ms frame is dominated by pose noise -- but if
+    it were applied only there, the real sequences would be scored against a
+    smoothed reference and the synthetic ones against an instantaneous one, and
+    the two columns of every table would not be comparable. Applying it to both
+    costs nothing where omega is steady (on the ECRot segments it changes the
+    error by under 0.01 deg/s) and removes the asymmetry.
+    """
     t_mid = 0.5 * (t_lo + t_hi)
+    m = (omega_data[:, 0] >= t_mid - GT_DIFF_HALFWIDTH) & \
+        (omega_data[:, 0] <= t_mid + GT_DIFF_HALFWIDTH)
+    if m.sum() > 0:
+        return omega_data[m, 1:4].mean(axis=0)
     i = int(np.argmin(np.abs(omega_data[:, 0] - t_mid)))
     return omega_data[i, 1:4]
 
@@ -408,6 +422,44 @@ def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
                               t_mid + GT_DIFF_HALFWIDTH),
                 'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
+
+def _recon_score(net, H, W, gt_images, t_mid, crop_frac=0.1):
+    """Correlation between the reconstructed intensity and the nearest APS frame.
+
+    Pearson r, so it is invariant to scale and offset -- the two things the
+    reconstruction is free in (the beta ambiguity and the constant of
+    integration). Computed on the interior, since the border is where the
+    Poisson boundary assumption is weakest. Returns nan when the dataset ships
+    no APS frames.
+
+    The intensity is read out with the exact frequency-domain solve rather than
+    taken from net.I, because the in-loop iterative update leaves the low
+    frequencies unformed and would score every run alike.
+    """
+    if not gt_images:
+        return float('nan')
+    try:
+        from interacting_maps.network_dissertation import solve_poisson_exact
+        times = np.array([t for t, _ in gt_images])
+        path = gt_images[int(np.argmin(np.abs(times - t_mid)))][1]
+        import matplotlib.pyplot as plt
+        aps = plt.imread(path)
+        if aps.ndim == 3:
+            aps = aps.mean(-1)
+        ref = np.log(aps.astype(np.float64) + 1.0)
+        img = solve_poisson_exact(net.G[:H, :W], 'fft')
+        if ref.shape != img.shape:
+            return float('nan')
+        dy, dx = int(H * crop_frac), int(W * crop_frac)
+        a = img[dy:H - dy, dx:W - dx].ravel()
+        b = ref[dy:H - dy, dx:W - dx].ravel()
+        a = a - a.mean()
+        b = b - b.mean()
+        d = np.sqrt((a * a).sum() * (b * b).sum())
+        return float((a * b).sum() / d) if d > 0 else float('nan')
+    except Exception:
+        return float('nan')
+
 
 def curl_share(G):
     """Fraction of G's energy that is NOT any image's gradient.
@@ -766,12 +818,13 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
         print(f"  Saving final IWE per frame to: {iwe_dir}/")
 
     # ─── Frame saving setup ───────────────────────────────────────────
+    # APS frames are needed for the per-frame reconstruction score whether or
+    # not we are writing pictures, so load them unconditionally.
     frames_dir = None
-    gt_images = None
+    gt_images = _try_load_gt_images(rc)
     if save_frames:
         frames_dir = os.path.join(rc.output_dir, 'video_frames')
         os.makedirs(frames_dir, exist_ok=True)
-        gt_images = _try_load_gt_images(rc)
         print(f"  Saving frames to: {frames_dir}/")
 
     rows = []
@@ -827,6 +880,12 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
             'imu_wx': omega_imu[0], 'imu_wy': omega_imu[1], 'imu_wz': omega_imu[2],
             'err_deg_s': err, 'dir_err_deg': dir_err, 'beta': beta,
             'ref_source': ref_src,
+            # Reconstruction quality AT THIS FRAME. Scored every frame, not
+            # once at the end: the intensity map is not uniform along a track
+            # and breaks down intermittently, so a single end-of-run snapshot
+            # cannot see a change that only affects how often it breaks.
+            'recon_r': _recon_score(net, H, W, gt_images, t_mid),
+            'I_std': float(net.I[:H, :W].std()),
         })
 
         # ─── Save 3-column frame ─────────────────────────────────────
@@ -875,6 +934,28 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
                         I=net.I[:H, :W], G=net.G[:H, :W], F=net.F[:H, :W])
     summary.update(_intensity_stats(net.I[:H, :W]))
     summary['curl_share'] = curl_share(net.G[:H, :W])
+
+    # Reconstruction quality over the WHOLE track, not just its final frame.
+    # The worst-case matters as much as the mean: a term that stops the map
+    # breaking down occasionally shows up in recon_r_min and in how often I
+    # blows up, and not at all in a snapshot taken at a good moment.
+    r_all = np.array([r['recon_r'] for r in rows], dtype=np.float64)
+    r_ok = r_all[np.isfinite(r_all)]
+    if r_ok.size:
+        summary.update({
+            'recon_r_mean': float(r_ok.mean()),
+            'recon_r_min': float(r_ok.min()),
+            'recon_r_p10': float(np.percentile(r_ok, 10)),
+        })
+    istd = np.array([r['I_std'] for r in rows], dtype=np.float64)
+    if istd.size:
+        med = float(np.median(istd))
+        summary.update({
+            'I_std_median': med,
+            'I_std_max': float(istd.max()),
+            # how much of the track the intensity map spends blown up
+            'blowup_frac': float((istd > 5.0 * med).mean()) if med > 0 else 0.0,
+        })
 
     with open(os.path.join(rc.output_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)
