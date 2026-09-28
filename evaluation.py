@@ -423,42 +423,56 @@ def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
                 'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
 
-def _recon_score(net, H, W, gt_images, t_mid, crop_frac=0.1):
-    """Correlation between the reconstructed intensity and the nearest APS frame.
+def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
+    """Pearson r between an intensity map and the nearest APS frame.
 
-    Pearson r, so it is invariant to scale and offset -- the two things the
-    reconstruction is free in (the beta ambiguity and the constant of
-    integration). Computed on the interior, since the border is where the
-    Poisson boundary assumption is weakest. Returns nan when the dataset ships
-    no APS frames.
-
-    The intensity is read out with the exact frequency-domain solve rather than
-    taken from net.I, because the in-loop iterative update leaves the low
-    frequencies unformed and would score every run alike.
+    Invariant to scale and offset, the two freedoms the reconstruction has.
+    Interior only: the border is where the Poisson boundary assumption is
+    weakest. nan when the dataset ships no APS.
     """
-    if not gt_images:
+    if not gt_images or img is None:
         return float('nan')
     try:
-        from interacting_maps.network_dissertation import solve_poisson_exact
-        times = np.array([t for t, _ in gt_images])
-        path = gt_images[int(np.argmin(np.abs(times - t_mid)))][1]
         import matplotlib.pyplot as plt
-        aps = plt.imread(path)
+        times = np.array([t for t, _ in gt_images])
+        aps = plt.imread(gt_images[int(np.argmin(np.abs(times - t_mid)))][1])
         if aps.ndim == 3:
             aps = aps.mean(-1)
         ref = np.log(aps.astype(np.float64) + 1.0)
-        img = solve_poisson_exact(net.G[:H, :W], 'fft')
         if ref.shape != img.shape:
             return float('nan')
-        dy, dx = int(H * crop_frac), int(W * crop_frac)
-        a = img[dy:H - dy, dx:W - dx].ravel()
-        b = ref[dy:H - dy, dx:W - dx].ravel()
+        h, w = img.shape
+        dy, dx = int(h * crop_frac), int(w * crop_frac)
+        a = img[dy:h - dy, dx:w - dx].ravel()
+        b = ref[dy:h - dy, dx:w - dx].ravel()
         a = a - a.mean()
         b = b - b.mean()
         d = np.sqrt((a * a).sum() * (b * b).sum())
         return float((a * b).sum() / d) if d > 0 else float('nan')
     except Exception:
         return float('nan')
+
+
+def _recon_scores(net, H, W, gt_images, t_mid):
+    """Reconstruction quality of BOTH intensity maps the pipeline produces.
+
+    in-loop : net.I, carried across frames by the warm start, which is what the
+              saved frames show.
+    read-out: the exact solve of Eq. 6.64 applied to the current G alone.
+
+    They are different images and they do not rank runs the same way -- a term
+    that shrinks G weakens the read-out while leaving the accumulated in-loop
+    map intact. Scoring only one of them silently picks a winner.
+    """
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    inloop = _corr_to_aps(np.asarray(net.I[:H, :W], dtype=np.float64),
+                          gt_images, t_mid)
+    try:
+        ro = _corr_to_aps(solve_poisson_exact(net.G[:H, :W], 'fft'),
+                          gt_images, t_mid)
+    except Exception:
+        ro = float('nan')
+    return inloop, ro
 
 
 def curl_share(G):
@@ -871,6 +885,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
             if iwe is not None:
                 save_iwe(iwe, w_iwe, contrast, iwe_dir, k, t_mid, len(win))
 
+        _rr = _recon_scores(net, H, W, gt_images, t_mid)
         rows.append({
             'frame': k, 'time': t_mid,
             'est_wx': omega_est[0], 'est_wy': omega_est[1], 'est_wz': omega_est[2],
@@ -884,7 +899,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
             # once at the end: the intensity map is not uniform along a track
             # and breaks down intermittently, so a single end-of-run snapshot
             # cannot see a change that only affects how often it breaks.
-            'recon_r': _recon_score(net, H, W, gt_images, t_mid),
+            'recon_r': _rr[1], 'recon_r_inloop': _rr[0],
             'I_std': float(net.I[:H, :W].std()),
         })
 
@@ -939,14 +954,15 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # The worst-case matters as much as the mean: a term that stops the map
     # breaking down occasionally shows up in recon_r_min and in how often I
     # blows up, and not at all in a snapshot taken at a good moment.
-    r_all = np.array([r['recon_r'] for r in rows], dtype=np.float64)
-    r_ok = r_all[np.isfinite(r_all)]
-    if r_ok.size:
-        summary.update({
-            'recon_r_mean': float(r_ok.mean()),
-            'recon_r_min': float(r_ok.min()),
-            'recon_r_p10': float(np.percentile(r_ok, 10)),
-        })
+    for key, pref in (('recon_r', ''), ('recon_r_inloop', '_inloop')):
+        a = np.array([r[key] for r in rows], dtype=np.float64)
+        a = a[np.isfinite(a)]
+        if a.size:
+            summary.update({
+                f'recon_r_mean{pref}': float(a.mean()),
+                f'recon_r_min{pref}': float(a.min()),
+                f'recon_r_p10{pref}': float(np.percentile(a, 10)),
+            })
     istd = np.array([r['I_std'] for r in rows], dtype=np.float64)
     if istd.size:
         med = float(np.median(istd))
@@ -1274,15 +1290,21 @@ def _try_load_gt_images(rc: RunConfig):
 
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     """
-    One inspection frame per time step: events | I | G (direction-coloured) |
-    flow | ground-truth APS.
+    One inspection frame per time step: events | I | exact read-out of I |
+    G (direction-coloured) | flow | ground-truth APS.
+
+    Both intensity panels are shown because they differ and only one of them is
+    scored. `Estimated I` is the in-loop map, which the iterative update of
+    Eq. 6.61 leaves as an edge map; `I from G (exact)` solves Eq. 6.64 on the
+    same G and is what recon_r measures. Judging a run by the first panel while
+    the numbers describe the second is how a comparison goes wrong.
 
     Every quantity the network infers is shown, because the angular-velocity
     number alone cannot tell you whether the interpretation behind it is sound.
     G is coloured by direction rather than shown as magnitude only -- see
     grad_to_rgb.
     """
-    fig, axes = plt.subplots(1, 5, figsize=(19, 4))
+    fig, axes = plt.subplots(1, 6, figsize=(22, 4))
 
     axes[0].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
     axes[0].set_title('Events (V)', fontsize=10)
@@ -1308,34 +1330,54 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
         rng = [prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1])]
     rc._I_disp_range = rng
     axes[1].imshow(I_disp, cmap='gray', vmin=rng[0], vmax=rng[1])
-    axes[1].set_title(f'Estimated I   (std {I_disp.std():.3f})', fontsize=10)
+    _r_in = _corr_to_aps(np.asarray(I_disp, dtype=np.float64), gt_images,
+                         rc.t_start + (k + 0.5) * rc.frame_duration)
+    axes[1].set_title(f'Estimated I (in-loop)   std {I_disp.std():.3f}'
+                      + ('' if not np.isfinite(_r_in) else f'   r = {_r_in:+.2f}'),
+                      fontsize=10)
     axes[1].axis('off')
 
-    G = net.G
-    axes[2].imshow(grad_to_rgb(G))
-    axes[2].set_title(r'Gradient G   hue = direction'
-                      f'   (max |G| {np.abs(G).max():.2f})', fontsize=10)
+    # The quantity recon_r actually scores: I recovered from THIS G by the
+    # exact solve of Eq. 6.64, not the in-loop iterative map beside it.
+    G = net.G[:H, :W]
+    try:
+        from interacting_maps.network_dissertation import solve_poisson_exact
+        I_ro = solve_poisson_exact(G, 'fft')
+        lo_r, hi_r = np.percentile(I_ro, [1.0, 99.0])
+        axes[2].imshow(I_ro, cmap='gray', vmin=lo_r, vmax=max(hi_r, lo_r + 1e-9))
+        r = _corr_to_aps(I_ro, gt_images,
+                         rc.t_start + (k + 0.5) * rc.frame_duration)
+        axes[2].set_title('I from G (exact)'
+                          + ('' if not np.isfinite(r) else f'   r = {r:+.2f}'),
+                          fontsize=10)
+    except Exception:
+        axes[2].set_title('I from G (exact) - failed', fontsize=10)
     axes[2].axis('off')
 
-    axes[3].imshow(flow_to_rgb(net.F))
-    axes[3].set_title(r'Flow F   hue = direction'
+    axes[3].imshow(grad_to_rgb(net.G))
+    axes[3].set_title(r'Gradient G   hue = direction'
+                      f'   (max |G| {np.abs(net.G).max():.2f})', fontsize=10)
+    axes[3].axis('off')
+
+    axes[4].imshow(flow_to_rgb(net.F))
+    axes[4].set_title(r'Flow F   hue = direction'
                       f'   (|w| {np.linalg.norm(net.R)/rc.frame_duration:.2f} rad/s)',
                       fontsize=10)
-    axes[3].axis('off')
+    axes[4].axis('off')
 
     if gt_images is not None and len(gt_images) > 0:
         t_frame = rc.t_start + k * rc.frame_duration + rc.frame_duration / 2
         closest = min(gt_images, key=lambda x: abs(x[0] - t_frame))
         gt_img = plt.imread(closest[1])
-        axes[4].imshow(gt_img, cmap='gray')
-        axes[4].set_title(f'GT Image (APS)  dt {1000*abs(closest[0]-t_frame):.0f} ms',
+        axes[5].imshow(gt_img, cmap='gray')
+        axes[5].set_title(f'GT Image (APS)  dt {1000*abs(closest[0]-t_frame):.0f} ms',
                           fontsize=10)
     else:
-        axes[4].text(0.5, 0.5, 'No GT', ha='center', va='center',
-                     fontsize=14, transform=axes[4].transAxes)
-        axes[4].set_facecolor('#f0f0f0')
-        axes[4].set_title('GT (N/A)', fontsize=10)
-    axes[4].axis('off')
+        axes[5].text(0.5, 0.5, 'No GT', ha='center', va='center',
+                     fontsize=14, transform=axes[5].transAxes)
+        axes[5].set_facecolor('#f0f0f0')
+        axes[5].set_title('GT (N/A)', fontsize=10)
+    axes[5].axis('off')
 
     plt.suptitle(f'Frame {k:04d}    t = {rc.t_start + k*rc.frame_duration:.3f} s'
                  f'    {rc.model}   dFR={rc.params["delta_FR"]:.2f}'
