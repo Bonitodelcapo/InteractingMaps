@@ -1154,6 +1154,66 @@ the \emph{same} trajectory is the $\beta$-ambiguity in its purest form: the
 constraint system is satisfied either way, and which scale it lands on is
 arbitrary.
 
+\subsection{What the Anchor Scores on Its Own}
+\label{sec:baseline}
+
+Every anchored result above depends on an external estimate of $\wvec$, so none
+of them means anything until that estimate has been scored by itself. We
+therefore run the two anchors with no network at all --- the same undistorted
+events into the same contrast-maximization solver, the same warm start from the
+previous frame, the same reference and the same metric --- and compare against
+the network they feed.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{The Anchors Without the Network. \textnormal{Mean angular-velocity
+error, $1.5$\,s per sequence, scored identically to Table~\ref{tab:main}.
+``CMax'' and ``gyro'' use no network: they are the raw front-end estimates.
+``network'' is \texttt{CMax-anchor} at the configuration of
+Table~\ref{tab:params}. The gyroscope column is meaningless on the synthetic
+sequences, whose simulated IMU sits $0.11^\circ$/s from the exact twist and so
+amounts to handing the model its own answer.}}
+\label{tab:baseline}
+\centering
+\footnotesize
+\begin{tabular}{@{}lccc@{}}
+\toprule
+sequence & CMax alone & gyro alone & network \\
+ & [$^\circ$/s] & [$^\circ$/s] & [$^\circ$/s] \\
+\midrule
+\texttt{boxes}   &  8.41 & 6.25 & \textbf{7.28} \\
+\texttt{poster}  & 13.86 & 8.78 & \textbf{11.06} \\
+\texttt{dynamic} & 10.96 & 7.23 & \textbf{9.56} \\
+\midrule
+\texttt{bicycle} & \textbf{2.10} & 0.11 & 7.14 \\
+\texttt{street}  & \textbf{1.97} & 0.11 & 7.09 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+On the three real sequences the network improves on its own anchor, by $13\%$,
+$20\%$ and $13\%$ respectively. This is the central claim of the method stated
+in the only form that can support it: the maps are not passing the contrast
+estimate through, they are correcting it, and they correct it most on
+\texttt{poster\_rotation}, where the anchor alone is weakest.
+
+On the synthetic sequences the relation inverts, and by a large margin: the
+anchor alone attains $2.1^\circ$/s and the network degrades it to $7.1$. With a
+clean pinhole rendering, no distortion and an exact reference, contrast
+maximization is already close to the ceiling, and the joint inference can only
+add its own error. This is the origin of the parameter split of
+Sec.~\ref{sec:realvssynth}: the settings that are best for the synthetic
+sequences are those that switch the network off.
+
+Two further readings follow. The gyroscope scores $6.25$--$8.78^\circ$/s
+against differenced Vicon --- close to what the network attains --- so the real
+sequences are measured near the floor of the reference itself, and differences
+below roughly $7^\circ$/s there should not be read as differences in method.
+And the synthetic gyroscope column, at $0.11^\circ$/s, shows that anchoring
+\texttt{IMU-anchor} on those sequences is close to circular; the corresponding
+entries of Table~\ref{tab:main} are reported for completeness but carry no
+evidential weight.
+
 \subsection{The Scale Ambiguity in Practice}
 \label{sec:beta_exp}
 
@@ -1782,10 +1842,13 @@ The pattern is a sampling artefact, not scene structure.}
 
 Table~\ref{tab:sweep} varies each parameter in turn from the configuration of
 Table~\ref{tab:params}, on all five sequences. Two of the four sweeps are
-informative, and one of them changes what we would recommend. Every trend below
-holds on all five sequences independently, which is what makes them worth
-reporting: the sequences differ in scene, in sensor (real against simulated), in
-rotation speed by a factor of three and in event density by a factor of eight.
+informative, and one of them changes what we would recommend. The ablation of
+the anchor and the trend in $\delta_{F\!R}$ hold on all five sequences
+independently, which is what makes them worth reporting: the sequences differ
+in scene, in sensor (real against simulated), in rotation speed by a factor of
+three and in event density by a factor of eight. The remaining parameters do
+\emph{not} behave alike on both kinds of data, and
+Sec.~\ref{sec:realvssynth} reports where they diverge.
 
 \subsubsection{Removing the anchor}
 Setting $\delta_{\text{anchor}} = 0$ makes the anchoring
@@ -1843,18 +1906,67 @@ the anchor does not. The optimal balance between a model's internal constraint
 and its external reference is therefore a property of the data, not a constant
 of the method, which is worth knowing for anyone tuning it on a new sequence.
 
-\subsubsection{Iterations and window}
-The remaining two parameters matter much less. Iterations per frame are
-essentially irrelevant beyond $25$ --- across $25$ to $150$ the error varies by
-under $0.7^\circ$/s on the real sequences and by $0.04^\circ$/s on the synthetic
-one --- so the $50$--$75$ of~\cite{martel2019thesis} can be reduced threefold at
-no cost. The accumulation window has a clear optimum at $20$\,ms on all five
-sequences, degrading in both directions. The two directions fail differently:
-$10$\,ms yields too few events per frame for a stable gradient, whereas
-$50$\,ms yields a \emph{better} direction estimate on the synthetic sequence
-($3.5$ against $6.0^\circ$) but a much worse magnitude ($\beta = 1.84$ against
-$1.48$) --- more motion per window, and therefore more of the shrinkage of
-Sec.~\ref{sec:speed}.
+\subsubsection{Real and synthetic sequences want opposite settings}
+\label{sec:realvssynth}
+That split is not confined to $\delta_{F\!R}$. It appears, with the same sense,
+on every parameter that arbitrates between the flow field and the anchor, and
+it is large enough that no single configuration is best for both kinds of data.
+A coordinate sweep from Table~\ref{tab:params} over all six relaxation rates
+gives, on \texttt{poster\_rotation} against \texttt{bicycle}:
+$\delta_{V\!F\!G} = 0.03$ scores $13.16$ and $2.00^\circ$/s respectively, while
+$0.48$ scores $8.21$ and $10.83$; $\delta_{F\!R} = 0.5$ scores $8.28$ and
+$18.86$, while $0.02$ scores $12.64$ and $2.68$; $\delta_{\text{anchor}} = 0.1$
+scores $8.22$ and $18.85$, while $0.9$ scores $11.75$ and $4.52$. In every case
+the value that is best for the real sequence is close to the worst for the
+synthetic one.
+
+The direction is consistent: the synthetic sequences are best served by
+trusting contrast maximization and suppressing the network's own kinematic
+update ($\delta_{F\!R}$ small, $\delta_{\text{anchor}}$ large,
+$\delta_{V\!F\!G}$ small), and the real sequences by the reverse. Sec.~\ref{sec:baseline}
+explains why: on the synthetic sequences contrast maximization alone already
+attains $2.1^\circ$/s and the maps have almost nothing to add, whereas on the
+real ones it attains only $8.4$--$13.9^\circ$/s and the network improves on it
+by $17$--$35\%$. The configuration of Table~\ref{tab:params} is therefore a
+compromise, chosen to favour the real sequences, and the synthetic columns of
+Table~\ref{tab:main} should be read as showing what the method does when its
+anchor is already near-perfect rather than as a second independent validation.
+The regularisers of Sec.~\ref{sec:regularisers} divide along the same line:
+$\delta_{\text{curl}}$ helps the real sequences and harms the synthetic ones,
+$\delta_{\text{shrink}I}$ the reverse.
+
+\subsubsection{Iterations}
+Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
+$150$ the error varies by under $0.7^\circ$/s on the real sequences and by
+$0.04^\circ$/s on the synthetic one, and a later sweep from the adopted
+configuration reproduces this ($8.87$ at $25$ against $8.96$ at $150$, averaged
+over four sequences). The $50$--$75$ of~\cite{martel2019thesis} can therefore be
+reduced threefold at no cost.
+
+\subsubsection{The accumulation window}
+\label{sec:window_sweep}
+$\Delta t$ is the one parameter on which the two quantities this report
+measures want opposite things, and a sweep over
+$\{5, 10, 20, 40\}$\,ms from the adopted configuration shows it plainly. For
+the angular velocity, longer is better across the whole range tested: the mean
+error over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
+\texttt{bicycle} is $42.6^\circ$/s at $5$\,ms, $20.6$ at $10$, $9.0$ at $20$
+and $7.7$ at $40$. Short windows fail for two compounding reasons --- fewer
+events per frame make the contrast estimate that anchors $\wvec$ noisier, and
+$\wvec = \Rmap/\Delta t$ divides whatever error remains by a smaller number.
+The degradation is not an artefact of how we score: the synthetic sequences are
+scored against the exact twist over their own frame window, with no
+differencing bracket at all, and still run from $6.8$ to $38.7$ to
+$71.9^\circ$/s as the window shrinks.
+
+For the reconstruction the ordering reverses, for the reason given in
+Sec.~\ref{sec:reconstruction}: at $20$\,ms the scene travels $3.4$\,px within
+one window on the real sequences and $5.0$\,px on the synthetic ones, which is
+wider than the structures $\Gmap$ must resolve. Halving the window improves the
+reconstruction on $11$ of $12$ runs. A single window cannot serve both, and
+this report keeps $20$\,ms --- the better choice for the quantity it evaluates
+numerically --- while noting that a system built for image quality rather than
+for $\wvec$ should not.
 
 \begin{table*}[!t]
 \renewcommand{\arraystretch}{1.15}
@@ -1956,15 +2068,28 @@ synthetic sequences sharing a trajectory but differing threefold in event
 density leave unchanged. Why both synthetic sequences sit well above the trend
 fitted to the real ones remains open.
 
-Three practical findings are worth recording. Lens distortion should be carried
+Separating the two quantities the model produces turned out to matter more than
+tuning either. A good angular velocity and a good picture are not obtained by
+the same choices, and on the accumulation window they are in direct opposition:
+$40$\,ms gives the best $\wvec$ of any window tested and the worst
+reconstruction, $10$\,ms the reverse. The intensity update makes the point most
+sharply --- solving the Poisson equation exactly instead of by one gradient
+step changes the reconstruction by a factor of twenty and $\wvec$ by
+$0.02^\circ$/s. Any configuration reported for this model should therefore say
+which of the two it was chosen for.
+
+Four practical findings are worth recording. Lens distortion should be carried
 in the kinematic matrix rather than removed from the events, not for geometric
 reasons --- the two routes agree to $0.043$\,px --- but because rectifying event
 coordinates and re-binning them destroys about a fifth of the spatial support of
 $\Vmap$ at exactly the scale the gradient operates on. Twenty-five iterations
-per frame suffice where the thesis uses $50$--$75$. And the tighter of the two
-contrast-maximization couplings, in which a gradient step on the contrast
-replaces the update rule for $\wvec$, is not robust: its step size scales with
-the square of the event count and it diverged outright on the densest sequence.
+per frame suffice where the thesis uses $50$--$75$. The intensity map should be
+read out with the exact frequency-domain solution rather than taken from the
+iterative update, whose convergence rate per spatial frequency leaves the low
+frequencies unformed. And the tighter of the two contrast-maximization
+couplings, in which a gradient step on the contrast replaces the update rule for
+$\wvec$, is not robust: its step size scales with the square of the event count
+and it diverged outright on the densest sequence.
 
 \subsection*{Outlook}
 
