@@ -709,8 +709,11 @@ ours explicitly, since some of them affect the comparison.
   nonlinearity. $\Vmap$ is therefore treated as observed, as in~\cite{cook2011}.
 \item \textbf{Intensity update.} Inside the message passing both networks use
   $\Imap \leftarrow \Imap - \eta\operatorname{div}(\Gmap-\nabla \Imap)$, i.e.\
-  Cook's~\eqref{eq:cook_poisson}, omitting the additional shrinkage term of the
-  thesis' iterative form. The thesis' exact frequency-domain
+  Cook's~\eqref{eq:cook_poisson}. For Cook's network this is exact: their
+  Eq.~9 is a convex blend whose two $\Imap$ terms cancel. The thesis' Eq.~6.61
+  carries an additional leading $\Imap$, a shrinkage term, which we therefore
+  omit for the thesis network; Sec.~\ref{sec:regularisers} restores it and
+  measures what it changes. The thesis' exact frequency-domain
   solution~\eqref{eq:poisson_exact} is also implemented, but as a read-out
   rather than as the in-loop update; Sec.~\ref{sec:reconstruction} measures both
   and explains why.
@@ -1621,6 +1624,107 @@ image.}
 \label{fig:recon}
 \end{figure}
 
+\subsection{Regularising the Maps}
+\label{sec:regularisers}
+
+Neither source regularises $\Gmap$, and the inferred maps show the consequence:
+$\lvert\Gmap\rvert$ reaches the clipping bound of
+Sec.~\ref{sec:implementation}, and the standard deviation of $\Imap$ excurses
+from $0.03$ to $1.59$ at the peaks of the rotation. The flow
+constraint~\eqref{eq:ofce} is the likely culprit, since it is the one relation
+that touches each pixel independently: it can grow a few pixels without any
+neighbour objecting. Guo and Gallego report the same failure in their
+event-based mosaicing bundle adjustment~\cite{guo2024emba}, where each residual
+likewise depends on the map gradient at a single pixel, and add a shrinkage
+prior to suppress it.
+
+We test three regularising terms. They are of different provenance, which
+matters for how much weight to give each result, so we state it plainly.
+
+\begin{enumerate}
+\item \textbf{$\delta_{\text{shrink}I}$, on $\Imap$.} The leading $\Imap$ of
+  the thesis' Eq.~6.61, which Sec.~\ref{sec:deviations} records us as having
+  omitted. Setting it to $1$ restores the published update exactly; Cook's
+  Eq.~9 has no counterpart, being a convex blend whose two $\Imap$ terms
+  cancel.
+\item \textbf{$\delta_{\text{map}}$, on $\Gmap$.} The prior
+  $\eta\lVert\Gmap\rVert^2$ of~\cite{guo2024emba}, giving
+  $\Gmap \leftarrow (1-2\delta_{\text{map}})\Gmap$. Not in either source
+  implemented here.
+\item \textbf{$\delta_{\text{curl}}$, on $\Gmap$.} Ours. Sec.~\ref{sec:curl}
+  showed that $29$--$59\%$ of $\Gmap$ is curl and therefore the gradient of no
+  image at all, and that the intensity solve discards exactly that part. This
+  term penalises $\lVert\Gmap - P\Gmap\rVert^2$, with $P$ the projection onto
+  the curl-free fields, so a fraction $\delta_{\text{curl}}$ of the curl is
+  removed each iteration.
+\end{enumerate}
+
+Table~\ref{tab:regularisers} reports all three. No term dominates: each
+improves one column and is neutral or harmful in the others.
+
+The thesis' own term is the weakest of the three. Restoring it leaves the
+angular velocity unchanged on all three real sequences and the reconstruction
+within noise of the unregularised network; its one clear effect is on the
+synthetic pair, where the error falls from $7.1$ to $6.7^\circ$/s. It also
+\emph{lowers} the quality of the in-loop intensity map, from $0.125$ to $0.108$.
+This is worth stating because it closes off an obvious hypothesis: the omission
+recorded in Sec.~\ref{sec:deviations} is not what separated our reconstructions
+from the published ones. The choice of Poisson solver
+(Sec.~\ref{sec:reconstruction}) was.
+
+The prior of~\cite{guo2024emba} does what it is advertised to do, and only
+that. It removes the excursions of $\Imap$ completely --- the fraction of the
+track spent blown up falls from $0.051$ to $0.000$, and on
+\texttt{poster\_rotation} from $0.17$ to $0.00$ --- and gives the best in-loop
+map of any configuration tested. It buys no improvement in the read-out
+reconstruction and costs a little on \texttt{poster\_rotation}. Read as a
+stability device rather than a quality one, which is how its authors present
+it, it succeeds.
+
+The curl term is the only one that improves the reconstruction, and it does so
+on every sequence: the correlation against the APS rises from $0.244$ to
+$0.355$ on average and improves on all five individually. It also gives the
+best angular velocity on all three real sequences. Against that, it is
+\emph{worse} on both synthetic ones ($7.1 \rightarrow 7.7^\circ$/s), so the
+real-synthetic split of Sec.~\ref{sec:sensitivity} reappears here with the
+opposite sign to $\delta_{\text{shrink}I}$. Two cautions attach to it. It is
+our own construction, not something either source or the mosaicing work
+proposes, and we have no independent validation of it. And its effect on the
+curl share inside the closed loop is not what the term does in isolation:
+applied to a fixed field it provably drives the curl to zero, but in the
+running network the measured share does not fall correspondingly, which we
+cannot presently explain.
+
+None of the three is adopted in the configuration of Table~\ref{tab:params};
+all results elsewhere in this report are without them.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Regularisation Ablation. \textnormal{$1.5$\,s per sequence, all other
+parameters at Table~\ref{tab:params}. $r$ is the correlation against the log
+APS frame, averaged over every frame of the track; ``read-out'' scores $\Imap$
+recovered from $\Gmap$ by~\eqref{eq:poisson_exact}, ``in-loop'' the map the
+network carries. ``blow-up'' is the fraction of the track on which the standard
+deviation of $\Imap$ exceeds five times its median. Means exclude
+\texttt{street}, whose trajectory duplicates \texttt{bicycle}.}}
+\label{tab:regularisers}
+\centering
+\footnotesize
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+ & $\wvec$ err & $r$ read-out & $r$ in-loop & blow-up \\
+ & [$^\circ$/s] & & & \\
+\midrule
+none                                   & 8.76 & 0.229 & 0.136 & 0.063 \\
+$\delta_{\text{shrink}I}=1$ (Eq.~6.61) & 8.65 & 0.233 & 0.102 & 0.050 \\
+$\delta_{\text{map}}=0.01$~\cite{guo2024emba}  & 8.72 & 0.221 & 0.156 & 0.027 \\
+$\delta_{\text{map}}=0.03$~\cite{guo2024emba}  & 8.69 & 0.214 & \textbf{0.193} & \textbf{0.000} \\
+$\delta_{\text{curl}}=0.3$ (ours)      & 8.61 & 0.261 & 0.167 & 0.077 \\
+$\delta_{\text{curl}}=0.6$ (ours)      & \textbf{8.50} & \textbf{0.344} & 0.195 & 0.047 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Handling Lens Distortion}
 \label{sec:distortion}
 
@@ -1952,6 +2056,10 @@ odometry, and SLAM,'' \emph{Int. J. Robotics Research}, vol.~36, no.~2, pp.
 S.~Guo and G.~Gallego, ``CMax-SLAM: Event-based rotational-motion bundle
 adjustment and SLAM system using contrast maximization,'' \emph{IEEE Trans.
 Robotics}, vol.~40, 2024.
+
+\bibitem{guo2024emba}
+S.~Guo and G.~Gallego, ``Event-based mosaicing bundle adjustment,'' in
+\emph{European Conf. Computer Vision (ECCV)}, 2024, pp. 479--496.
 
 \end{thebibliography}
 
