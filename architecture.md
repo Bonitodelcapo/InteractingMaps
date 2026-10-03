@@ -23,6 +23,8 @@
    - [6.5 interacting_maps/network_dissertation.py — Martel 2019](#65-interacting_mapsnetwork_dissertationpy--martel-2019)
    - [6.6 evaluation.py](#66-evaluationpy)
    - [6.7 find_segments.py & demo.py](#67-find_segmentspy--demopy)
+   - [6.8 report_tables.py & report_analysis.py](#68-report_tablespy--report_analysispy)
+   - [6.9 convert_ecrot.py](#69-convert_ecrotpy)
 7. [Cross-cutting concerns](#7-cross-cutting-concerns)
 
 ---
@@ -76,19 +78,26 @@ the pure-vision accuracy ceiling (see [§7](#7-cross-cutting-concerns)).
 
 ---
 
-## 3. The three model variants
+## 3. The five model variants
 
-Selected by the `model` string in the evaluation harness:
+Selected by the `model` string in the evaluation harness. `ALL_MODELS` in
+`evaluation.py` is the authoritative list; `resolve_models()` maps `--model all`
+onto it and `--model classic` onto the first three.
 
 | Variant | Class | Update scheme | Extra |
 |---|---|---|---|
 | `cook` | `InteractingMaps` | **Gauss-Seidel** (sequential; each sub-update sees the latest values) | — |
 | `thesis` | `InteractingMapsThesis` | **Jacobi** two-phase (all gradients from one snapshot, then all update) | — |
 | `thesis_imu` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`: a 4th cost pulling `R` toward the gyroscope reading (thesis §6.8.3 sensor fusion) |
+| `thesis_cmax` (V1) | `InteractingMapsThesis` | Jacobi two-phase | A **full Contrast-Maximization solve per frame** supplies the R anchor, reusing the `Cost_IMU` mechanism with `target = ω_cmax` instead of the gyro |
+| `thesis_cmax_v2` (V2) | `InteractingMapsThesis` | Jacobi two-phase | **One CMax gradient step per message-passing iteration** drives R directly; kinematics updates F only, no IMU |
 
-`thesis_imu` is the thesis's own fix for the β-ambiguity: the IMU gyro supplies
-an **absolute** angular-velocity reference that anchors the scale/sign, which
-pure vision lacks.
+The last three all attack the same problem from different directions. `thesis_imu`
+is the thesis's own fix for the β-ambiguity: the gyro supplies an **absolute**
+angular-velocity reference that anchors scale and sign, which pure vision lacks.
+The CMax variants replace that external sensor with a purely visual quantity that
+is nonetheless **not β-invariant** — maximizing IWE contrast picks out a specific
+ω magnitude, so it fixes the gauge without an IMU. See `cmax/cmax.md`.
 
 ---
 
@@ -142,12 +151,26 @@ InteractingMaps/
 │   ├── camera.py             (3) calibration + kinematic matrix C
 │   ├── network.py            (4) InteractingMaps  (Cook, Gauss-Seidel)
 │   └── network_dissertation.py (5) InteractingMapsThesis (+ Cost_IMU)
-├── evaluation.py             (6) RunConfig + experiments 1–8 + metrics
-├── find_segments.py          (7) discover constant-ω segments from imu.txt
+├── evaluation.py             (6) RunConfig + experiments 1–13 + metrics
+├── find_segments.py          (7) discover constant-ω segments (growth search)
+├── cmax/                     (8) Contrast Maximization
+│   ├── angular_velocity.py       CMaxAngularVelocity (IWE, warp, optimiser)
+│   ├── iwe_io.py                 IWE PNG/CSV logging, contrast curve, make_gif
+│   ├── cmax.md                   CMax design notes + findings
+│   └── distortion_validation.md  network-free distortion check
+├── convert_ecrot.py          (9) ECRot ROS bag → events/imu/omega_gt/calib .txt
+├── report_tables.py         (10) aggregate exp-12 runs → report tables
+├── report_analysis.py       (11) extra analyses from tracking.csv (no re-runs)
+├── best_config.py                best grid params per dataset/segment/model
 ├── demo.py                       live animated demo
 ├── data/<dataset>/
 │   ├── events.txt  calib.txt  imu.txt  groundtruth.txt  images.txt  images/
-└── results/                      per-run outputs + parameter_grid_*.csv
+│   └── omega_gt.txt              clean direct ω (ECRot only)
+└── results/
+    ├── <dataset>/<model>/<run>/  tracking.csv, summary.json, maps_*.npz, ...
+    ├── report/                   report_runs.csv, table_*.{csv,md,tex}, panels
+    │   └── analysis/             D5 figures
+    └── oat/                      one-at-a-time parameter sweeps (exp 13)
 ```
 
 ---
@@ -158,9 +181,22 @@ InteractingMaps/
 
 Pure data + a couple of helpers.
 
-- **`DATASET_SEGMENTS`** — per dataset, a list of hand-picked segments (from
-  `find_segments.py`). Each has `id`, `t_start`, `frame_duration`, `n_frames`,
-  `initial_R` (usually `None` → derived from IMU), `sensor_size`.
+- **`DATASET_SEGMENTS`** — per dataset, a list of segments found by
+  `find_segments.py`. Each has `id`, `t_start`, **`duration`**,
+  `frame_duration`, `n_frames`, `initial_R` (usually `None` → derived from IMU),
+  `sensor_size`.
+
+  > **`duration` vs `n_frames` — an important distinction.** A segment is an
+  > *interval where ω is quasi-constant*: that is a property of the **data**, and
+  > it is what `duration` records. `n_frames` and `frame_duration` are
+  > **hyperparameters of the experiment**. `evaluation.segment_n_frames()`
+  > therefore clamps any requested `n_frames` so that
+  > `n_frames · frame_duration ≤ duration`.
+  >
+  > This matters because earlier configs stored `n_frames = 150` (3.0 s) for
+  > every segment regardless of what had been validated, so segments were being
+  > run 2–6× longer than ω was actually constant. The measured constant-ω windows
+  > are **0.35–1.3 s** on the RPG datasets and **2.4 s** on ECRot.
 - **`DATASET_CONFIGS`** — `{name: segments[0]}`, a backward-compatible "first
   segment" shortcut.
 - **`THESIS_PARAMS`** / **`COOK_PARAMS`** — the relaxation step sizes `delta_*`
@@ -300,25 +336,120 @@ frame. So every run is the standard *recurrent* run.
 **Experiments** (`--exp N`):
 1. Single-frame convergence — maps at iteration checkpoints (visual).
 2. **Multi-frame tracking** — the core: per-frame ω_est vs ω_ref → `tracking.csv`,
-   `summary.json`, `tracking_plot.png` (+ optional 3-col video frames).
+   `summary.json`, `tracking_plot.png`, `maps_{center,final}.npz`
+   (+ optional 3-col video frames).
 3. Parameter influence — iterations & frame-duration sweeps for one frame.
 4. Qualitative video (alias of Exp 2 with frames).
 5. Assemble MP4s from saved frames (batch).
 6. Basin of attraction — vary `initial_R` distance from GT; does it converge?
 7. Full evaluation — all datasets × models × segments → `full_evaluation.csv`.
 8. **Parameter grid** — sweeps `frame_duration × n_frames × n_iters × delta_FR ×
-   delta_IMU` (thesis_imu only for `delta_IMU`) → `parameter_grid_<dataset>.csv`.
+   delta_IMU` → `parameter_grid_<dataset>.csv`. Stays on the classic 3 models.
+9. Distortion ablation — `undistort_events` vs `C_full`.
+10. **Maps panel** — one figure, rows = models, columns = V │ I │ |G| │ F │ ω.
+    A pure *assembler*: it reads the `maps_*.npz` that exp 2/12 already wrote, so
+    it costs seconds and runs no network. |G| and F share a colour scale across
+    rows so the models are actually comparable.
+11. **Iteration GIF** — one PNG per relaxation iteration for the frame at the
+    segment centre → `iteration_evolution.gif`, plus
+    `exp11_iter_convergence.png` (error and OFCE residual vs iteration) and
+    `exp11_iter_history.csv`. Runs the relaxation twice: pass 1 fixes the colour
+    scales so pass 2 does not flicker.
+12. **Report table** — the D3 runner: all models × datasets × segments with
+    identical settings → `results/report/report_runs.csv`.
+13. **OAT sweep** — hold the configuration fixed, vary one parameter at a time
+    (`OAT_AXES`) → `results/oat/<dataset>_<segment>_<model>/`.
 
-Exp 2/7/8 all funnel through `experiment_tracking`, so any scoring change lives
-in one place.
+Exps 2/7/9/10/12/13 all funnel through `experiment_tracking`, so any scoring
+change lives in one place.
+
+**`_net_step()` — the single model dispatch.** The five variants must be driven
+differently (V2 needs the raw events passed into `step()`; V1 needs a CMax solve
+first, then an anchor; `thesis_imu` needs the gyro; the rest need neither).
+That dispatch now lives in exactly one function, reused by every experiment.
+
+> Previously the dispatch was inline in `experiment_tracking` while exp 1
+> re-implemented the relaxation loop by hand. The hand-rolled copy never called
+> `Cost_CMax.set_frame()`, so `_bearings` stayed `None`, the CMax gradient's
+> early-return guard fired every iteration, and **`thesis_cmax_v2` silently ran
+> with CMax disabled** — no error, plausible-looking output. Sharing `_net_step`
+> makes that class of bug structurally impossible.
+
+**`on_iter` hook.** Both `step()` implementations accept `on_iter(iteration, net)`,
+called after each relaxation cycle (a no-op when `None`, so existing behaviour is
+bit-identical). Exp 11 uses it to snapshot every iteration. The alternative —
+calling `step(n_iters=1)` in a loop — would re-run the per-frame setup, including
+the O(N_events) `set_frame()` bearing recomputation, once per iteration.
+
+**`output_dir` uniqueness.** The folder name encodes dataset/model/segment/
+`t_start`/dt/`n_frames`/`n_iters`/`delta_IMU`/`delta_FR`/`distortion_mode`, plus
+— **only when non-default** — the spatial deltas, `cmax_lr` (V2), and a free-form
+`tag`. Defaults produce byte-identical names to before, so old results and
+`--resume` still work, while every OAT point lands in its own directory.
+`cmax_lr` was previously not encoded at all, so two V2 runs at different learning
+rates overwrote each other.
+
+**Crash-proof batch CSV.** Exp 12 writes a fixed `RUN_FIELDS` header up front and
+flushes one row per run, so an interrupted overnight job still leaves a valid
+file. `resume=True` reuses a run whose `summary.json` exists, and rows from
+earlier invocations that this batch did not touch are carried over — so running
+one dataset per night accumulates into a single table instead of clobbering it.
 
 ### 6.7 `find_segments.py` & `demo.py`
 
-- **`find_segments.py`** — slides a window over `imu.txt`, flags intervals of
-  low gyro-std (≈ constant ω) and prints a `DATASET_SEGMENTS` block to paste
-  into `config.py`.
+- **`find_segments.py`** — finds intervals of near-constant ω and prints a
+  `DATASET_SEGMENTS` block to paste into `config.py`.
+  - `--source {imu,omega_gt}` — read `imu.txt` (gyro) or a clean direct-ω
+    `omega_gt.txt` (ECRot).
+  - **Growth search**: from each candidate start the window is extended in
+    `--grow-step` increments for as long as `check_window_quality()` passes, and
+    the maximal passing interval is kept. This replaced a hardcoded ladder of
+    durations `[0.5, 1.0, 1.5, 2.0, 3.0] s`, which made every reported duration
+    snap to one of five values instead of reflecting the real motion.
+  - `--n-segments N` — relax thresholds until N segments are found, **printing
+    each relaxation step** so it is never silent.
+  - The `--export` block emits the *validated* `duration` plus an `n_frames`
+    that fits inside it. It previously emitted a fixed `n_frames = 150`
+    regardless of what had been validated — the source of the over-long
+    segments described in §6.1.
 - **`demo.py`** — live matplotlib animation (V, I, |G|, F, R, residuals) for a
   single dataset; qualitative sanity check.
+
+### 6.8 `report_tables.py` & `report_analysis.py`
+
+Both are **pure re-analysis** — they read artifacts already on disk and never run
+a network, so they can be re-run freely while a batch is still going.
+
+- **`report_tables.py`** — reads `results/report/report_runs.csv` (exp 12) and
+  emits `table_main` (per dataset × model, with **min/max/mean/std/median across
+  segments**), `table_overall` (per model, pooled) and `table_per_segment`, each
+  as `.csv` + `.md`, plus `table_main.tex` for the thesis. Failed runs are
+  reported and excluded. `--exclude <dataset>` drops a dataset from the headline
+  tables (used for `shapes_rotation`).
+- **`report_analysis.py --all`** — five figures from the per-frame
+  `tracking.csv` files:
+  1. **error & cumulative drift vs time** — `∫‖ω_est − ω_ref‖ dt` in degrees
+     separates a model that tracks from one that diverges;
+  2. **error decomposition** — splits the error into a *direction* part
+     (`|ω_ref|·2sin(dir/2)`) and a *scale* part (`|ω_ref|·|1/β − 1|`), the
+     quantitative form of the β-ambiguity claim;
+  3. **runtime vs accuracy** — from the `t_frame_s` column;
+  4. **error vs |ω_GT|** — does accuracy degrade at high rotation rate;
+  5. **GT noise floor** — mean `|gyro − reference|`, a *lower bound* on
+     measurable error for the mocap-referenced datasets.
+
+### 6.9 `convert_ecrot.py`
+
+Converts an [ECRot](https://github.com/tub-rip/ECRot) ROS1 bag into the
+pipeline's text format, using the pure-Python `rosbags` library (no ROS install)
+with the custom `dvs_msgs/EventArray` type registered.
+
+- Auto-detects the events / IMU / twist / pose / `CameraInfo` topics.
+- Writes `events.txt`, `imu.txt`, `calib.txt` and — when a twist topic exists —
+  **`omega_gt.txt`**, the clean direct ω.
+- Streams events to disk per packet; an earlier accumulate-then-sort version
+  needed ~7 GB of RAM for the ~79 M events of one sequence.
+- `--t-end` converts only a leading window.
 
 ---
 
@@ -328,6 +459,22 @@ in one place.
 `thesis`) settles at an arbitrary scale/sign and the ω *axis* drifts over time
 (direction error grows with track length). `thesis_imu` fixes it by anchoring R
 to the gyro (thesis: the IMU "totally removes color flips").
+
+**Three reference sources, in order of preference.** `get_reference_omega()`
+picks the best available:
+1. **`omega_gt.txt`** (`omega_direct`) — ECRot's `/cam0/twist`, ω given
+   *directly*. No differentiation, no mocap noise: the cleanest reference.
+2. **`groundtruth.txt`** (`groundtruth`) — RPG poses, ω by *differencing*
+   quaternions.
+3. **gyro** (`imu`) — last resort, and circular for `thesis_imu`.
+
+**ECRot as a controlled ablation.** ECRot renders the *same camera trajectory*
+through different scenes, so City and Street have **identical** `omega_gt.txt`
+(and poses) while `events.txt` differs (scene) and `imu.txt` differs (independent
+noise realisation, gyro ≈ true ω + ~0.002 rad/s). The pair is therefore a
+scene-content ablation at fixed motion. It also means each ECRot sequence is one
+continuous smooth rotation, which is why the segment finder returns a single
+(long, 2.4 s) segment for them no matter how the thresholds are relaxed.
 
 **Two ground truths, different jobs.**
 `imu.txt` gyro = *measured* ω (direct, 1 kHz, has bias) → **model input**.

@@ -21,6 +21,18 @@ the anchor.
 | **1a** | Standalone CMax front-end (`cmax/angular_velocity.py`) | ✅ done, validated |
 | **1b (V1)** | Feed CMax ω into the message passing (`model='thesis_cmax'`) | ✅ implemented, small-sample OK |
 | **2 (V2)** | CMax as the in-loop R-update rule (`model='thesis_cmax_v2'`) | ✅ implemented, small-sample OK |
+| **3** | Harness integration: both variants in every batch experiment (7, 10–13) | ✅ done |
+
+**Harness integration (step 3).** Both CMax variants are now first-class across
+the evaluation harness — they were previously reachable only one at a time:
+- `ALL_MODELS` / `resolve_models()` replaced the hardcoded
+  `['cook','thesis','thesis_imu']` lists, so `--model all` no longer **silently
+  drops both CMax models** (it did in exps 7 and 8).
+- `output_dir` now encodes `cmax_lr` for V2. It previously did not, so **two V2
+  runs at different learning rates overwrote each other** — which would have made
+  any `lr` sweep silently report identical numbers.
+- Exp 10 (maps panel), exp 11 (iteration GIF), exp 12 (report table) and exp 13
+  (OAT sweep) all handle both variants.
 
 **Key results (poster seg_C).**
 - **1a:** CMax agrees with the *independent* gyro to **8.4 °/s** and with smoothed
@@ -192,6 +204,67 @@ scale `lr ∝ 1/N²` for robustness across datasets.
 At a stable `lr`, V2 reaches **standalone-CMax quality** (vs IMU ~8.2) — *better than
 V1 vs IMU* because kinematics no longer competes for R. **Verify at scale.**
 
+### OAT re-measurement (exp 13, poster seg_A, scored vs mocap GT)
+
+Re-run through the OAT sweep once `output_dir` encoded `cmax_lr` (before that fix
+these four runs shared one directory, so the sweep could not have been trusted):
+
+| lr | mean err (°/s) | mean β |
+|---|---|---|
+| 1e-5 | 56.74 | 1.479 |
+| 3e-5 | 48.61 | 1.284 |
+| 1e-4 | 48.71 | **1.225** |
+| 3e-4 | 48.50 | 1.219 |
+
+**Refinement of the earlier claim.** The plateau is real but starts at ~**3e-5**,
+not 1e-5: at `lr = 1e-5` the ascent is too slow to reach the contrast optimum
+within the 75 iterations available per frame, leaving β materially further from 1
+(1.48 vs 1.22). So the usable range is ~**[3e-5, 3e-4]** with 1e-4 a reasonable
+default, rather than "[1e-5, 1e-4], flat". The `≳5e-4` divergence still stands.
+*(Short segment, mocap-referenced — treat the absolute errors as indicative.)*
+
+### Convergence within a frame (exp 11, poster seg_A, 10 iterations)
+
+| iteration | err (°/s) | β | OFCE residual |
+|---|---|---|---|
+| 1 | 33.2 | 1.360 | 0.039 |
+| 10 | 22.5 | 1.111 | 0.205 |
+
+β moves monotonically toward 1 — CMax is doing exactly the job it was introduced
+for. Note the **OFCE residual grows while the ω error falls**: CMax pulls R
+toward the true scale faster than I/G/F re-equilibrate, so the constraint
+`V + F·G = 0` is temporarily *less* satisfied at the better ω. A useful
+illustration that OFCE residual is not a proxy for ω accuracy under a β change.
+
+---
+
+## 3c. The silent V2 bug (found and fixed during harness integration)
+
+`Cost_CMax.compute_and_send_gradients()` starts with a guard:
+
+```python
+if self._bearings is None:
+    return          # silently does nothing
+```
+
+`_bearings` is filled by `Cost_CMax.set_frame(events, t_ref)`, which
+`InteractingMapsThesis.step()` calls **once per frame** when raw events are
+passed in. Any code path that relaxes the network *without* going through that
+setup therefore runs V2 with **the CMax gradient disabled** — no exception, no
+warning, and plausible-looking output, because the other costs still move the
+maps. `experiment_single_frame_convergence` (exp 1) re-implemented the relaxation
+loop by hand and never called `set_frame`, so it could never actually run V2.
+
+Fix: the five-way model dispatch was extracted into a single `_net_step()` in
+`evaluation.py`, reused by every experiment. Regression check: `cook` frame-0 ω
+is unchanged to 4 dp, and V2's ω now demonstrably moves across iterations
+(below), which is the specific symptom that was missing.
+
+**How to detect the failure mode:** run exp 11 on `thesis_cmax_v2` and look at
+`exp11_iter_history.csv`. In V2, R is driven *only* by CMax (kinematics updates F
+only, no IMU), so **a frozen ω across iterations means `set_frame` was never
+called.** A moving ω proves the gradient is live.
+
 ---
 
 ## 4. Findings (verification detail)
@@ -212,9 +285,18 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 
 ## 5. Open questions / next steps
 
-1. **Verify V1 & V2 at scale** (workstation): all poster segments, more frames, vs smoothed GT.
+1. **Verify V1 & V2 at scale** — now runnable end to end: `--exp 12 --model all`
+   covers every dataset × segment, and `--exp 13 --oat-axes cmax_lr` sweeps the
+   step size. *Pending the full workstation run.*
 2. **V2 `lr` robustness** — normalize the ascent step (`λ·grad/‖grad‖`) or scale
    `lr ∝ 1/N²` so it's not event-count-dependent. (Current: fixed `lr`, data-tuned.)
+   The OAT table above makes the case concrete: the useful range shifted once
+   measured properly, and it will shift again on denser scenes (ECRot is
+   ~280k events/frame vs poster's ~90k).
+2b. **Cost.** Measured on poster: `thesis_cmax_v2` ≈ **6.5 s/frame** vs
+   `thesis_imu` ≈ 1.25 s/frame (~5×); V1 ≈ 2.6 s/frame (~2×). Exp 12 records
+   `t_frame_s` per run so the accuracy/cost trade-off is quantified in
+   `report_analysis.py`'s runtime figure.
 3. **Window sweep** — CMax over a wider *centered* span `[t_mid ± {10,20,40} ms]`
    (sharper contrast peak, but ω must stay ~constant across it). Main accuracy lever.
 4. **CMax-init** — replace frame-0 gyro init with CMax(frame 0) for a fully IMU-free pipeline.
@@ -229,7 +311,11 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 |---|---|
 | `cmax/angular_velocity.py` | `CMaxAngularVelocity` — the front-end estimator |
 | `cmax/__init__.py` | exports `CMaxAngularVelocity` |
+| `cmax/iwe_io.py` | IWE PNG + `iwe_log.csv` logging, contrast curve, generic `make_gif` |
 | `cmax/cmax.md` | this document |
+| `cmax/distortion_validation.md` | network-free distortion check (Way 1 vs Way 2) |
 | `test_cmax_frontend.py` (root) | Step-1a verification vs GT & IMU |
 | `evaluation.py` | `model='thesis_cmax'` (V1), `'thesis_cmax_v2'` (V2) |
-| `interacting_maps/network_dissertation.py` | `Cost_CMax`, `Cost_Kinematics(update_r)`, `enable_cmax_r_update`, `step(events=…)` (V2) |
+| `interacting_maps/network_dissertation.py` | `Cost_CMax`, `Cost_Kinematics(update_r)`, `enable_cmax_r_update`, `step(events=…, on_iter=…)` (V2) |
+| `evaluation.py` → `_net_step()` | the single five-way model dispatch (see §3c) |
+| `evaluation.py` → exp 11 / exp 13 | iteration GIF + `cmax_lr` OAT sweep |
