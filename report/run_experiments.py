@@ -878,7 +878,9 @@ def main():
                     help="sweep: held-fixed values, e.g. 'delta_FR=0.10,delta_IMU=0.50'")
     ap.add_argument('--mode', default='coord', choices=['coord', 'grid'],
                     help='sweep: one axis at a time, or the full factorial')
-    ap.add_argument('--out', default='', help='sweep: output csv name')
+    ap.add_argument('--out', default='', help='sweep/main: output csv name')
+    ap.add_argument('--models', default='',
+                    help='main: comma-separated subset of MODELS to run')
     ap.add_argument('--durations', default='0.4,0.8,1.2',
                     help='readout: track lengths to score at (s)')
     ap.add_argument('--name', default='',
