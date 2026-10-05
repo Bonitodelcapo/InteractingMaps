@@ -1482,29 +1482,31 @@ accuracy.
 
 Which frame is shown matters, and not for presentational reasons. Repeating the
 figure at frame $18$ of the same segment --- the fastest-rotating frame of the
-track, $\lvert\wvecvert = 1.08$ against $1.01$\,rad/s here --- leaves the two
+track, $\lVert\wvec\rVert = 1.08$ against $1.01$\,rad/s here --- leaves the two
 unanchored rows unchanged but visibly degrades the three anchored ones. The
 cause is measurable rather than aesthetic: at that frame the standard deviation
-of $\Imap$ is $2.6$ times its track median for 	exttt{IMU-anchor} and $6.7$
-times for 	exttt{CMax-inloop}, against $0.9$ times for the unanchored network,
+of $\Imap$ is $2.6$ times its track median for \texttt{IMU-anchor} and $6.7$
+times for \texttt{CMax-inloop}, against $0.9$ times for the unanchored network,
 which has no anchor to disagree with. It is the excursion described in
-Sec.~ef{sec:mainresults}, and it concentrates where the anchor and the flow
+Sec.~\ref{sec:mainresults}, and it concentrates where the anchor and the flow
 constraint disagree most, which is where $\wvec$ is largest. The frame shown
 below is an ordinary one, at the median of that quantity for every model.
 
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=\textwidth]{fig_converge_bicycle}
+\includegraphics[width=\textwidth]{fig_converge_dynamic}
 \caption{Intensity map across the message-passing iterations of a single frame
-(\texttt{bicycle}, frame $40$). The network is initialised from noise at this
-frame rather than warm-started from the preceding one, so the sequence shows
-what one $20$\,ms event map alone supports; in a running track each frame would
-instead begin from its predecessor's converged state. $\Imap$ is never observed.
-The sequential scheme (top row) has structure after one iteration but diverges
-by iteration ten on this sequence; the simultaneous variants develop structure
-by iteration ten and sharpen to $75$, at which point the signage is legible. The
-corresponding figure for \texttt{poster}, where the sequential scheme remains
-stable, is in Appendix~\ref{app:converge}.}
+(\texttt{dynamic\_rotation}, frame $45$). The network is initialised from noise at
+this frame rather than warm-started from the preceding one, so the sequence
+shows what one $20$\,ms event map alone supports; in a running track each frame
+would instead begin from its predecessor's converged state. $\Imap$ is never
+observed. The sequential scheme (top row) has structure after a single
+iteration, because each sub-update sees the output of the one before it; the
+simultaneous variants are noise at iterations one and three, develop structure
+by about ten and sharpen to $75$, by which point the desk, the monitors and the
+seated person are legible. The frame is an ordinary one for every model, in the
+sense described above. The same figure on \texttt{bicycle}, where the sequential
+scheme instead diverges, is in Appendix~\ref{app:converge}.}
 \label{fig:converge}
 \end{figure*}
 
@@ -2237,19 +2239,23 @@ direction and saturation for magnitude.}
 \section{Convergence on the Synthetic Sequence}
 \label{app:converge}
 
-Figure~\ref{fig:converge_poster} is the counterpart of
-Fig.~\ref{fig:converge} on a real sequence. The pattern is the same --- the
+Figure~\ref{fig:converge_poster} is the counterpart of Fig.~\ref{fig:converge}
+on the synthetic sequence. The convergence-rate pattern is the same --- the
 sequential scheme has structure after one iteration, the simultaneous ones by
-about ten --- but here the sequential scheme does not diverge, so the two end in
-comparable states. Together the two figures show that the stability difference
-is sequence-dependent while the convergence-rate difference is not.
+about ten --- but here the sequential scheme does not stay stable: it diverges by
+iteration ten, while the four simultaneous variants do not. Together the two
+figures show that the stability difference is a property of the sequence,
+whereas the difference in convergence rate holds on both.
 
 \begin{figure*}[!t]
 \centering
-\includegraphics[width=\textwidth]{fig_converge_poster}
+\includegraphics[width=\textwidth]{fig_converge_bicycle}
 \caption{Intensity map across the iterations of a single frame
-(\texttt{poster}, first frame), for all five models, initialised from noise at
-that frame as in Fig.~\ref{fig:converge}.}
+(\texttt{bicycle}, frame $40$), for all five models, initialised from noise at
+that frame as in Fig.~\ref{fig:converge}. Here the sequential scheme of Cook
+\emph{et al.} has recognisable structure after one iteration and then diverges,
+collapsing to an almost flat field by iteration ten, while the four simultaneous
+variants converge normally on the same input.}
 \label{fig:converge_poster}
 \end{figure*}
 
