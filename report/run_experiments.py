@@ -36,6 +36,7 @@ import time
 import argparse
 import traceback
 import collections
+import glob
 
 import numpy as np
 
@@ -229,15 +230,32 @@ def cmd_grid(E, args):
 
 # ------------------------------------------------------------------ main table
 def cmd_main(E, args):
-    """Table III: every model on every reported segment."""
+    """Table III: every model on every reported segment.
+
+    --vary accepts the usual axis syntax so the same table can be produced at a
+    second configuration (e.g. 'delta_curl=0.6') and compared row for row. With
+    no --vary this is the configuration of config.py, i.e. the two published
+    models with no regulariser.
+    """
+    extra = {}
+    for name, vals in _parse_vary(args.vary):
+        extra[name] = vals[0]
+    tag = ''.join(f'_{k.replace("delta_", "")}{v:g}'
+                  for k, v in sorted(extra.items()))
+    poisson = extra.pop('poisson', None)
     nf = int(round(args.duration / args.dt))
-    path = os.path.join(OUTDIR, f'main_dt{int(args.dt*1000)}ms.csv')
+    # --sequences and --out let the table be built in pieces and merged, since
+    # 25 runs do not always fit in one session.
+    seqs = [x for x in SEGMENTS
+            if not args.sequences or x[3] in args.sequences.split(',')]
+    path = os.path.join(OUTDIR,
+                        args.out or f'main_dt{int(args.dt*1000)}ms{tag}.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
     wr = csv.writer(f)
     wr.writerow(['sequence', 'segment', 'model', 'err', 'median', 'dir', 'beta',
-                 'floor', 'floor_dir', 'secs'])
+                 'recon', 'recon_inloop', 'blowup', 'floor', 'floor_dir', 'secs'])
     f.flush()
-    for ds, sid, t0, lab in SEGMENTS:
+    for ds, sid, t0, lab in seqs:
         p = E.get_dataset_paths(ds)
         gt, imu = E.load_groundtruth(p['groundtruth']), E.load_imu(p['imu'])
         om = E.load_omega_gt(p.get('omega_gt'))
@@ -252,17 +270,23 @@ def cmd_main(E, args):
         print(f"\n### {lab}/{sid}  floor {floor:.2f} deg/s", flush=True)
         for model in MODELS:
             try:
-                rc = _cfg(E, ds, sid, t0, model, args.dt, nf)
+                rc = _cfg(E, ds, sid, t0, model, args.dt, nf,
+                          poisson=poisson, deltas=dict(extra))
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                 wr.writerow([ds, sid, model, round(s['mean_err_deg_s'], 2),
                              round(s['median_err_deg_s'], 2),
                              round(s['mean_dir_err_deg'], 2),
-                             round(s['mean_beta'], 3), round(floor, 2),
+                             round(s['mean_beta'], 3),
+                             round(s.get('recon_r_mean', float('nan')), 4),
+                             round(s.get('recon_r_mean_inloop', float('nan')), 4),
+                             round(s.get('blowup_frac', float('nan')), 4),
+                             round(floor, 2),
                              round(fdir, 2), round(secs)])
                 f.flush()
                 print(f"  {model:<16} err={s['mean_err_deg_s']:8.2f} "
                       f"dir={s['mean_dir_err_deg']:6.2f} "
-                      f"beta={s['mean_beta']:7.3f}", flush=True)
+                      f"beta={s['mean_beta']:7.3f} "
+                      f"r={s.get('recon_r_mean', float('nan')):6.3f}", flush=True)
             except Exception:
                 print(f"!!! {lab}/{model} FAILED", flush=True); traceback.print_exc()
     f.close()
@@ -592,6 +616,78 @@ def cmd_recon(E, args):
     print(f"-> fig_recon.pdf / .png")
 
 
+# ------------------------------------------ report figure: regulariser ablation
+def cmd_regfig(E, args):
+    """Figure for Sec. 'Regularising the Maps': what each term does to the image.
+
+    One row per sequence, one column per configuration, all showing the same
+    quantity -- the exact read-out of Eq. 6.64 from that run's final G, which
+    is what the ablation table scores. Reuses the runs made by
+
+        --what sweep --name ablation
+
+    and does not recompute them, so the pictures are the runs the numbers came
+    from rather than a fresh set that might differ.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    root = os.path.join('experiments', args.name or 'ablation')
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    # (column label, directory suffix)
+    cols = [('APS', None), ('none', ''),
+            (r'$\delta_{\mathrm{shrink}I}{=}1$', '_shrinkI1'),
+            (r'$\delta_{\mathrm{map}}{=}0.03$', '_map0.03'),
+            (r'$\delta_{\mathrm{curl}}{=}0.6$', '_curl0.6')]
+    nf = int(round(args.duration / args.dt))
+
+    fig, axes = plt.subplots(len(seqs), len(cols),
+                             figsize=(1.55 * len(cols), 1.5 * len(seqs)))
+    axes = np.atleast_2d(axes)
+    for row, (ds, sid, t0, lab) in enumerate(seqs):
+        ref = None
+        aps = _aps(E, ds, t0 + nf * args.dt)
+        if aps is not None:
+            ref = np.log(aps.astype(np.float64) + 1.0)
+        for col, (title, suffix) in enumerate(cols):
+            a = axes[row, col]
+            a.set_xticks([]); a.set_yticks([])
+            if col == 0:
+                img = aps
+            else:
+                pat = (f'{root}/{ds}/{args.model}/{sid}_t{t0:.3f}_'
+                       f'dt{int(args.dt*1000)}ms_n{nf}_*C_full{suffix}')
+                hits = [d for d in sorted(glob.glob(pat))
+                        if os.path.basename(d).endswith('C_full' + suffix)]
+                if not hits:
+                    a.axis('off'); continue
+                m = np.load(os.path.join(hits[0], 'maps_final.npz'))
+                img = solve_poisson_exact(m['G'], 'fft')
+                if ref is not None and ref.shape == img.shape:
+                    a.set_xlabel(f'$r={_corr(_crop(img), _crop(ref)):.2f}$',
+                                 fontsize=6.5, labelpad=1.5)
+            if img is None:
+                a.axis('off'); continue
+            lo, hi = np.percentile(img, [1, 99])
+            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
+            if row == 0:
+                a.set_title(title, fontsize=7)
+            if col == 0:
+                a.set_ylabel(lab, fontsize=7)
+        print(f'  {lab}: done', flush=True)
+    fig.tight_layout(pad=0.25, h_pad=0.35, w_pad=0.15)
+    out = os.path.join(ROOT, 'report', 'figures', 'fig_regularisers.pdf')
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    for ext in ('pdf', 'png'):
+        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
+                    bbox_inches='tight', pad_inches=0.02)
+    plt.close(fig)
+    print('-> fig_regularisers.pdf / .png')
+
+
 # ------------------------------------------------- fft vs dct, as a read-out
 def cmd_readout(E, args):
     """Which exact solver reconstructs the better image: fft or dct?
@@ -753,7 +849,8 @@ def cmd_baseline(E, args):
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
-            'readout': cmd_readout, 'recon': cmd_recon}
+            'readout': cmd_readout, 'recon': cmd_recon,
+            'regfig': cmd_regfig}
 
 
 def main():

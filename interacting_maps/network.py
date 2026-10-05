@@ -35,6 +35,7 @@ class InteractingMaps:
         delta_FR: float = 0.5,
         delta_map: float = 0.0,
         delta_shrinkI: float = 0.0,
+        delta_curl: float = 0.0,
         dist_coeffs=None,
         include_jacobian: bool = True,
     ):
@@ -58,6 +59,7 @@ class InteractingMaps:
         # networks rather than only on the thesis one.
         self.delta_map = delta_map        # eta*||G||^2, as in EMBA Eq. 10
         self.delta_shrinkI = delta_shrinkI  # the I term of thesis Eq. 6.61
+        self.delta_curl = delta_curl        # integrability prior on G (ours)
 
         # Constant calibration map (unit direction per pixel)
         #self.C = compute_calibration(H, W, fx, fy, cx, cy)  # (H, W, 3) is UNUSED
@@ -246,6 +248,12 @@ class InteractingMaps:
             # Applied once per cycle, as one more relation would be.
             if self.delta_map > 0.0:
                 self.G *= (1.0 - 2.0 * self.delta_map)
+
+            # Integrability prior: remove a fraction of the curl of G, the part
+            # of it that is no image's gradient (see evaluation.curl_share).
+            if self.delta_curl > 0.0:
+                from .network_dissertation import gradient_part
+                self.G -= self.delta_curl * (self.G - gradient_part(self.G))
         
             #self.update_F_from_VG(V)
             #self.update_G_from_VF(V)

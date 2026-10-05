@@ -203,6 +203,7 @@ COOK_PARAMS = dict(
                     # differ only in the update scheme, as the report requires
     delta_map=0.0,      # see THESIS_PARAMS; 0 = Cook et al. as published
     delta_shrinkI=0.0,  # Cook's Eq. 9 has no such term (its two I terms cancel)
+    delta_curl=0.0,     # integrability prior on G (ours); 0 = as published
 )
 
 ITERS_PER_FRAME = 75   # Thesis use 50-75; 
