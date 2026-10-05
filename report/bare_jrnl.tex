@@ -1480,6 +1480,18 @@ simultaneous variants converge normally on the same input. This is consistent
 with the thesis' preference for the simultaneous scheme on grounds other than
 accuracy.
 
+Which frame is shown matters, and not for presentational reasons. Repeating the
+figure at frame $18$ of the same segment --- the fastest-rotating frame of the
+track, $\lvert\wvecvert = 1.08$ against $1.01$\,rad/s here --- leaves the two
+unanchored rows unchanged but visibly degrades the three anchored ones. The
+cause is measurable rather than aesthetic: at that frame the standard deviation
+of $\Imap$ is $2.6$ times its track median for 	exttt{IMU-anchor} and $6.7$
+times for 	exttt{CMax-inloop}, against $0.9$ times for the unanchored network,
+which has no anchor to disagree with. It is the excursion described in
+Sec.~ef{sec:mainresults}, and it concentrates where the anchor and the flow
+constraint disagree most, which is where $\wvec$ is largest. The frame shown
+below is an ordinary one, at the median of that quantity for every model.
+
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{fig_converge_bicycle}
@@ -2222,7 +2234,7 @@ direction and saturation for magnitude.}
 \end{figure*}
 
 
-\section{Convergence on a Real Sequence}
+\section{Convergence on the Synthetic Sequence}
 \label{app:converge}
 
 Figure~\ref{fig:converge_poster} is the counterpart of
