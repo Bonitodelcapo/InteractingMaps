@@ -16,7 +16,9 @@ the thesis version (network_dissertation.py) which uses simultaneous updates.
 """
 
 import numpy as np
-from .camera import compute_calibration, build_kinematic_matrix
+from .camera import (compute_calibration, build_kinematic_matrix,
+                     build_R_normal_equations, solve_R_lstsq,
+                     CLIP_I, CLIP_G, CLIP_F)
 
 
 class InteractingMaps:
@@ -189,10 +191,8 @@ class InteractingMaps:
 
         The left-hand side matrix M = Σ C_mat^T @ C_mat is constant (3x3).
         """
-        # C_mat is (H, W, 2, 3)
-        # M = Σ C_mat[h,w]^T @ C_mat[h,w]  → sum of (3,2)@(2,3) = (3,3)
-        self._M_normal = np.einsum('hwji,hwjk->ik', self._C_mat, self._C_mat)  # (3, 3)
-        self._M_inv = np.linalg.inv(self._M_normal)  # (3, 3)
+        # Shared with the thesis network (see camera.build_R_normal_equations).
+        self._M_inv = build_R_normal_equations(self._C_mat)  # (3, 3)
 
     def update_R_from_FC(self) -> None:
         """
@@ -201,16 +201,10 @@ class InteractingMaps:
         Normal equations:  M @ R_new = Σ C_mat^T @ F
         R ← (1-δ)·R + δ·R_new
         """
-        # Right-hand side: v = Σ C_mat^T @ F  → (3,)
-        # C_mat is (H,W,2,3):  subscript 'hwji' → j=flow(2), i=rot(3)
-        # F is (H,W,2):        subscript 'hwj'  → j=flow(2)
-        # Contract over h,w,j; output i → (3,)
-        v = np.einsum('hwji,hwj->i', self._C_mat, self.F)  # ← FIX: 'hwi->j' → 'hwj->i'
+        # Closed-form R* = M⁻¹·ΣCᵀF (shared with the thesis network), then blend.
+        R_new = solve_R_lstsq(self._M_inv, self._C_mat, self.F)
 
-        # Solve: R_new = M^{-1} @ v
-        R_new = self._M_inv @ v
-
-        # Blend toward new estimate
+        # Blend toward new estimate (Gauss-Seidel: direct, in place)
         self.R = (1.0 - self.delta_FR) * self.R + self.delta_FR * R_new
 
     # ------------------------------------------------------------------
@@ -262,11 +256,11 @@ class InteractingMaps:
             #self.update_F_from_RC()
             #self.update_R_from_FC()
         
-            # Value bounds — prevents runaway feedback
-            # In a well-behaved system these are never hit
-            np.clip(self.F, -10.0, 10.0, out=self.F)
-            np.clip(self.G, -5.0, 5.0, out=self.G)
-            np.clip(self.I[:self.H, :self.W], -10.0, 10.0,
+            # Value bounds — prevents runaway feedback (shared with thesis net).
+            # In a well-behaved system these are never hit. Cook does not clip R.
+            np.clip(self.F, -CLIP_F, CLIP_F, out=self.F)
+            np.clip(self.G, -CLIP_G, CLIP_G, out=self.G)
+            np.clip(self.I[:self.H, :self.W], -CLIP_I, CLIP_I,
                     out=self.I[:self.H, :self.W])
 
     # ------------------------------------------------------------------

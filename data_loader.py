@@ -259,10 +259,10 @@ class EventFrameSequence:
 
         print(f"Using calib.txt: fx={self.calib.fx:.1f} fy={self.calib.fy:.1f} "
               f"cx={self.calib.cx:.1f} cy={self.calib.cy:.1f}")
-        print(f"Sensor size: {self.W}×{self.H}")
+        print(f"Sensor size: {self.W}x{self.H}")
         print(f"Principal point offset from center: "
-              f"Δx={self.calib.cx - self.W/2:.1f}px, "
-              f"Δy={self.calib.cy - self.H/2:.1f}px")
+              f"dx={self.calib.cx - self.W/2:.1f}px, "
+              f"dy={self.calib.cy - self.H/2:.1f}px")
 
         t_end = t_start + n_frames * frame_duration + 0.1
         self._events = load_events_fast(events_txt, t_start=t_start, duration=t_end - t_start)

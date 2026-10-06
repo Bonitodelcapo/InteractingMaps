@@ -28,7 +28,9 @@ Key implementation detail:
 """
 
 import numpy as np
-from .camera import compute_calibration, build_kinematic_matrix
+from .camera import (compute_calibration, build_kinematic_matrix,
+                     build_R_normal_equations, solve_R_lstsq,
+                     CLIP_I, CLIP_G, CLIP_F, CLIP_R)
 
 # ---------------------------------------------------------------------------
 # 1. THE CORE ARCHITECTURE
@@ -371,9 +373,9 @@ class Cost_Kinematics(Cost):
         # the CMax V2 variant, where R is driven exclusively by Cost_CMax.
         self.update_r = update_r
 
-        # Precompute M = Σ C^T·C and M⁻¹ (Eq. 6.48, footnote 18)
-        self._M = np.einsum('hwji,hwjk->ik', C_mat, C_mat)  # (3, 3)
-        self._M_inv = np.linalg.inv(self._M)  # (3, 3)
+        # Precompute M⁻¹ for R* = M⁻¹·ΣCᵀF (Eq. 6.48, footnote 18); shared with
+        # the Cook network (see camera.build_R_normal_equations).
+        self._M_inv = build_R_normal_equations(C_mat)  # (3, 3)
 
     def compute_and_send_gradients(self):
         f = self.q['F'].value   # (H, W, 2)
@@ -389,9 +391,8 @@ class Cost_Kinematics(Cost):
         if not self.update_r:
             return   # V2: R is CMax-driven; kinematics only propagates R → F
 
-        # Ω: blend toward Ω* = M⁻¹·v (Eq. 6.49-6.50)
-        v = np.einsum('hwji,hwj->i', self.C_mat, f)  # (3,)
-        R_target = self._M_inv @ v  # (3,)
+        # Ω: blend toward Ω* = M⁻¹·ΣCᵀF (Eq. 6.49-6.50; shared solve, Jacobi step)
+        R_target = solve_R_lstsq(self._M_inv, self.C_mat, f)  # (3,)
         error_R = r - R_target
         self.q['R'].add_gradient(error_R * self.delta_FR)
 
@@ -635,11 +636,12 @@ class InteractingMapsThesis:
             self.q_F.update(1.0)
             self.q_R.update(1.0)
 
-            # Stability clipping
-            self.q_I.value = np.clip(self.q_I.value, -10.0, 10.0)
-            self.q_G.value = np.clip(self.q_G.value, -5.0, 5.0)
-            self.q_F.value = np.clip(self.q_F.value, -10.0, 10.0)
-            self.q_R.value = np.clip(self.q_R.value, -1.0, 1.0)
+            # Stability clipping (I/G/F bounds shared with the Cook network;
+            # R clip is thesis-only). See camera.py CLIP_* constants.
+            self.q_I.value = np.clip(self.q_I.value, -CLIP_I, CLIP_I)
+            self.q_G.value = np.clip(self.q_G.value, -CLIP_G, CLIP_G)
+            self.q_F.value = np.clip(self.q_F.value, -CLIP_F, CLIP_F)
+            self.q_R.value = np.clip(self.q_R.value, -CLIP_R, CLIP_R)
 
     # ------------------------------------------------------------------
     # Diagnostics

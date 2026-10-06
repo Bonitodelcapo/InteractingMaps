@@ -42,6 +42,8 @@ import matplotlib.colors as mcolors
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
+
+import provenance  # merged run.json reader (after sys.path points at ROOT)
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -99,7 +101,7 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
     hits = []
     for d in sorted(glob.glob(f'results/{ds}/{model}/{sid}_t{t0}_dt20ms_n150_*')):
         try:
-            cfg = json.load(open(os.path.join(d, 'params.json')))
+            cfg = provenance.read_config(d)
             pr = cfg['params']
         except Exception:
             continue
@@ -150,7 +152,7 @@ def fig_beta_speed(E):
             if d is None:
                 print(f'    (missing {ds}/{sid}/{model} dFR={d_fr})')
                 continue
-            b = json.load(open(os.path.join(d, 'summary.json')))['mean_beta']
+            b = provenance.read_summary(d)['mean_beta']
             data[key][0].append(w)
             data[key][1].append(b)
 

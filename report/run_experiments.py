@@ -51,6 +51,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
+import provenance  # merged run.json reader (after sys.path points at ROOT)
+
 # the segments reported in Table II -- do not substitute others
 SEGMENTS = [
     ('boxes_rotation',    'seg_B', 7.322,  'boxes'),
@@ -150,7 +152,7 @@ def _split(point):
 def _run(E, rc, save_frames, stride):
     t = time.time()
     E.experiment_tracking(rc, save_frames=save_frames, frame_stride=stride)
-    s = json.load(open(os.path.join(rc.output_dir, 'summary.json')))
+    s = provenance.read_summary(rc.output_dir)
     return s, time.time() - t
 
 

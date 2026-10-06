@@ -51,15 +51,38 @@ Usage:
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import sys
 import csv
 import json
 import time as time_module
+
+# The pipeline prints Unicode (omega, delta, beta, degree signs) throughout. On a
+# Windows console (cp1252) those crash with UnicodeEncodeError. Reconfigure stdout
+# to UTF-8 once, here at the hub every entry point imports (CLI, tests, report),
+# so no caller needs PYTHONUTF8=1. Guarded: never fails, degrades to 'replace'.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
                     ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
                     get_dataset_paths, get_initial_R_from_imu)
 from best_config import best_params
 from data_loader import EventFrameSequence
+import provenance
+
+# Helpers extracted into focused modules (R3 of architecture_review.md) and
+# re-exported here so existing callers (incl. report scripts' E.<name>) are
+# unchanged. See eval_io.py / metrics.py / viz.py.
+from eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu,
+                     get_gyro_for_frame, load_groundtruth, _quat_to_rotmat,
+                     gt_omega_body, load_omega_gt, omega_gt_at,
+                     get_reference_omega)
+from metrics import (compute_metrics, curl_share, _intensity_stats,
+                     _corr_to_aps, _recon_scores)
+from viz import normalise, normalise_robust, flow_to_rgb, grad_to_rgb
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
 
@@ -214,6 +237,7 @@ class RunConfig:
         return {
             'dataset': self.dataset,
             'model': self.model,
+            'segment_id': self.segment_id,
             't_start': self.t_start,
             'frame_duration': self.frame_duration,
             'n_frames': self.n_frames,
@@ -226,12 +250,20 @@ class RunConfig:
             'initial_R': self.initial_R.tolist(),
             'params': self.params,
         }
-    
+
+    def save_run(self, summary=None):
+        """Write the merged run.json (provenance + config + summary).
+
+        Called once early with summary=None, so config and provenance survive a
+        crash, and again at the end with the metrics filled in. Replaces the old
+        split params.json/summary.json (read_run still falls back to those for
+        runs written before this change)."""
+        return provenance.save_run(self.output_dir, self.to_dict(), summary)
+
     def save_params(self):
-        """Save params.json to output directory."""
-        os.makedirs(self.output_dir, exist_ok=True)
-        with open(os.path.join(self.output_dir, 'params.json'), 'w') as f:
-            json.dump(self.to_dict(), f, indent=2)
+        """Back-compat: write the early run.json (config + provenance, no metrics
+        yet). Kept because exp 1/3/6 call it and have no summary to record."""
+        self.save_run()
     
     def __repr__(self):
         return (f"RunConfig({self.dataset}, {self.model}, "
@@ -284,248 +316,6 @@ def resolve_best_kwargs(dataset, segment_id, model, cli_overrides=None):
     return kw
 
 
-def load_imu(path: str) -> np.ndarray:
-    return np.loadtxt(path, dtype=np.float64)
-
-def get_gyro_for_frame(imu_data, t_lo, t_hi):
-    mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
-    if np.sum(mask) == 0:
-        idx = np.argmin(np.abs(imu_data[:, 0] - (t_lo + t_hi) / 2))
-        return imu_data[idx, 4:7]
-    return np.mean(imu_data[mask, 4:7], axis=0)
-
-
-# ---------------------------------------------------------------------------
-# Ground-truth reference from groundtruth.txt (Vicon poses)
-#
-# The IMU gyro (imu.txt) is the camera's OWN sensor. When it is also fed to the
-# thesis_imu model as `omega_imu`, scoring against it is circular (the model is
-# graded against its own input). groundtruth.txt comes from an INDEPENDENT
-# motion-capture rig, so scoring against it is unbiased.
-#
-# ω is recovered by differencing two successive orientation quaternions:
-#     dR_body = R1.T @ R2      (right-invariant → CAMERA BODY FRAME)
-# NOT R2 @ R1.T, which would give world-frame ω. The network and the gyro both
-# report body-frame ω, so the reference must be body-frame too.
-# ---------------------------------------------------------------------------
-
-# Which source to SCORE against: 'groundtruth' (Vicon, independent) or 'imu'
-# (gyro — only use for datasets that ship no groundtruth.txt). Model INPUT for
-# thesis_imu is always the gyro regardless of this setting.
-SCORE_AGAINST = 'groundtruth'
-
-# Half-width (seconds) of the bracket used to difference Vicon poses into an
-# angular velocity. 0.05 -> a +-50 ms bracket around the frame midpoint.
-# Set to frame_duration/2 to recover the old (noisy) per-frame differencing.
-GT_DIFF_HALFWIDTH = 0.05
-
-
-def load_groundtruth(path: str):
-    """Load groundtruth.txt: [t tx ty tz qx qy qz qw] → (N, 8), or None."""
-    if not os.path.exists(path):
-        return None
-    return np.loadtxt(path, dtype=np.float64)
-
-
-def _quat_to_rotmat(q):
-    """Quaternion (qx, qy, qz, qw) → 3×3 rotation matrix R_wc."""
-    qx, qy, qz, qw = q / np.linalg.norm(q)
-    return np.array([
-        [1 - 2*(qy**2 + qz**2),   2*(qx*qy - qz*qw),   2*(qx*qz + qy*qw)],
-        [    2*(qx*qy + qz*qw), 1 - 2*(qx**2 + qz**2),   2*(qy*qz - qx*qw)],
-        [    2*(qx*qz - qy*qw),   2*(qy*qz + qx*qw), 1 - 2*(qx**2 + qy**2)],
-    ])
-
-
-def gt_omega_body(gt_data, t_lo, t_hi):
-    """
-    Body-frame angular velocity (rad/s) from two groundtruth.txt poses that
-    bracket the frame window [t_lo, t_hi], via dR_body = R1.T @ R2.
-    """
-    idx1 = int(np.argmin(np.abs(gt_data[:, 0] - t_lo)))
-    idx2 = int(np.argmin(np.abs(gt_data[:, 0] - t_hi)))
-    if idx1 == idx2:
-        idx2 = min(idx1 + 1, len(gt_data) - 1)
-    actual_dt = gt_data[idx2, 0] - gt_data[idx1, 0]
-    if abs(actual_dt) < 1e-10:
-        return np.zeros(3)
-
-    R1 = _quat_to_rotmat(gt_data[idx1, 4:8])
-    R2 = _quat_to_rotmat(gt_data[idx2, 4:8])
-    dR = R1.T @ R2                      # body frame (NOT R2 @ R1.T)
-
-    cos_a = np.clip((np.trace(dR) - 1.0) / 2.0, -1.0, 1.0)
-    angle = np.arccos(cos_a)
-    if abs(angle) < 1e-10:
-        return np.zeros(3)
-    skew = (dR - dR.T) / (2.0 * np.sin(angle) + 1e-15)
-    axis = np.array([skew[2, 1], skew[0, 2], skew[1, 0]])
-    return axis * angle / actual_dt    # rad/s, body frame
-
-
-def load_omega_gt(path):
-    """
-    Load omega_gt.txt (t wx wy wz) if the dataset provides one. Returns None if
-    absent. Written by convert_ecrot.py: for the ECRot synthetic bags this is
-    the simulator's EXACT angular velocity, taken from the twist topic.
-    """
-    if not path or not os.path.exists(path):
-        return None
-    data = np.loadtxt(path, dtype=np.float64)
-    return data.reshape(1, -1) if data.ndim == 1 else data
-
-
-def omega_gt_at(omega_data, t_lo, t_hi):
-    """Exact reference omega for a frame window (rad/s).
-
-    Averaged over the SAME +-GT_DIFF_HALFWIDTH bracket the differenced-pose
-    reference uses. The bracket exists because Vicon gives poses, not rates, and
-    differencing them over one 20 ms frame is dominated by pose noise -- but if
-    it were applied only there, the real sequences would be scored against a
-    smoothed reference and the synthetic ones against an instantaneous one, and
-    the two columns of every table would not be comparable. Applying it to both
-    costs nothing where omega is steady (on the ECRot segments it changes the
-    error by under 0.01 deg/s) and removes the asymmetry.
-    """
-    t_mid = 0.5 * (t_lo + t_hi)
-    m = (omega_data[:, 0] >= t_mid - GT_DIFF_HALFWIDTH) & \
-        (omega_data[:, 0] <= t_mid + GT_DIFF_HALFWIDTH)
-    if m.sum() > 0:
-        return omega_data[m, 1:4].mean(axis=0)
-    i = int(np.argmin(np.abs(omega_data[:, 0] - t_mid)))
-    return omega_data[i, 1:4]
-
-
-def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
-    """
-    Angular velocity used to SCORE the estimate (independent of model input).
-    Returns (omega_ref, source_str).
-
-    Preference order:
-      1. omega_gt.txt, when the dataset ships one. For the ECRot synthetic bags
-         this is the simulator's exact angular velocity, so it carries no
-         differencing error at all.
-      2. groundtruth.txt poses, differenced. Over a single 20 ms frame window
-         that difference is dominated by pose noise -- the gyro itself scores
-         8-25 deg/s against such a reference -- so we difference over a wider
-         bracket CENTRED on the frame midpoint (GT_DIFF_HALFWIDTH). Even then
-         the differencing costs ~0.8 deg/s, measured against the exact twist on
-         the synthetic sequences.
-      3. the gyro, for datasets with neither.
-    """
-    if SCORE_AGAINST == 'groundtruth' and omega_data is not None:
-        return omega_gt_at(omega_data, t_lo, t_hi), 'omega_gt'
-    if SCORE_AGAINST == 'groundtruth' and gt_data is not None:
-        t_mid = 0.5 * (t_lo + t_hi)
-        return (gt_omega_body(gt_data,
-                              t_mid - GT_DIFF_HALFWIDTH,
-                              t_mid + GT_DIFF_HALFWIDTH),
-                'groundtruth')
-    return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
-
-def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
-    """Pearson r between an intensity map and the nearest APS frame.
-
-    Invariant to scale and offset, the two freedoms the reconstruction has.
-    Interior only: the border is where the Poisson boundary assumption is
-    weakest. nan when the dataset ships no APS.
-    """
-    if not gt_images or img is None:
-        return float('nan')
-    try:
-        import matplotlib.pyplot as plt
-        times = np.array([t for t, _ in gt_images])
-        aps = plt.imread(gt_images[int(np.argmin(np.abs(times - t_mid)))][1])
-        if aps.ndim == 3:
-            aps = aps.mean(-1)
-        ref = np.log(aps.astype(np.float64) + 1.0)
-        if ref.shape != img.shape:
-            return float('nan')
-        h, w = img.shape
-        dy, dx = int(h * crop_frac), int(w * crop_frac)
-        a = img[dy:h - dy, dx:w - dx].ravel()
-        b = ref[dy:h - dy, dx:w - dx].ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        d = np.sqrt((a * a).sum() * (b * b).sum())
-        return float((a * b).sum() / d) if d > 0 else float('nan')
-    except Exception:
-        return float('nan')
-
-
-def _recon_scores(net, H, W, gt_images, t_mid):
-    """Reconstruction quality of BOTH intensity maps the pipeline produces.
-
-    in-loop : net.I, carried across frames by the warm start, which is what the
-              saved frames show.
-    read-out: the exact solve of Eq. 6.64 applied to the current G alone.
-
-    They are different images and they do not rank runs the same way -- a term
-    that shrinks G weakens the read-out while leaving the accumulated in-loop
-    map intact. Scoring only one of them silently picks a winner.
-    """
-    from interacting_maps.network_dissertation import solve_poisson_exact
-    inloop = _corr_to_aps(np.asarray(net.I[:H, :W], dtype=np.float64),
-                          gt_images, t_mid)
-    try:
-        ro = _corr_to_aps(solve_poisson_exact(net.G[:H, :W], 'fft'),
-                          gt_images, t_mid)
-    except Exception:
-        ro = float('nan')
-    return inloop, ro
-
-
-def curl_share(G):
-    """Fraction of G's energy that is NOT any image's gradient.
-
-    G is a gradient field only if it is curl-free: walking a closed loop and
-    summing the steps must return zero, since the two endpoints are the same
-    pixel and must have the same intensity. Nothing in the model enforces that.
-    Cost_Spatial pulls G towards grad(I), but Cost_OFCE only needs F.G = -V at
-    each pixel separately and couples no neighbours, so the two costs settle on
-    a compromise that is generally not curl-free -- and the aperture problem
-    leaves the component of G perpendicular to F free to drift.
-
-    Recovering I from G is a least-squares projection onto the gradient fields,
-    so whatever curl G carries is silently discarded. This measures how much
-    that is, by Helmholtz decomposition: project G onto the gradient subspace
-    and return the relative energy of the residual. 0 means G is exactly some
-    image's gradient; 0.4 means nearly half of it describes no image at all.
-    """
-    G = np.asarray(G, dtype=np.float64)
-    H, W = G.shape[:2]
-    gx, gy = G[..., 0], G[..., 1]
-    dx = np.exp(2j * np.pi * np.fft.fftfreq(W)[None, :]) - 1.0
-    dy = np.exp(2j * np.pi * np.fft.fftfreq(H)[:, None]) - 1.0
-    den = np.abs(dx) ** 2 + np.abs(dy) ** 2
-    den[0, 0] = 1.0
-    phi = (np.conj(dx) * np.fft.fft2(gx) + np.conj(dy) * np.fft.fft2(gy)) / den
-    px = np.real(np.fft.ifft2(dx * phi))
-    py = np.real(np.fft.ifft2(dy * phi))
-    tot = float((gx ** 2 + gy ** 2).sum())
-    if tot <= 0:
-        return 0.0
-    return float(((gx - px) ** 2 + (gy - py) ** 2).sum() / tot)
-
-
-def _intensity_stats(I, radius=10):
-    """Two numbers that separate a photograph from an edge map.
-
-    low_freq_share : fraction of |FFT(I)| inside a disc of `radius` cycles.
-        The iterative Poisson update (Eq. 6.61) cannot build these modes, so
-        an edge map scores near zero while a real intensity image does not.
-    contrast       : std of I, the quantity the beta scale ambiguity acts on.
-    """
-    I = np.asarray(I, dtype=np.float64)
-    F = np.abs(np.fft.fftshift(np.fft.fft2(I - I.mean())))
-    h, w = I.shape
-    yy, xx = np.mgrid[0:h, 0:w]
-    r = np.hypot(yy - h // 2, xx - w // 2)
-    tot = F.sum()
-    return {'low_freq_share': float(F[r < radius].sum() / tot) if tot > 0 else 0.0,
-            'contrast': float(I.std())}
-
-
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig; distortion handling from rc.distortion_mode."""
     from data_loader import CameraCalibration
@@ -557,71 +347,15 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
             dist_coeffs=dist_coeffs,
             **rc.params
         )
-        net.I = np.random.randn(H+1, W+1) * 0.001
+        # Seeded (matches the thesis init's default_rng(42)) so Cook runs are
+        # reproducible; the global np.random here previously made them vary
+        # run-to-run. The I-noise only seeds ∇I, so fixing the seed is strictly a
+        # reproducibility gain, not a tuning change.
+        net.I = np.random.default_rng(42).standard_normal((H+1, W+1)) * 0.001
         net.G = np.zeros((H, W, 2), dtype=np.float64)
         net.F = np.einsum('hwij,j->hwi', net._C_mat, rc.initial_R)
         net.R = rc.initial_R.copy()
     return net
-
-def normalise(x):
-    lo, hi = x.min(), x.max()
-    return (x - lo) / (hi - lo + 1e-10)
-
-def normalise_robust(x, lo_pct=1.0, hi_pct=99.0):
-    """Percentile min-max to [0,1] for stable frame-to-frame display.
-
-    Plain min-max maps the extreme pixels to 0/1, so a single outlier that
-    moves between frames rescales the whole image -> the video flickers darker
-    /brighter. Clipping to robust percentiles (1st/99th) fixes the display
-    range against outliers, and because I is only defined up to a gauge
-    (offset/scale) this also cancels that drift, keeping brightness steady.
-    """
-    lo, hi = np.percentile(x, [lo_pct, hi_pct])
-    if hi - lo < 1e-9:
-        return np.full_like(x, 0.5, dtype=np.float64)
-    return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
-
-def flow_to_rgb(flow):
-    from matplotlib.colors import hsv_to_rgb
-    fx, fy = flow[..., 0], flow[..., 1]
-    angle = (np.arctan2(fy, fx) + np.pi) / (2 * np.pi)
-    mag = np.sqrt(fx**2 + fy**2)
-    mag_norm = mag / (mag.max() + 1e-10)
-    hsv = np.stack([angle, np.ones_like(angle), mag_norm], axis=-1)
-    return hsv_to_rgb(hsv)
-
-def grad_to_rgb(G, pct=99.0):
-    """
-    Spatial gradient as colour: HUE = direction, VALUE = magnitude.
-
-    Showing only |G| hides the thing the gradient map is for -- which way the
-    intensity is changing -- so an edge and its mirror image look identical.
-    Hue makes direction visible (each orientation its own colour) while
-    brightness still carries magnitude. Magnitude is scaled by a percentile so
-    one hot pixel cannot black out the rest of the frame.
-    """
-    from matplotlib.colors import hsv_to_rgb
-    gx, gy = G[..., 0], G[..., 1]
-    ang = (np.arctan2(gy, gx) + np.pi) / (2 * np.pi)     # direction -> hue
-    mag = np.hypot(gx, gy)
-    hi = np.percentile(mag, pct)
-    val = np.clip(mag / (hi + 1e-12), 0.0, 1.0)
-    return hsv_to_rgb(np.stack([ang, np.ones_like(ang), val], axis=-1))
-
-
-def compute_metrics(omega_est, omega_gt):
-    """Compute all metrics for a single frame."""
-    err = np.linalg.norm(omega_est - omega_gt) * 180 / np.pi
-    norm_est = np.linalg.norm(omega_est)
-    norm_gt = np.linalg.norm(omega_gt)
-    if norm_est > 1e-6 and norm_gt > 1e-6:
-        cos_a = np.clip(np.dot(omega_est, omega_gt) / (norm_est * norm_gt), -1, 1)
-        dir_err = np.degrees(np.arccos(cos_a))
-        beta = norm_gt / norm_est
-    else:
-        dir_err = 180.0
-        beta = 0.0
-    return err, dir_err, beta
 
 
 # ===========================================================================
@@ -758,8 +492,8 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     ALWAYS saves:
       - tracking.csv (per-frame metrics)
       - tracking_plot.png (ω over time)
-      - summary.json
-      - params.json
+      - run.json (provenance + config + summary, one self-describing file)
+    Reported runs are also mirrored to the local MLflow store (see provenance.py).
     If save_frames=True (default):
       - video_frames/frame_XXXX.png (3-col: Events | I | GT)
     """
@@ -973,8 +707,14 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
             'blowup_frac': float((istd > 5.0 * med).mean()) if med > 0 else 0.0,
         })
 
-    with open(os.path.join(rc.output_dir, 'summary.json'), 'w') as f:
-        json.dump(summary, f, indent=2)
+    # One self-describing file per run: provenance + config + metrics (R1).
+    rc.save_run(summary)
+
+    # Mirror to the local MLflow store. Reported runs (out_root == 'results') are
+    # logged by default; throwaway sweeps under experiments/ are skipped unless
+    # IM_MLFLOW_ALL=1, so the tracking store is not flooded. IM_MLFLOW=0 disables.
+    if os.environ.get('IM_MLFLOW_ALL') == '1' or rc.out_root == 'results':
+        provenance.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
 
     print(f"\n  {'='*50}")
     print(f"  RESULTS: {rc.model}, {rc.dataset}, {rc.duration_s:.1f}s")

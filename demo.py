@@ -97,7 +97,8 @@ else:
     net.F = np.einsum('hwij,j->hwi', net._C_mat, initial_R)
 
 if USE_THESIS_VERSION and USE_IMU:
-    from archive_.validation_convergence import load_imu, get_gyro_for_frame
+    # Canonical loaders (R3); previously reached into archive_, which is frozen.
+    from eval_io import load_imu, get_gyro_for_frame
     imu_data = load_imu(IMU_FILE)
 
 # ---------------------------------------------------------------------------

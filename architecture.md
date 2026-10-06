@@ -12,7 +12,7 @@
 
 1. [What the system does](#1-what-the-system-does)
 2. [The model: quantities and constraints](#2-the-model-quantities-and-constraints)
-3. [The three model variants](#3-the-three-model-variants)
+3. [The model variants](#3-the-model-variants)
 4. [End-to-end pipeline (data → metric)](#4-end-to-end-pipeline-data--metric)
 5. [Repository map](#5-repository-map)
 6. [Module-by-module](#6-module-by-module)
@@ -76,19 +76,25 @@ the pure-vision accuracy ceiling (see [§7](#7-cross-cutting-concerns)).
 
 ---
 
-## 3. The three model variants
+## 3. The model variants
 
-Selected by the `model` string in the evaluation harness:
+Selected by the `model` string in the evaluation harness
+(`--model {cook,thesis,thesis_imu,thesis_cmax,thesis_cmax_v2,all}`):
 
 | Variant | Class | Update scheme | Extra |
 |---|---|---|---|
 | `cook` | `InteractingMaps` | **Gauss-Seidel** (sequential; each sub-update sees the latest values) | — |
 | `thesis` | `InteractingMapsThesis` | **Jacobi** two-phase (all gradients from one snapshot, then all update) | — |
 | `thesis_imu` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`: a 4th cost pulling `R` toward the gyroscope reading (thesis §6.8.3 sensor fusion) |
+| `thesis_cmax` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`, but the per-frame anchor ω comes from a **CMax** solve on the events, not the gyro (IMU-free in-loop). **See [cmax/cmax.md](cmax/cmax.md).** |
+| `thesis_cmax_v2` | `InteractingMapsThesis` | Jacobi two-phase | `R` driven by **one CMax gradient step per iteration** (kinematics updates `F` only). **See [cmax/cmax.md](cmax/cmax.md).** |
 
 `thesis_imu` is the thesis's own fix for the β-ambiguity: the IMU gyro supplies
 an **absolute** angular-velocity reference that anchors the scale/sign, which
-pure vision lacks.
+pure vision lacks. The two `thesis_cmax*` variants replace that absolute
+reference with a Contrast-Maximization estimate from the events alone — their
+design and results are documented separately in
+[cmax/cmax.md](cmax/cmax.md); this file covers the first three.
 
 ---
 
@@ -121,7 +127,7 @@ pure vision lacks.
                 • dir  = angle(ω_est, ω_ref) (deg)
                 • β    = ‖ω_ref‖ / ‖ω_est‖
                                      ▼
-                   tracking.csv · summary.json · tracking_plot.png
+                   tracking.csv · run.json · tracking_plot.png
 ```
 
 **Key roles of the sensors** (important, easy to conflate):
@@ -183,18 +189,29 @@ Turns events into V frames.
   `t ≥ t_start`, then bulk `np.loadtxt` (cap **30M** rows), masks to
   `t < t_start+duration`. Returns `(N,4) = [t, x, y, pol]`.
 - **`undistort_events(events, calib)`** — **`cv2.undistortPoints`** with the
-  plumb-bob model `[k1,k2,p1,p2,k3]`, keeping points in pixel space (`P=K`).
-  This is how distortion is handled on `main`: the *event coordinates* are
-  corrected before binning (rather than modifying `C`). Called **unconditionally
-  every frame** in `EventFrameSequence.__iter__` (the only skip is the empty-frame
-  `len(events)==0` guard) — so **distortion IS applied** on `main`. It is applied
-  **exactly once**, at the event-coordinate level; `camera.py` (which builds `C`)
-  does **not** re-apply it, so there is no double-undistortion.
-  Caveat: `cv2.undistortPoints` returns sub-pixel float coordinates, but
-  `events_to_vframe` casts `x,y` back to `int32` when binning — so the correction
-  is re-quantized to the pixel grid. It still moves events across pixel boundaries
-  (largest effect at the periphery, `k1≈−0.37` for the DAVIS240C), just at pixel
-  resolution.
+  plumb-bob model `[k1,k2,p1,p2,k3]`, keeping points in pixel space (`P=K`). This
+  corrects the *event coordinates* before binning. It is **one of two distortion
+  modes** (see the `DISTORTION_MODE` box below): it runs only when
+  `EventFrameSequence(undistort=True)`, which the harness sets for
+  `distortion_mode='undistort_events'` (the "Way 1" baseline). Under the current
+  default `distortion_mode='C_full'` the sequence is built with `undistort=False`
+  and this function is **not** called — distortion is carried in the `C` matrix
+  instead (§6.3), so there is no double-correction.
+  Caveat (undistort_events mode only): `cv2.undistortPoints` returns sub-pixel
+  float coordinates, but `events_to_vframe` casts `x,y` back to `int32` when
+  binning — so the correction is re-quantized to the pixel grid. It still moves
+  events across pixel boundaries (largest effect at the periphery, `k1≈−0.37` for
+  the DAVIS240C), just at pixel resolution. The `C_full` mode avoids this
+  re-quantization by never moving the events.
+
+> **`DISTORTION_MODE` (config.py) — the distortion ablation switch.**
+> - `'undistort_events'` (Way 1, baseline): undistort events before binning;
+>   pinhole `C`. The path this document originally described.
+> - `'C_full'` (Way 2, **current default**): raw events are binned; lens
+>   distortion is carried inside the kinematic matrix `C` (Brown–Conrady Jacobian,
+>   §6.3). Chosen because it does not re-quantize the correction to the pixel grid.
+>
+> `--exp 9` runs both and compares them per segment.
 - **`events_to_vframe(events, H, W, clip_value, normalise)`** — signed-count
   image: `+1` per ON, `−1` per OFF via `np.add.at`; clip to `±clip_value`;
   divide by `clip_value` → `V ∈ [−1, 1]`. This is the standard *event-frame /
@@ -208,17 +225,26 @@ Turns events into V frames.
 - **`compute_calibration(H,W,fx,fy,cx,cy) → (H,W,3)`** — per-pixel unit ray
   direction `normalize((u−cx)/fx, (v−cy)/fy, 1)`. (Legacy general-calibration
   form used by Cook.)
-- **`build_kinematic_matrix(H,W,fx,fy,cx,cy) → (H,W,2,3)`** — the matrix `C`
-  such that `F = C·R` reproduces rotational flow (thesis Eq. 6.38, skew=0):
+- **`build_kinematic_matrix(H,W,fx,fy,cx,cy,dist_coeffs=None,include_jacobian=True)
+  → (H,W,2,3)`** — the matrix `C` such that `F = C·R` reproduces rotational flow
+  (thesis Eq. 6.38, skew=0):
   ```
   x' = (u−cx)/fx,  y' = (v−cy)/fy
   F_u = fx·[ x'y'·ωx − (x'²+1)·ωy + y'·ωz ]
   F_v = fy·[ (y'²+1)·ωx − x'y'·ωy − x'·ωz ]
   ```
-  Used by **both** networks. Pure **pinhole** — it takes no distortion
-  coefficients, because the events feeding `V`/`G`/`F` were already undistorted
-  upstream in `data_loader.undistort_events`. Distortion is therefore applied
-  once (at the data level), not here.
+  Used by **both** networks. The distortion handling here is chosen by
+  `make_network` from `distortion_mode`:
+  - `dist_coeffs=None` (**Way 1**, `undistort_events` mode) — pure **pinhole**,
+    because the events feeding `V`/`G`/`F` were already undistorted upstream.
+  - `dist_coeffs=[k1,k2,p1,p2,k3]` (**Way 2**, `C_full` mode, the default) — the
+    native (distorted) pixel grid is back-projected to true undistorted rays and
+    the flow is mapped back into distorted-pixel space via the Brown–Conrady
+    Jacobian: `C = diag(fx,fy)·J_D(x',y')·A(x',y')`. This matches the
+    distortion-aware warp in `cmax/angular_velocity.py`.
+
+  Either way distortion is applied **once** — at the event level (Way 1) or in `C`
+  (Way 2), never both.
 
 ### 6.4 `interacting_maps/network.py` — Cook 2011
 
@@ -253,7 +279,8 @@ Energy-based message passing, faithful to **Algorithm 6.5**.
 - `Cost_OFCE` — `∂/∂F = 2(V+F·G)G`, `∂/∂G = 2(V+F·G)F`; per-pixel gradient clip
   `max_grad=5.0` bounds cubic blow-up.
 - `Cost_Spatial` — `G ← ∇I` blend; `I` gets the discrete **negative divergence**
-  of `(G−∇I)`.
+  of `(G−∇I)`. How `I` is actually recovered from `G` is set by `POISSON_MODE`
+  (see box below).
 - `Cost_Kinematics` — `F ← C·R` blend; `R ← M⁻¹·ΣCᵀF` (precomputed `M⁻¹`).
 - `Cost_IMU` — `R ← R − δ_IMU·(R − ω_imu·dt)`; only active when `omega_imu` is
   supplied (i.e. `thesis_imu`). Thesis §6.8.3.
@@ -267,6 +294,14 @@ Energy-based message passing, faithful to **Algorithm 6.5**.
 **`initialize_from_rotation(R_init)`** — sets `R=R_init` and `F = C·R_init` (a
 mutually consistent start; essential for Jacobi, else kinematics crushes R to 0
 before OFCE builds structure), plus tiny noise in `I` to seed `∇I`.
+
+> **`POISSON_MODE` (config.py) — how `I` is recovered from `G`.** Thesis network
+> only (Cook has its own `I` update).
+> - `'iterative'` (**default**, Eq. 6.61): one Richardson step per iteration.
+>   Converges as `(1 − δ_GI·|k|²)` per frequency, so at `δ_GI=0.05`, 75 iters the
+>   low frequencies never form and `I` reads as an edge map.
+> - `'fft'` (Eq. 6.64–6.65): the exact frequency-domain solve (periodic boundary).
+> - `'dct'`: the same exact solve under Neumann boundaries (no wrap seam).
 
 ### 6.6 `evaluation.py`
 
@@ -300,7 +335,8 @@ frame. So every run is the standard *recurrent* run.
 **Experiments** (`--exp N`):
 1. Single-frame convergence — maps at iteration checkpoints (visual).
 2. **Multi-frame tracking** — the core: per-frame ω_est vs ω_ref → `tracking.csv`,
-   `summary.json`, `tracking_plot.png` (+ optional 3-col video frames).
+   `run.json` (provenance + config + summary; see §7), `tracking_plot.png`
+   (+ optional 3-col video frames).
 3. Parameter influence — iterations & frame-duration sweeps for one frame.
 4. Qualitative video (alias of Exp 2 with frames).
 5. Assemble MP4s from saved frames (batch).
@@ -308,8 +344,10 @@ frame. So every run is the standard *recurrent* run.
 7. Full evaluation — all datasets × models × segments → `full_evaluation.csv`.
 8. **Parameter grid** — sweeps `frame_duration × n_frames × n_iters × delta_FR ×
    delta_IMU` (thesis_imu only for `delta_IMU`) → `parameter_grid_<dataset>.csv`.
+9. **Distortion ablation** — runs `undistort_events` vs `C_full` on the same
+   segment(s) and compares (`--segment all` sweeps every segment).
 
-Exp 2/7/8 all funnel through `experiment_tracking`, so any scoring change lives
+Exp 2/7/8/9 all funnel through `experiment_tracking`, so any scoring change lives
 in one place.
 
 ### 6.7 `find_segments.py` & `demo.py`
@@ -343,6 +381,17 @@ circular; scoring against Vicon is not.
 Forward differences, boundary 0. Quaternions ordered `(qx,qy,qz,qw)` →
 `R_wc`. Body-frame ω uses `R1ᵀR2` (right-invariant), **not** `R2R1ᵀ` (world).
 
-**Distortion.** Handled at the *data* level: `undistort_events` (cv2 plumb-bob)
-corrects event coordinates before binning, so `V`, `G`, `F` and `C` all live in
-the undistorted pinhole frame.
+**Distortion.** Two modes, chosen by `DISTORTION_MODE` (§6.2). The current default
+`'C_full'` carries lens distortion inside the kinematic matrix `C` (Brown–Conrady
+Jacobian) and bins the raw events. The alternative `'undistort_events'` instead
+corrects event coordinates before binning (cv2 plumb-bob) and uses a pinhole `C`.
+Either way distortion is applied exactly once; `--exp 9` compares them.
+
+**Provenance & tracking (R1).** Each tracking run writes one self-describing
+`run.json` = `{provenance, config, summary}` — `provenance` carries the git commit,
+a dirty-tree flag, timestamp and library versions, so a result on disk records
+which code produced it. Reported runs (`out_root='results'`) are also mirrored to a
+local MLflow store. See [provenance.py](provenance.py) and
+[architecture_review.md](architecture_review.md) §R1. (`read_run`/`read_summary`/
+`read_config` still fall back to the older split `params.json`/`summary.json` for
+runs made before this change.)
