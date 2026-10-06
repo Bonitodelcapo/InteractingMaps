@@ -1,3 +1,4 @@
 sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
 street_sinthetic,seg_A,cook,75.46,73.79,89.67,27.964,-0.0011,-0.0008,0.0,0.68,0.29,142
 street_sinthetic,seg_A,thesis,50.86,48.94,16.36,2.85,0.6586,0.2443,0.0,0.68,0.29,100
+street_sinthetic,seg_A,thesis_imu,7.16,6.87,0.74,1.103,0.4048,0.1772,0.0,0.68,0.29,242
