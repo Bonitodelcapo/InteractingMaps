@@ -246,8 +246,23 @@ def cmd_main(E, args):
     nf = int(round(args.duration / args.dt))
     # --sequences and --out let the table be built in pieces and merged, since
     # 25 runs do not always fit in one session.
+    #
+    # Validate everything BEFORE opening the output file. Opening it truncates,
+    # so an argument error raised afterwards destroys the previous table --
+    # which is exactly what happened once, costing 23 completed runs.
     seqs = [x for x in SEGMENTS
             if not args.sequences or x[3] in args.sequences.split(',')]
+    if args.sequences:
+        unknown = set(args.sequences.split(',')) - {x[3] for x in SEGMENTS}
+        if unknown:
+            raise SystemExit(f'unknown sequence(s) {sorted(unknown)}; '
+                             f'choose from {[x[3] for x in SEGMENTS]}')
+    want = args.models.split(',') if args.models else MODELS
+    unknown = [m for m in want if m not in MODELS]
+    if unknown:
+        raise SystemExit(f'unknown model(s) {unknown}; choose from {MODELS}')
+    models = [m for m in MODELS if m in want]
+
     path = os.path.join(OUTDIR,
                         args.out or f'main_dt{int(args.dt*1000)}ms{tag}.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
@@ -268,7 +283,7 @@ def cmd_main(E, args):
         fdir = np.degrees(np.arccos(np.clip(np.einsum('ij,ij->i', gy, ref) /
                (np.linalg.norm(gy, axis=1)*np.linalg.norm(ref, axis=1)), -1, 1))).mean()
         print(f"\n### {lab}/{sid}  floor {floor:.2f} deg/s", flush=True)
-        for model in MODELS:
+        for model in models:
             try:
                 rc = _cfg(E, ds, sid, t0, model, args.dt, nf,
                           poisson=poisson, deltas=dict(extra))
@@ -616,6 +631,76 @@ def cmd_recon(E, args):
     print(f"-> fig_recon.pdf / .png")
 
 
+# --------------------------- report figure: good omega is not a good picture
+def cmd_dissoc(E, args):
+    """Figure: the model with the best picture has nearly the worst omega.
+
+    On the synthetic sequences the unanchored network reconstructs better than
+    any anchored one while its angular velocity is an order of magnitude worse.
+    Showing the two reconstructions side by side, each labelled with both of its
+    numbers, makes the dissociation a picture rather than a cross-reference
+    between two columns of a table.
+
+    Reuses the runs behind Table III; nothing is recomputed.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    nf = int(round(args.duration / args.dt))
+    seqs = [s for s in SEGMENTS
+            if not args.sequences or s[3] in args.sequences.split(',')]
+    models = (args.models or 'thesis,thesis_cmax,thesis_imu').split(',')
+    stats = {}
+    for row in csv.DictReader(open(os.path.join(OUTDIR,
+                              f'main_dt{int(args.dt*1000)}ms.csv'))):
+        stats[(row['sequence'], row['model'])] = row
+
+    cols = len(models) + 1
+    fig, axes = plt.subplots(len(seqs), cols, figsize=(1.7 * cols, 1.65 * len(seqs)))
+    axes = np.atleast_2d(axes)
+    for r_i, (ds, sid, t0, lab) in enumerate(seqs):
+        aps = _aps(E, ds, t0 + nf * args.dt)
+        panels = [('APS', aps, None)]
+        for m in models:
+            # Exact path from RunConfig, not a glob: results/ holds dozens of
+            # runs per model that differ only in parameters the pattern would
+            # not distinguish, and the oldest of them predate maps_final.npz.
+            rc = _cfg(E, ds, sid, t0, m, args.dt, nf)
+            npz = os.path.join(rc.output_dir, 'maps_final.npz')
+            img = None
+            if os.path.exists(npz):
+                img = solve_poisson_exact(np.load(npz)['G'], 'fft')
+            else:
+                print(f'    missing: {npz}', flush=True)
+            panels.append((m, img, stats.get((ds, m))))
+        for c_i, (title, img, st) in enumerate(panels):
+            a = axes[r_i, c_i]
+            a.set_xticks([]); a.set_yticks([])
+            if img is None:
+                a.axis('off'); continue
+            lo, hi = np.percentile(img, [1, 99])
+            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
+            if r_i == 0:
+                a.set_title(r'\texttt{' + title + '}' if st is not None else title,
+                            fontsize=7)
+            if c_i == 0:
+                a.set_ylabel(lab, fontsize=7)
+            if st is not None:
+                a.set_xlabel(f"$r={float(st['recon']):.2f}$,  "
+                             f"$\\omega$ err $={float(st['err']):.1f}$",
+                             fontsize=6.5, labelpad=1.5)
+        print(f'  {lab}: done', flush=True)
+    fig.tight_layout(pad=0.25, h_pad=0.4, w_pad=0.15)
+    out = os.path.join(ROOT, 'report', 'figures', 'fig_dissociation.pdf')
+    for ext in ('pdf', 'png'):
+        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
+                    bbox_inches='tight', pad_inches=0.02)
+    plt.close(fig)
+    print('-> fig_dissociation.pdf / .png')
+
+
 # ------------------------------------------ report figure: regulariser ablation
 def cmd_regfig(E, args):
     """Figure for Sec. 'Regularising the Maps': what each term does to the image.
@@ -850,7 +935,7 @@ COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
             'readout': cmd_readout, 'recon': cmd_recon,
-            'regfig': cmd_regfig}
+            'regfig': cmd_regfig, 'dissoc': cmd_dissoc}
 
 
 def main():

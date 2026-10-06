@@ -864,6 +864,34 @@ Each sequence is processed with its own calibration throughout, so the
 distortion-aware kinematic matrix~\eqref{eq:cdist} reduces to the ideal pinhole
 form on the synthetic data.
 
+The synthetic sequences are not a second kind of motion: their rotation is
+spread across all three axes much as the real ones are ($30\%$, $46\%$ and
+$24\%$ of $\lVert\wvec\rVert$ on $x$, $y$ and $z$). What they isolate is the
+\emph{sensor}. With no lens distortion and no sensor noise they are the
+best case the method can be given, and Sec.~\ref{sec:baseline} uses them as
+exactly that: a measurement of what the front-end achieves when nothing in the
+imaging is working against it.
+
+\subsubsection{What is being optimised}
+\label{sec:objective}
+The model produces two things we care about --- an angular velocity and an
+intensity map --- and this report optimises for the first. The relaxation rates
+of Table~\ref{tab:params} were chosen by a search over the angular-velocity
+error alone; no reconstruction measurement entered that choice. The asymmetry is
+deliberate: $\wvec$ has an independent reference in the Vicon poses and the
+simulator twist, whereas $\Imap$ has none, since the APS frames differ from
+log-intensity in exposure and in time and can support a comparison between
+reconstructions but not an absolute one.
+
+The consequence is that the configuration reported here is not the best one for
+image quality, and Sec.~\ref{sec:reconstruction} shows the two requirements
+pulling in opposite directions --- on the accumulation window directly, where
+the window that minimises the angular-velocity error maximises the intra-frame
+smear that degrades the reconstruction. Reconstruction quality is reported
+throughout, as the column $r$ of Table~\ref{tab:main} and in
+Sec.~\ref{sec:reconstruction}, but as a measured property of a configuration
+chosen for something else rather than as a quantity that was tuned.
+
 One exclusion is worth stating. \texttt{shapes\_rotation} is not used: its scene
 contains a few isolated shapes on a blank background, and both formulations
 require the dense spatial gradient that the flow constraint acts on.

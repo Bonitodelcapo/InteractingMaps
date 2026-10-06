@@ -1,0 +1,4 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+bycicle_sinthetic,seg_A,cook,75.44,73.62,89.17,56.851,-0.0008,0.0004,0.0,0.68,0.29,122
+bycicle_sinthetic,seg_A,thesis,54.36,53.08,25.71,3.015,0.6421,0.2421,0.0,0.68,0.29,117
+bycicle_sinthetic,seg_A,thesis_imu,6.93,6.65,0.68,1.1,0.2013,0.1053,0.0,0.68,0.29,117
