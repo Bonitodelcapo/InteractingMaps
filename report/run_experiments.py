@@ -60,6 +60,10 @@ SEGMENTS = [
     ('street_sinthetic',  'seg_A', 1.001,  'street'),
 ]
 MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
+#: names as the report writes them, for figure titles
+DISPLAY = {'cook': 'cook', 'thesis': 'thesis (no anchor)',
+           'thesis_imu': 'IMU-anchor', 'thesis_cmax': 'CMax-anchor',
+           'thesis_cmax_v2': 'CMax-inloop'}
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 os.makedirs(OUTDIR, exist_ok=True)
 
@@ -652,10 +656,14 @@ def cmd_dissoc(E, args):
     seqs = [s for s in SEGMENTS
             if not args.sequences or s[3] in args.sequences.split(',')]
     models = (args.models or 'thesis,thesis_cmax,thesis_imu').split(',')
+    # The table may have been produced in pieces (street alone, say), so read
+    # every main csv rather than only the default-named one.
     stats = {}
-    for row in csv.DictReader(open(os.path.join(OUTDIR,
-                              f'main_dt{int(args.dt*1000)}ms.csv'))):
-        stats[(row['sequence'], row['model'])] = row
+    for path in sorted(glob.glob(os.path.join(OUTDIR, 'main_*.csv'))):
+        if 'curl' in os.path.basename(path):
+            continue
+        for row in csv.DictReader(open(path)):
+            stats[(row['sequence'], row['model'])] = row
 
     cols = len(models) + 1
     fig, axes = plt.subplots(len(seqs), cols, figsize=(1.7 * cols, 1.65 * len(seqs)))
@@ -683,8 +691,7 @@ def cmd_dissoc(E, args):
             lo, hi = np.percentile(img, [1, 99])
             a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
             if r_i == 0:
-                a.set_title(r'\texttt{' + title + '}' if st is not None else title,
-                            fontsize=7)
+                a.set_title(DISPLAY.get(title, title), fontsize=7.5)
             if c_i == 0:
                 a.set_ylabel(lab, fontsize=7)
             if st is not None:

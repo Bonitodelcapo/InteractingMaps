@@ -1701,6 +1701,40 @@ produce --- an angular velocity and a picture --- are not improved by the same
 choices, and a configuration tuned for one should not be assumed good for the
 other.
 
+Across models the dissociation is sharper still, and on the synthetic sequences
+the two quantities are not merely uncorrelated but opposed.
+Figure~\ref{fig:dissociation} shows the same frame of \texttt{bicycle} and
+\texttt{street} reconstructed by the unanchored network and by the two anchored
+ones. The unanchored network gives the best reconstruction anywhere in this
+report --- $r = 0.60$ and $0.56$, the scene legible down to the shop signage ---
+with an angular-velocity error of $52$ and $51^\circ$/s, eight times that of the
+anchored models whose reconstructions are ripple. On \texttt{boxes\_rotation}
+the same comparison goes the other way: there the anchored model is better at
+both, $r = 0.42$ against $-0.00$ and $5.8$ against $49.0^\circ$/s.
+
+The anchor is therefore not simply good or bad for the reconstruction. It is
+what makes $\wvec$ usable in all cases, and on real data it improves the
+intensity map as well, because a $\wvec$ that is badly wrong produces an
+$\Fmap$ that is badly wrong and no amount of relaxation recovers from it. On
+the synthetic sequences, where the vision-only estimate is already good enough
+for $\Fmap$ to be roughly right, the anchor's remaining contribution is the
+inconsistency of Sec.~\ref{sec:mainresults} and it costs the picture. This is
+also the answer to an expectation worth recording: noise-free rendered data
+does reconstruct well, markedly better than any real sequence here, but only
+when the network is left to its own devices.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig_dissociation}
+\caption{A good angular velocity and a good picture are different things. Each
+panel is $\Imap$ recovered by~\eqref{eq:poisson_exact} after $1.5$\,s, labelled
+with its track-mean correlation against the APS and its angular-velocity error.
+On the two synthetic sequences the unanchored network reconstructs far better
+than either anchored model while its $\wvec$ is an order of magnitude worse; on
+\texttt{boxes} the anchored model is better at both.}
+\label{fig:dissociation}
+\end{figure}
+
 \begin{table}[!t]
 \renewcommand{\arraystretch}{1.15}
 \caption{Reconstruction Quality. \textnormal{Mean correlation $r$ against the
@@ -1808,8 +1842,30 @@ applied to a fixed field it provably drives the curl to zero, but in the
 running network the measured share does not fall correspondingly, which we
 cannot presently explain.
 
+Figure~\ref{fig:regularisers} shows what the three do to the image on four
+sequences. The differences are small on \texttt{boxes}, where the
+unregularised reconstruction is already the best we obtain, and largest on
+\texttt{poster\_rotation}, where only the curl term recovers the stones at all.
+
 None of the three is adopted in the configuration of Table~\ref{tab:params};
-all results elsewhere in this report are without them.
+all results elsewhere in this report are without them. We report
+$\delta_{\text{curl}}$ because it is the only term that improves the
+reconstruction on every sequence tested, and we do not adopt it because it is
+our own addition rather than a published one, and because its benefit does not
+extend to the synthetic sequences. Table~\ref{tab:curl} gives the full
+comparison against Table~\ref{tab:main}, model by model.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig_regularisers}
+\caption{The three regularising terms, on the same quantity
+Table~\ref{tab:regularisers} scores: $\Imap$ recovered from each run's
+$\Gmap$ by~\eqref{eq:poisson_exact}. Values below each panel are the
+correlation at the frame shown, which is the last of the track; the table
+reports the mean over all $75$ frames, and the two differ because
+reconstruction quality is not uniform in time (Sec.~\ref{sec:reconstruction}).}
+\label{fig:regularisers}
+\end{figure}
 
 \begin{table}[!t]
 \renewcommand{\arraystretch}{1.15}
@@ -1837,6 +1893,59 @@ $\delta_{\text{curl}}=0.6$ (ours)      & \textbf{8.50} & \textbf{0.344} & 0.195 
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.1}
+\caption{Effect of the Integrability Term. \textnormal{Every model on every
+sequence, without and with $\delta_{\text{curl}} = 0.6$, otherwise at the
+configuration of Table~\ref{tab:params}. $1.5$\,s per run. $r$ is the
+track-mean correlation of the reconstruction against the log APS. The term
+improves the reconstruction in every cell where the reconstruction means
+anything, and the angular velocity on the contrast-anchored models of the real
+sequences, while costing a little on the synthetic ones. Cells marked --- did
+not complete: a single \texttt{street} run exceeds forty minutes at that event
+rate.}}
+\label{tab:curl}
+\centering
+\footnotesize
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+ & & \multicolumn{2}{c}{$\wvec$ err [$^\circ$/s]} & \multicolumn{2}{c}{$r$} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Sequence & Model & none & curl & none & curl \\
+\midrule
+\texttt{boxes}        & \texttt{cook}         & 53.8 & 54.1 & 0.00 & 0.02 \\
+                      & \texttt{thesis}       & 49.0 & 47.5 & -0.00 & 0.01 \\
+                      & \texttt{thesis+IMU}   & 5.8 & 5.9 & 0.42 & 0.53 \\
+                      & \texttt{CMax-anchor}  & 7.3 & 7.1 & 0.36 & 0.50 \\
+                      & \texttt{CMax-inloop}  & 8.3 & 8.3 & 0.33 & 0.46 \\
+\midrule
+\texttt{poster}       & \texttt{cook}         & 57.0 & 57.3 & 0.09 & 0.11 \\
+                      & \texttt{thesis}       & 54.2 & 54.2 & 0.09 & 0.11 \\
+                      & \texttt{thesis+IMU}   & 8.7 & 8.8 & 0.23 & 0.31 \\
+                      & \texttt{CMax-anchor}  & 11.1 & 10.2 & 0.16 & 0.26 \\
+                      & \texttt{CMax-inloop}  & 14.5 & 14.5 & 0.13 & 0.19 \\
+\midrule
+\texttt{dynamic}      & \texttt{cook}         & 46.5 & 46.9 & -0.01 & 0.06 \\
+                      & \texttt{thesis}       & 43.3 & 42.7 & -0.01 & 0.04 \\
+                      & \texttt{thesis+IMU}   & 7.0 & 7.1 & 0.35 & 0.48 \\
+                      & \texttt{CMax-anchor}  & 9.6 & 9.0 & 0.29 & 0.41 \\
+                      & \texttt{CMax-inloop}  & 11.3 & 11.3 & 0.25 & 0.35 \\
+\midrule
+\texttt{bicycle}      & \texttt{cook}         & 74.0 & 75.4 & 0.02 & -0.00 \\
+                      & \texttt{thesis}       & 52.4 & 54.4 & 0.60 & 0.64 \\
+                      & \texttt{thesis+IMU}   & 6.3 & 6.9 & 0.10 & 0.20 \\
+                      & \texttt{CMax-anchor}  & 7.1 & 7.7 & 0.10 & 0.21 \\
+                      & \texttt{CMax-inloop}  & 45.4 & --- & 0.15 & --- \\
+\midrule
+\texttt{street}       & \texttt{cook}         & 73.8 & 75.5 & 0.02 & -0.00 \\
+                      & \texttt{thesis}       & 51.2 & 50.9 & 0.56 & 0.66 \\
+                      & \texttt{thesis+IMU}   & 6.3 & --- & 0.31 & --- \\
+                      & \texttt{CMax-anchor}  & 7.1 & --- & 0.31 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 
 \subsection{Handling Lens Distortion}
 \label{sec:distortion}
