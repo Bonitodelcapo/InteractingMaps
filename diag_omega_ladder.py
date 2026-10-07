@@ -15,6 +15,7 @@ cells; edit this file, then regenerate the notebook).
 """
 # %%
 import argparse
+import csv
 import glob
 import os
 import numpy as np
@@ -32,8 +33,8 @@ from metrics import compute_metrics, curl_share
 LIMIT = None
 
 SEGMENTS = [
-    {'name': 'city_short',   'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
-    {'name': 'city_long',    'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
+    {'name': 'city_short',   'ds': 'ecrot_city',   't_start': 0.05,  'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
+    {'name': 'city_long',    'ds': 'ecrot_city',   't_start': 0.05,  'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
     {'name': 'street_short', 'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
     {'name': 'street_long',  'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
 ]
@@ -70,7 +71,7 @@ def load_calibration(paths):
         dist = np.asarray(
             y.get('distortion_coefficients', {}).get('data', []),
             dtype=np.float64)
-        H = int(y['image_height']); W = int(y['image_width'])
+        H, W = int(y['image_height']), int(y['image_width'])
         src = os.path.basename(yamls[0])
     else:
         from data_loader import CameraCalibration
@@ -84,8 +85,12 @@ def load_calibration(paths):
             'dist_coeffs': dist_coeffs, 'H': H, 'W': W, 'src': src}
 
 
-def load_segment(seg):
-    """Load one segment, or None if its data is not present on this machine."""
+def prep_segment_context(seg):
+    """Load all per-segment data ONCE and precompute the frame windows.
+
+    Returns a ctx dict shared read-only across rungs (each rung still rebuilds
+    its own network), or None if the data is absent / the window is too short.
+    """
     paths = get_dataset_paths(seg['ds'])
     if not os.path.exists(paths['events']):
         print(f"[skip] {seg['name']}: no data at {paths['events']}")
@@ -93,6 +98,8 @@ def load_segment(seg):
     calib = load_calibration(paths)
     om = load_omega_gt(paths.get('omega_gt'))
     n = cap_to_coverage(seg, om)
+    if LIMIT is not None:
+        n = min(n, LIMIT)
     if n < 2:
         print(f"[skip] {seg['name']}: too few frames after coverage cap")
         return None
@@ -103,26 +110,27 @@ def load_segment(seg):
         n_frames=n, clip_value=10.0,
         sensor_size=sensor, undistort=False,
     )
-    imu = load_imu(paths['imu'])
-    frames = list(seq)
-    return seq, paths, imu, om, frames, len(frames), calib
-
-
-def frame_windows(seg, n):
     t0, dt = seg['t_start'], seg['dt']
-    return [(t0 + k * dt, t0 + (k + 1) * dt) for k in range(n)]
+    return {
+        'seg': seg, 'seq': seq, 'calib': calib,
+        'imu': load_imu(paths['imu']), 'om': om,
+        'frames': list(seq)[:n], 'n': n, 'dt': dt,
+        'wins': [(t0 + k * dt, t0 + (k + 1) * dt) for k in range(n)],
+    }
 
 
 def ref_omega(om, t_lo, t_hi):
     return omega_gt_at(om, t_lo, t_hi)
 
 
-def build_net(seg, seq, calib):
+def build_net(ctx):
+    """Build a fresh network for one rung (guarantees isolated state)."""
+    c = ctx['calib']
     return InteractingMapsThesis(
-        H=seq.H, W=seq.W,
-        fx=calib['fx'], fy=calib['fy'], cx=calib['cx'], cy=calib['cy'],
-        frame_duration=seg['dt'],
-        dist_coeffs=calib['dist_coeffs'], poisson=config.POISSON_MODE,
+        H=ctx['seq'].H, W=ctx['seq'].W,
+        fx=c['fx'], fy=c['fy'], cx=c['cx'], cy=c['cy'],
+        frame_duration=ctx['dt'],
+        dist_coeffs=c['dist_coeffs'], poisson=config.POISSON_MODE,
         **config.THESIS_PARAMS,
     )
 
@@ -132,16 +140,11 @@ def gt_flow(net, R_gt):
 
 
 def score_frames(est_list, ref_list):
-    est = np.asarray(est_list)          # (N, 3) rad/s
-    ref = np.asarray(ref_list)          # (N, 3) rad/s
-    errs, dirs, betas = [], [], []
-    for e, r in zip(est, ref):
-        err, d, b = compute_metrics(e, r)
-        errs.append(err); dirs.append(d); betas.append(b)
+    est, ref = np.asarray(est_list), np.asarray(ref_list)
+    errs, dirs, betas = zip(*[compute_metrics(e, r) for e, r in zip(est, ref)])
     axis_r = []
     for a in range(3):
-        ea, ra = est[:, a], ref[:, a]
-        ea = ea - ea.mean(); ra = ra - ra.mean()
+        ea, ra = est[:, a] - est[:, a].mean(), ref[:, a] - ref[:, a].mean()
         den = np.sqrt((ea * ea).sum() * (ra * ra).sum())
         axis_r.append(float((ea * ra).sum() / den) if den > 0 else float('nan'))
     return {
@@ -153,99 +156,77 @@ def score_frames(est_list, ref_list):
     }
 
 
-def _nlim(n):
-    return n if LIMIT is None else min(n, LIMIT)
-
-
 def _selfcheck():
     for seg in SEGMENTS:
-        loaded = load_segment(seg)
-        if loaded is None:
+        ctx = prep_segment_context(seg)
+        if ctx is None:
             continue
-        seq, paths, imu, om, frames, n, calib = loaded
-        net = build_net(seg, seq, calib)
-        assert net._C_mat.shape == (seq.H, seq.W, 2, 3)
-        w0 = ref_omega(om, *frame_windows(seg, n)[0])
-        print(f"[ok] {seg['name']}: {n} frames, |omega_gt[0]|="
-              f"{np.linalg.norm(w0):.3f} rad/s  [calib {calib['src']}: "
-              f"fx={calib['fx']:.0f} cx={calib['cx']:.0f} cy={calib['cy']:.0f}"
-              f"{' +dist' if calib['dist_coeffs'] is not None else ''}]")
+        net = build_net(ctx)
+        assert net._C_mat.shape == (ctx['seq'].H, ctx['seq'].W, 2, 3)
+        w0 = ref_omega(ctx['om'], *ctx['wins'][0])
+        c = ctx['calib']
+        print(f"[ok] {seg['name']}: {ctx['n']} frames, |omega_gt[0]|="
+              f"{np.linalg.norm(w0):.3f} rad/s  [calib {c['src']}: "
+              f"fx={c['fx']:.0f} cx={c['cx']:.0f} cy={c['cy']:.0f}"
+              f"{' +dist' if c['dist_coeffs'] is not None else ''}]")
 
 
 # %%
-def rung0_baseline(seg):
+def rung0_baseline(ctx):
     """Vision-only thesis net on one segment; characterize the failure.
-    Returns (score, est(N,3), ref(N,3)); (None, None, None) if data missing."""
-    loaded = load_segment(seg)
-    if loaded is None:
-        return None, None, None
-    seq, paths, imu, om, frames, n, calib = loaded
-    n = _nlim(n); frames = frames[:n]
-    wins = frame_windows(seg, n)
-    net = build_net(seg, seq, calib)
+    Returns (score, est(N,3), ref(N,3))."""
+    net = build_net(ctx)
     # Warm start from the gyro at t_start (mirrors reported runs: initial_R None).
-    R_init = get_gyro_for_frame(imu, *wins[0]) * seg['dt']
-    net.initialize_from_rotation(R_init)
-    cond_M = float(np.linalg.cond(build_R_normal_equations(net._C_mat)))
+    net.initialize_from_rotation(
+        get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * ctx['dt'])
     est, ref, curls = [], [], []
-    for (V, _t), (t_lo, t_hi) in zip(frames, wins):
+    for (V, _t), (t_lo, t_hi) in zip(ctx['frames'], ctx['wins']):
         net.step(V, n_iters=config.ITERS_PER_FRAME)      # vision-only (no anchor)
-        est.append(net.R / seg['dt'])
-        ref.append(ref_omega(om, t_lo, t_hi))
+        est.append(net.R / ctx['dt'])
+        ref.append(ref_omega(ctx['om'], t_lo, t_hi))
         curls.append(curl_share(net.G))
     s = score_frames(est, ref)
-    s['cond_M'] = cond_M
+    s['cond_M'] = float(np.linalg.cond(build_R_normal_equations(net._C_mat)))
     s['mean_curl_share'] = float(np.mean(curls))
-    print(f"[rung0] {seg['name']:12s} err={s['mean_err']:6.2f} "
+    print(f"[rung0] {ctx['seg']['name']:12s} err={s['mean_err']:6.2f} "
           f"dir={s['mean_dir']:6.2f} beta={s['mean_beta']:.3f} "
           f"axis_r={[round(v,2) for v in s['axis_r']]}")
     return s, np.asarray(est), np.asarray(ref)
 
 
-def rung1a_kinematics(seg):
+def rung1a_kinematics(ctx):
     """Perfect flow F*=C*R_gt inverted back through the R least-squares.
     Must return R_gt (dir~0); failure means the C-matrix / solve is broken."""
-    loaded = load_segment(seg)
-    if loaded is None:
-        return None, False
-    seq, paths, imu, om, frames, n, calib = loaded
-    n = _nlim(n)
-    wins = frame_windows(seg, n)
-    net = build_net(seg, seq, calib)
+    net = build_net(ctx)
     C = net._C_mat
     M_inv = build_R_normal_equations(C)
-    dt = seg['dt']
+    dt = ctx['dt']
     est, ref = [], []
-    for (t_lo, t_hi) in wins:
-        w = ref_omega(om, t_lo, t_hi)
+    for (t_lo, t_hi) in ctx['wins']:
+        w = ref_omega(ctx['om'], t_lo, t_hi)
         R_hat = solve_R_lstsq(M_inv, C, gt_flow(net, w * dt))
         est.append(R_hat / dt)
         ref.append(w)
     s = score_frames(est, ref)
     s['cond_M'] = float(np.linalg.cond(M_inv))
     ok = s['mean_dir'] < 1.0 and abs(s['mean_beta'] - 1.0) < 0.05
-    print(f"[rung1a] {seg['name']:12s} dir={s['mean_dir']:.4f} "
+    print(f"[rung1a] {ctx['seg']['name']:12s} dir={s['mean_dir']:.4f} "
           f"beta={s['mean_beta']:.4f} [{'ok' if ok else 'FAIL'}]")
     return s, ok
 
 
-def rung1b_clamped_flow(seg, anchored):
+def rung1b_clamped_flow(ctx, anchored):
     """Clamp F = F* (perfect flow) through the relaxation; let R evolve.
     anchored=False: pure vision; anchored=True: also anchor R toward omega_gt."""
-    loaded = load_segment(seg)
-    if loaded is None:
-        return None
-    seq, paths, imu, om, frames, n, calib = loaded
-    n = _nlim(n); frames = frames[:n]
-    wins = frame_windows(seg, n)
-    net = build_net(seg, seq, calib)
-    dt = seg['dt']
-    net.initialize_from_rotation(get_gyro_for_frame(imu, *wins[0]) * dt)
+    net = build_net(ctx)
+    dt = ctx['dt']
+    net.initialize_from_rotation(
+        get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * dt)
     net.q_F.update = lambda lr: None         # freeze F (instance-level no-op)
     est, ref = [], []
     max_drift = 0.0
-    for (V, _t), (t_lo, t_hi) in zip(frames, wins):
-        w = ref_omega(om, t_lo, t_hi)
+    for (V, _t), (t_lo, t_hi) in zip(ctx['frames'], ctx['wins']):
+        w = ref_omega(ctx['om'], t_lo, t_hi)
         F_star = gt_flow(net, w * dt)
         net.q_F.value = F_star.copy()
         net.step(V, n_iters=config.ITERS_PER_FRAME,
@@ -256,15 +237,13 @@ def rung1b_clamped_flow(seg, anchored):
     s = score_frames(est, ref)
     s['cond_M'] = float(np.linalg.cond(build_R_normal_equations(net._C_mat)))
     tag = 'anchored' if anchored else 'free'
-    print(f"[rung1b/{tag}] {seg['name']:12s} err={s['mean_err']:6.2f} "
+    print(f"[rung1b/{tag}] {ctx['seg']['name']:12s} err={s['mean_err']:6.2f} "
           f"dir={s['mean_dir']:6.2f} beta={s['mean_beta']:.3f} "
           f"(clamp drift {max_drift:.1e})")
     return s
 
 
 # %%
-import csv
-
 RESULTS_CSV = 'diag_ladder_results.csv'
 FRAMES_CSV = 'diag_ladder_frames.csv'
 
@@ -273,8 +252,8 @@ RESULTS_HEADER = ['segment', 'ds', 'n_frames', 'rung', 'mean_err', 'median_err',
                   'axis_r_x', 'axis_r_y', 'axis_r_z', 'cond_M', 'curl_share']
 
 
-def _row(seg, n, rung, s):
-    return [seg['name'], seg['ds'], n, rung,
+def _row(ctx, rung, s):
+    return [ctx['seg']['name'], ctx['seg']['ds'], ctx['n'], rung,
             round(s['mean_err'], 4), round(s['median_err'], 4),
             round(s['mean_dir'], 4), round(s['median_dir'], 4),
             round(s['mean_beta'], 4),
@@ -287,24 +266,19 @@ def _row(seg, n, rung, s):
 def run_all_segments(out_results=RESULTS_CSV, out_frames=FRAMES_CSV):
     rrows, frows = [], []
     for seg in SEGMENTS:
-        s0, est, ref = rung0_baseline(seg)
-        if s0 is None:
+        ctx = prep_segment_context(seg)
+        if ctx is None:
             continue
-        n = len(est)
-        rrows.append(_row(seg, n, '0', s0))
-        for k in range(n):
+        s0, est, ref = rung0_baseline(ctx)
+        rrows.append(_row(ctx, '0', s0))
+        for k in range(ctx['n']):
             frows.append([seg['name'], k,
                           est[k, 0], est[k, 1], est[k, 2],
                           ref[k, 0], ref[k, 1], ref[k, 2]])
-        s1a, _ok = rung1a_kinematics(seg)
-        if s1a is not None:
-            rrows.append(_row(seg, n, '1a', s1a))
-        sfree = rung1b_clamped_flow(seg, anchored=False)
-        if sfree is not None:
-            rrows.append(_row(seg, n, '1b_free', sfree))
-        sanch = rung1b_clamped_flow(seg, anchored=True)
-        if sanch is not None:
-            rrows.append(_row(seg, n, '1b_anchored', sanch))
+        s1a, _ok = rung1a_kinematics(ctx)
+        rrows.append(_row(ctx, '1a', s1a))
+        rrows.append(_row(ctx, '1b_free', rung1b_clamped_flow(ctx, anchored=False)))
+        rrows.append(_row(ctx, '1b_anchored', rung1b_clamped_flow(ctx, anchored=True)))
     with open(out_results, 'w', newline='') as f:
         w = csv.writer(f); w.writerow(RESULTS_HEADER); w.writerows(rrows)
     with open(out_frames, 'w', newline='') as f:
