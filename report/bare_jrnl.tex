@@ -2079,8 +2079,9 @@ of the method, which is worth knowing for anyone tuning it on a new sequence.
 That split is not confined to $\delta_{F\!R}$. It appears, with the same sense,
 on every parameter that arbitrates between the flow field and the anchor, and
 it is large enough that no single configuration is best for both kinds of data.
-A coordinate sweep from Table~\ref{tab:params} over all six relaxation rates
-gives, on \texttt{poster\_rotation} against \texttt{bicycle}:
+A coordinate sweep from Table~\ref{tab:params} over all six relaxation rates,
+at $1.0$\,s per sequence, gives on \texttt{poster\_rotation} against
+\texttt{bicycle}:
 $\delta_{V\!F\!G} = 0.03$ scores $13.16$ and $2.00^\circ$/s respectively, while
 $0.48$ scores $8.21$ and $10.83$; $\delta_{F\!R} = 0.5$ scores $8.28$ and
 $18.86$, while $0.02$ scores $12.64$ and $2.68$; $\delta_{\text{anchor}} = 0.1$
@@ -2109,7 +2110,9 @@ A coordinate sweep from Table~\ref{tab:params} over the parameters not covered
 above --- $\delta_{I\!G}$, $\delta_{G\!I}$ and $\delta_{R\!F}$ --- is reported
 here for completeness, and because two of the three turn out not to matter.
 Values are the mean over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
-\texttt{bicycle} at $1.5$\,s.
+\texttt{bicycle} at $1.0$\,s, so they are not directly comparable with the
+$1.5$\,s figures of Table~\ref{tab:main}; only the trend within each sweep is
+read here.
 
 $\delta_{I\!G}$, the rate at which $\Gmap$ is blended towards $\nabla\Imap$,
 moves the error by $0.17^\circ$/s across a thirteen-fold change
