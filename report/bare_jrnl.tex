@@ -1061,7 +1061,7 @@ It is not tracking poorly --- it is not tracking.
 component-wise, against the Vicon reference. The contrast-anchored network
 tracks; the same network without an anchor settles on an arbitrary constant and
 stays there, which is the $\beta$-ambiguity of~\eqref{eq:beta} resolving itself
-once and then persisting through the recurrent state.}
+once and then persisting through the recurrent state. All panels come from the runs of Table~\ref{tab:main}: $75$ frames of $20$\,ms ($1.5$\,s), the parameters of Table~\ref{tab:params}, lens distortion carried in the kinematic matrix.}
 \label{fig:tracking}
 \end{figure}
 
@@ -1089,8 +1089,12 @@ systematically.
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{fig_maps}
-\caption{Jointly inferred quantities after $40$ frames, for two real sequences
-and one synthetic one. Only $\Vmap$ is observed; $\Imap$, $\Gmap$ and $\Fmap$
+\caption{Jointly inferred quantities after $75$ frames ($1.5$\,s), for two real
+sequences and one synthetic one, from the runs of Table~\ref{tab:main}.
+Two intensity columns are shown because they differ and only one of them
+is scored: $\Imap$ (in-loop) is the map the network carries, while
+$\Imap$ (read-out) is~\eqref{eq:poisson_exact} applied to the same
+$\Gmap$, which is what the $r$ column of Table~\ref{tab:main} measures. Only $\Vmap$ is observed; $\Imap$, $\Gmap$ and $\Fmap$
 are inferred. Flow is shown as hue for direction and saturation for magnitude.
 The middle row is the \texttt{dynamic\_rotation} segment of
 Sec.~\ref{sec:protocol}, in which a person is present in the scene but seated;
@@ -1478,7 +1482,7 @@ the relaxation that no anchor can repair.
 the two real sequences. \texttt{CMax-anchor} (in which the kinematic cost
 updates $\wvec$) shows a strong speed dependence, $r = +0.96$;
 \texttt{CMax-inloop} (in which it does not) shows no comparable trend,
-$r = -0.47$, n.s. $\beta > 1$ means the magnitude is underestimated.}
+$r = -0.47$, n.s. $\beta > 1$ means the magnitude is underestimated. All panels come from the runs of Table~\ref{tab:main}: $75$ frames of $20$\,ms ($1.5$\,s), the parameters of Table~\ref{tab:params}, lens distortion carried in the kinematic matrix.}
 \label{fig:beta_speed}
 \end{figure}
 
@@ -1995,7 +1999,7 @@ events, with the lens carried by $\Cmat$~\eqref{eq:cdist}. Middle: the same
 events after \texttt{cv2.undistortPoints}, showing the concentric moir\'e left
 by re-quantising sub-pixel coordinates onto the pixel grid. Right: detail of the
 periphery, where rectification compresses hardest and the artefact is strongest.
-The pattern is a sampling artefact, not scene structure.}
+The pattern is a sampling artefact, not scene structure. All panels come from the runs of Table~\ref{tab:main}: $75$ frames of $20$\,ms ($1.5$\,s), the parameters of Table~\ref{tab:params}, lens distortion carried in the kinematic matrix.}
 \label{fig:distortion}
 \end{figure}
 
@@ -2416,8 +2420,10 @@ of each track but not of its worst moments.
 \begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{fig_appendix_maps}
-\caption{Inferred quantities for all five sequences after $40$ frames, at the
-configuration of Table~\ref{tab:main}. Only $\Vmap$ is observed; $\Imap$,
+\caption{Inferred quantities for all five sequences after $75$ frames ($1.5$\,s),
+from the runs of Table~\ref{tab:main}. As in Fig.~\ref{fig:maps} both
+the in-loop intensity map and the exact read-out
+of~\eqref{eq:poisson_exact} are shown. Only $\Vmap$ is observed; $\Imap$,
 $\Gmap$ and $\Fmap$ are inferred jointly with $\wvec$. Flow is coded as hue for
 direction and saturation for magnitude.}
 \label{fig:appendix}

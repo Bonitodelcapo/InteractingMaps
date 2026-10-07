@@ -49,7 +49,10 @@ sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 FIG = os.path.join(ROOT, 'report', 'figures')
 os.makedirs(FIG, exist_ok=True)
 
-DT, N_TRACK, N_MAPS = 0.02, 150, 40
+# Both match Table III: 75 frames of 20 ms = 1.5 s. The figures and the
+# tables must describe the same runs, or a reader comparing them finds a
+# disagreement that is only a difference of protocol.
+DT, N_TRACK, N_MAPS = 0.02, 75, 75
 TUNED = dict(delta_FR=0.1, delta_IMU=0.5)
 
 # (dataset, segment id, t_start, label) — Table II
@@ -212,7 +215,7 @@ def compute_maps(E):
     cache = os.path.join(FIG, '.maps_cache.npz')
     if os.path.exists(cache):
         z = np.load(cache)
-        return [(z[f'V{i}'], z[f'I{i}'], z[f'G{i}'], z[f'F{i}'])
+        return [(z[f'V{i}'], z[f'I{i}'], z[f'G{i}'], z[f'F{i}'], z[f'R{i}'])
                 for i in range(len(SEGMENTS))]
     maps = []
     for ds, sid, t0, label in SEGMENTS:
@@ -234,34 +237,42 @@ def compute_maps(E):
         for k, (V, _tm) in enumerate(sq):
             win = ev[(ev[:, 0] >= t0 + k*DT) & (ev[:, 0] < t0 + (k+1)*DT)]
             net.step(V, n_iters=75, events=win)
-        maps.append((V.copy(), net.I[:H, :W].copy(), net.G.copy(), net.F.copy()))
+        # Store the exact read-out of Eq. 6.64 as well: every reconstruction
+        # number in the report refers to that, not to the in-loop map.
+        from interacting_maps.network_dissertation import solve_poisson_exact
+        I_ro = solve_poisson_exact(net.G[:H, :W], 'fft')
+        maps.append((V.copy(), net.I[:H, :W].copy(), net.G.copy(),
+                     net.F.copy(), I_ro))
         print(f'    {label} done')
     np.savez_compressed(cache, **{f'{n}{i}': m for i, tup in enumerate(maps)
-                                  for n, m in zip('VIGF', tup)})
+                                  for n, m in zip('VIGFR', tup)})
     return maps
 
 
 def _draw_maps(maps, labels, name, height_per_row=1.72):
-    fig, axes = plt.subplots(len(labels), 4,
-                             figsize=(7.05, height_per_row * len(labels)))
+    fig, axes = plt.subplots(len(labels), 5,
+                             figsize=(8.6, height_per_row * len(labels)))
     axes = np.atleast_2d(axes)
-    for r, ((V, I, G, F), lab) in enumerate(zip(maps, labels)):
+    for r, ((V, I, G, F, I_ro), lab) in enumerate(zip(maps, labels)):
         m = np.percentile(np.abs(V), 99.5) or 1e-6
         axes[r, 0].imshow(V, cmap='bwr', vmin=-m, vmax=m)          # V is signed
         lo, hi = np.percentile(I, [1, 99])
         axes[r, 1].imshow(I, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
+        lo, hi = np.percentile(I_ro, [1, 99])
+        axes[r, 2].imshow(I_ro, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
         g = np.linalg.norm(G, axis=-1)
-        axes[r, 2].imshow(g, cmap='gray', vmin=0, vmax=np.percentile(g, 99) or 1e-6)
+        axes[r, 3].imshow(g, cmap='gray', vmin=0, vmax=np.percentile(g, 99) or 1e-6)
         ang = (np.arctan2(F[..., 1], F[..., 0]) + np.pi) / (2 * np.pi)
         mag = np.linalg.norm(F, axis=-1)
         mag = mag / (np.percentile(mag, 99) + 1e-9)
-        axes[r, 3].imshow(mcolors.hsv_to_rgb(
+        axes[r, 4].imshow(mcolors.hsv_to_rgb(
             np.stack([ang, np.clip(mag, 0, 1), np.ones_like(ang)], -1)))
-        for c in range(4):
+        for c in range(5):
             axes[r, c].set_xticks([]); axes[r, c].set_yticks([])
             axes[r, c].grid(False)
         axes[r, 0].set_ylabel(lab, fontsize=7)
-    for c, ttl in enumerate([r'events  $V$ (input)', r'intensity  $I$',
+    for c, ttl in enumerate([r'events  $V$ (input)', r'intensity  $I$ (in-loop)',
+                             r'intensity  $I$ (read-out)',
                              r'gradient  $\|G\|$', r'flow  $F$']):
         axes[0, c].set_title(ttl, fontsize=8, pad=4)
     fig.tight_layout(pad=0.25)
