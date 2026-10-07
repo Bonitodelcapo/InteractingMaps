@@ -2002,14 +2002,20 @@ The pattern is a sampling artefact, not scene structure.}
 \subsection{Sensitivity Analysis and Ablation}
 \label{sec:sensitivity}
 
-Table~\ref{tab:sweep} varies each parameter in turn from the configuration of
-Table~\ref{tab:params}, on all five sequences. Two of the four sweeps are
-informative, and one of them changes what we would recommend. The ablation of
-the anchor and the trend in $\delta_{F\!R}$ hold on all five sequences
-independently, which is what makes them worth reporting: the sequences differ
-in scene, in sensor (real against simulated), in rotation speed by a factor of
-three and in event density by a factor of eight. The remaining parameters do
-\emph{not} behave alike on both kinds of data, and
+Every parameter of Table~\ref{tab:params} is swept, one at a time from the
+adopted configuration: the anchor weight and $\delta_{F\!R}$ here,
+$\delta_{V\!F\!G}$ in Sec.~\ref{sec:realvssynth}, the remaining three
+relaxation rates in Sec.~\ref{sec:other_deltas}, and the iteration count and
+accumulation window in Sec.~\ref{sec:window_sweep}. Table~\ref{tab:sweep}
+reports the first two on all five sequences; the rest are summarised in the
+text, since four of the six rates change the error by less than
+$0.4^\circ$/s and do not warrant a table of their own.
+
+The ablation of the anchor and the trend in $\delta_{F\!R}$ hold on all five
+sequences independently, which is what makes them worth reporting: the
+sequences differ in scene, in sensor (real against simulated), in rotation
+speed by a factor of three and in event density by a factor of eight. The
+remaining parameters do \emph{not} behave alike on both kinds of data, and
 Sec.~\ref{sec:realvssynth} reports where they diverge.
 
 \subsubsection{Removing the anchor}
@@ -2096,6 +2102,37 @@ anchor is already near-perfect rather than as a second independent validation.
 The regularisers of Sec.~\ref{sec:regularisers} divide along the same line:
 $\delta_{\text{curl}}$ helps the real sequences and harms the synthetic ones,
 $\delta_{\text{shrink}I}$ the reverse.
+
+\subsubsection{The three remaining relaxation rates}
+\label{sec:other_deltas}
+A coordinate sweep from Table~\ref{tab:params} over the parameters not covered
+above --- $\delta_{I\!G}$, $\delta_{G\!I}$ and $\delta_{R\!F}$ --- is reported
+here for completeness, and because two of the three turn out not to matter.
+Values are the mean over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
+\texttt{bicycle} at $1.5$\,s.
+
+$\delta_{I\!G}$, the rate at which $\Gmap$ is blended towards $\nabla\Imap$,
+moves the error by $0.17^\circ$/s across a thirteen-fold change
+($9.04$ at $0.03$, $8.87$ at $0.40$). $\delta_{G\!I}$, the Poisson step,
+moves it by $0.08^\circ$/s across a ten-fold change ($8.99$ at $0.02$, $8.92$
+at $0.20$). Neither is worth tuning for the angular velocity, and the reason
+is the same in both cases: they govern the exchange between $\Imap$ and
+$\Gmap$, and $\wvec$ sees that exchange only at second hand, through the flow
+constraint. Their effect on the \emph{reconstruction} is not negligible ---
+raising $\delta_{G\!I}$ from $0.02$ to $0.20$ lowers the curl share of $\Gmap$
+from $0.46$ to $0.35$ --- which is the same dissociation as everywhere else in
+this report, seen from the parameter side.
+
+$\delta_{R\!F}$, the rate at which $\Fmap$ is pulled towards $\Cmat\wvec$, does
+matter, and it splits the two kinds of data exactly as
+Sec.~\ref{sec:realvssynth} describes. Weakening it to $0.01$ gives the best
+result we obtain on all three real sequences ($7.69$, $10.18$, $9.92$ against
+$8.10$, $10.81$, $10.32$ at the adopted value), while strengthening it to
+$0.20$ gives the best synthetic result ($4.11$ against $6.75$) and the worst
+real ones. The reading is the one already established: $\delta_{R\!F}$ controls
+how strongly the kinematic model overrides what the events say about the flow
+field, and whether that helps depends on whether the anchor driving it is
+better than the flow field it is overriding.
 
 \subsubsection{Iterations}
 Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
