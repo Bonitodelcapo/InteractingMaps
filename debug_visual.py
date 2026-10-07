@@ -27,9 +27,10 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from config import DATASET_SEGMENTS
 from data_loader import (CameraCalibration, EventFrameSequence,
                          load_events_fast, undistort_events)
-from evaluation import (RunConfig, make_network, load_imu, get_gyro_for_frame,
-                        gt_omega_body, compute_metrics, _try_load_gt_images,
-                        flow_to_rgb, normalise_robust)
+from run_config import RunConfig, make_network, _try_load_gt_images
+from eval_io import load_imu, get_gyro_for_frame, gt_omega_body
+from metrics import compute_metrics
+from viz import flow_to_rgb, normalise_robust
 from cmax import CMaxAngularVelocity
 
 RAD = 180.0 / np.pi

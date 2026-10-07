@@ -22,7 +22,7 @@ import numpy as np
 import yaml as _yaml
 
 import config
-from evaluation import get_dataset_paths
+from config import get_dataset_paths
 from eval_io import load_imu, get_gyro_for_frame, load_omega_gt, omega_gt_at
 from data_loader import EventFrameSequence
 from interacting_maps.network_dissertation import InteractingMapsThesis

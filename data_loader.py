@@ -138,8 +138,6 @@ def load_events_fast(
     mask = chunk[:, 0] < t_end
     return chunk[mask]
 
-import cv2
-
 def undistort_events(events: np.ndarray, calib: 'CameraCalibration') -> np.ndarray:
     """
     Undistort event (x, y) coordinates using the radial/tangential distortion model.

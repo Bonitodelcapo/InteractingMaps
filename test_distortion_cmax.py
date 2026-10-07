@@ -40,7 +40,8 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from config import get_dataset_paths, DATASET_SEGMENTS
 from data_loader import CameraCalibration, load_events_fast, undistort_events
-from evaluation import gt_omega_body, get_gyro_for_frame, load_imu, compute_metrics
+from eval_io import gt_omega_body, get_gyro_for_frame, load_imu
+from metrics import compute_metrics
 from cmax import CMaxAngularVelocity
 
 RAD = 180.0 / np.pi

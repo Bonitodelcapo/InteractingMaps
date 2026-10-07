@@ -148,7 +148,8 @@ InteractingMaps/
 │   ├── camera.py             (3) calibration + kinematic matrix C
 │   ├── network.py            (4) InteractingMaps  (Cook, Gauss-Seidel)
 │   └── network_dissertation.py (5) InteractingMapsThesis (+ Cost_IMU)
-├── evaluation.py             (6) RunConfig + experiments 1–8 + metrics
+├── run_config.py             (6) RunConfig + make_network (run configuration)
+├── evaluation.py             (6) experiments 1–8 + metrics
 ├── find_segments.py          (7) discover constant-ω segments from imu.txt
 ├── demo.py                       live animated demo
 ├── data/<dataset>/
@@ -305,8 +306,9 @@ before OFCE builds structure), plus tiny noise in `I` to seed `∇I`.
 
 ### 6.6 `evaluation.py`
 
-The harness. `RunConfig` bundles dataset/segment/model/params and derives
-`initial_R` from the IMU. Model built by `make_network`.
+The harness (experiments 1–9). Run configuration lives in `run_config.py`:
+`RunConfig` bundles dataset/segment/model/params and derives `initial_R` from
+the IMU; the model is built by `make_network`. `evaluation.py` imports both.
 
 **Reference & scoring** (the sensor split):
 - `get_gyro_for_frame(imu, t_lo, t_hi)` — averages gyro columns → **model input**.
