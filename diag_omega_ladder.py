@@ -15,8 +15,10 @@ cells; edit this file, then regenerate the notebook).
 """
 # %%
 import argparse
+import glob
 import os
 import numpy as np
+import yaml as _yaml
 
 import config
 from evaluation import get_dataset_paths
@@ -32,8 +34,8 @@ LIMIT = None
 SEGMENTS = [
     {'name': 'city_short',   'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
     {'name': 'city_long',    'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
-    {'name': 'street_short', 'ds': 'street_sinthetic', 't_start': 1.001, 'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
-    {'name': 'street_long',  'ds': 'street_sinthetic', 't_start': 1.001, 'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
+    {'name': 'street_short', 'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
+    {'name': 'street_long',  'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
 ]
 
 
@@ -51,26 +53,59 @@ def cap_to_coverage(seg, om):
     return n
 
 
+def load_calibration(paths):
+    """Network intrinsics + distortion, preferring a ROS camera_info *.yaml in
+    the dataset dir (e.g. DAVIS240C-synthetic.yaml) over calib.txt.
+
+    Returns {fx, fy, cx, cy, dist_coeffs, H, W, src}. dist_coeffs is None when
+    all coefficients are zero (clean pinhole C), else the [k1,k2,p1,p2,k3] array
+    in the same order calib.txt / build_kinematic_matrix use.
+    """
+    yamls = sorted(glob.glob(os.path.join(paths['data_dir'], '*.yaml')))
+    if yamls:
+        with open(yamls[0]) as f:
+            y = _yaml.safe_load(f)
+        K = y['camera_matrix']['data']           # row-major 3x3
+        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
+        dist = np.asarray(
+            y.get('distortion_coefficients', {}).get('data', []),
+            dtype=np.float64)
+        H = int(y['image_height']); W = int(y['image_width'])
+        src = os.path.basename(yamls[0])
+    else:
+        from data_loader import CameraCalibration
+        c = CameraCalibration(paths['calib'])
+        fx, fy, cx, cy = c.fx, c.fy, c.cx, c.cy
+        dist = np.asarray(getattr(c, 'dist', []), dtype=np.float64)
+        H = W = None
+        src = 'calib.txt'
+    dist_coeffs = None if dist.size == 0 or not np.any(dist) else dist
+    return {'fx': fx, 'fy': fy, 'cx': cx, 'cy': cy,
+            'dist_coeffs': dist_coeffs, 'H': H, 'W': W, 'src': src}
+
+
 def load_segment(seg):
     """Load one segment, or None if its data is not present on this machine."""
     paths = get_dataset_paths(seg['ds'])
     if not os.path.exists(paths['events']):
         print(f"[skip] {seg['name']}: no data at {paths['events']}")
         return None
+    calib = load_calibration(paths)
     om = load_omega_gt(paths.get('omega_gt'))
     n = cap_to_coverage(seg, om)
     if n < 2:
         print(f"[skip] {seg['name']}: too few frames after coverage cap")
         return None
+    sensor = (calib['H'], calib['W']) if calib['H'] else seg['sensor_size']
     seq = EventFrameSequence(
         paths['events'], paths['calib'],
         frame_duration=seg['dt'], t_start=seg['t_start'],
         n_frames=n, clip_value=10.0,
-        sensor_size=seg['sensor_size'], undistort=False,
+        sensor_size=sensor, undistort=False,
     )
     imu = load_imu(paths['imu'])
     frames = list(seq)
-    return seq, paths, imu, om, frames, len(frames)
+    return seq, paths, imu, om, frames, len(frames), calib
 
 
 def frame_windows(seg, n):
@@ -82,12 +117,12 @@ def ref_omega(om, t_lo, t_hi):
     return omega_gt_at(om, t_lo, t_hi)
 
 
-def build_net(seg, seq):
-    c = seq.calib
+def build_net(seg, seq, calib):
     return InteractingMapsThesis(
-        H=seq.H, W=seq.W, fx=c.fx, fy=c.fy, cx=c.cx, cy=c.cy,
+        H=seq.H, W=seq.W,
+        fx=calib['fx'], fy=calib['fy'], cx=calib['cx'], cy=calib['cy'],
         frame_duration=seg['dt'],
-        dist_coeffs=None, poisson=config.POISSON_MODE,
+        dist_coeffs=calib['dist_coeffs'], poisson=config.POISSON_MODE,
         **config.THESIS_PARAMS,
     )
 
@@ -127,12 +162,14 @@ def _selfcheck():
         loaded = load_segment(seg)
         if loaded is None:
             continue
-        seq, paths, imu, om, frames, n = loaded
-        net = build_net(seg, seq)
+        seq, paths, imu, om, frames, n, calib = loaded
+        net = build_net(seg, seq, calib)
         assert net._C_mat.shape == (seq.H, seq.W, 2, 3)
         w0 = ref_omega(om, *frame_windows(seg, n)[0])
         print(f"[ok] {seg['name']}: {n} frames, |omega_gt[0]|="
-              f"{np.linalg.norm(w0):.3f} rad/s")
+              f"{np.linalg.norm(w0):.3f} rad/s  [calib {calib['src']}: "
+              f"fx={calib['fx']:.0f} cx={calib['cx']:.0f} cy={calib['cy']:.0f}"
+              f"{' +dist' if calib['dist_coeffs'] is not None else ''}]")
 
 
 # %%
@@ -142,10 +179,10 @@ def rung0_baseline(seg):
     loaded = load_segment(seg)
     if loaded is None:
         return None, None, None
-    seq, paths, imu, om, frames, n = loaded
+    seq, paths, imu, om, frames, n, calib = loaded
     n = _nlim(n); frames = frames[:n]
     wins = frame_windows(seg, n)
-    net = build_net(seg, seq)
+    net = build_net(seg, seq, calib)
     # Warm start from the gyro at t_start (mirrors reported runs: initial_R None).
     R_init = get_gyro_for_frame(imu, *wins[0]) * seg['dt']
     net.initialize_from_rotation(R_init)
@@ -171,10 +208,10 @@ def rung1a_kinematics(seg):
     loaded = load_segment(seg)
     if loaded is None:
         return None, False
-    seq, paths, imu, om, frames, n = loaded
+    seq, paths, imu, om, frames, n, calib = loaded
     n = _nlim(n)
     wins = frame_windows(seg, n)
-    net = build_net(seg, seq)
+    net = build_net(seg, seq, calib)
     C = net._C_mat
     M_inv = build_R_normal_equations(C)
     dt = seg['dt']
@@ -198,10 +235,10 @@ def rung1b_clamped_flow(seg, anchored):
     loaded = load_segment(seg)
     if loaded is None:
         return None
-    seq, paths, imu, om, frames, n = loaded
+    seq, paths, imu, om, frames, n, calib = loaded
     n = _nlim(n); frames = frames[:n]
     wins = frame_windows(seg, n)
-    net = build_net(seg, seq)
+    net = build_net(seg, seq, calib)
     dt = seg['dt']
     net.initialize_from_rotation(get_gyro_for_frame(imu, *wins[0]) * dt)
     net.q_F.update = lambda lr: None         # freeze F (instance-level no-op)
