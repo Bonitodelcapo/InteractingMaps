@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+street_sinthetic,seg_A,thesis_cmax,7.9,7.58,2.02,1.109,0.4071,0.1762,0.0,0.68,0.29,1223

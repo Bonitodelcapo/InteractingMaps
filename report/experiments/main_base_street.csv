@@ -1,5 +1,5 @@
 sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
-street_sinthetic,seg_A,cook,73.77,72.57,59.6,346.225,0.0229,0.0035,0.0,0.68,0.29,82
-street_sinthetic,seg_A,thesis,51.23,50.47,27.48,2.504,0.5551,0.1645,0.0,0.68,0.29,73
-street_sinthetic,seg_A,thesis_imu,6.29,6.08,0.99,1.088,0.3099,0.0801,0.0,0.68,0.29,69
-street_sinthetic,seg_A,thesis_cmax,7.09,6.95,2.16,1.094,0.3054,0.0789,0.0,0.68,0.29,963
+street_sinthetic,seg_A,cook,73.77,72.57,59.6,346.225,0.0989,0.0092,0.0,0.68,0.29,82
+street_sinthetic,seg_A,thesis,51.23,50.47,27.48,2.504,0.5551,0.2,0.0,0.68,0.29,73
+street_sinthetic,seg_A,thesis_imu,6.29,6.08,0.99,1.088,0.3252,0.0839,0.0,0.68,0.29,69
+street_sinthetic,seg_A,thesis_cmax,7.09,6.95,2.16,1.094,0.3206,0.0826,0.0,0.68,0.29,963
