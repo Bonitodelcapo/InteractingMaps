@@ -26,11 +26,14 @@ def compute_metrics(omega_est, omega_gt):
 
 
 def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
-    """Pearson r between an intensity map and the nearest APS frame.
+    """|Pearson r| between an intensity map and the nearest APS frame.
 
-    Invariant to scale and offset, the two freedoms the reconstruction has.
-    Interior only: the border is where the Poisson boundary assumption is
-    weakest. nan when the dataset ships no APS.
+    Invariant to scale, offset and sign, the freedoms the reconstruction has:
+    the beta-ambiguity admits beta < 0, which inverts I, and an unanchored
+    network does invert it whenever its omega points away from the true one.
+    A signed r would score that inverted image as negative and cancel it in a
+    track mean. Interior only: the border is where the Poisson boundary
+    assumption is weakest. nan when the dataset ships no APS.
     """
     if not gt_images or img is None:
         return float('nan')
@@ -50,7 +53,7 @@ def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
         a = a - a.mean()
         b = b - b.mean()
         d = np.sqrt((a * a).sum() * (b * b).sum())
-        return float((a * b).sum() / d) if d > 0 else float('nan')
+        return float(abs((a * b).sum()) / d) if d > 0 else float('nan')
     except Exception:
         return float('nan')
 

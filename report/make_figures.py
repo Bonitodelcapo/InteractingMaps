@@ -13,9 +13,9 @@ Where the data comes from
 -------------------------
 beta_speed, tracking   read results/ directly (summary.json / tracking.csv), so
                        they need the corresponding runs to exist.
-maps, appendix         re-run the network for 40 frames per sequence, because
-                       the map state is not persisted by the harness. Cached in
-                       report/figures/.maps_cache.npz -- delete it to recompute.
+maps, appendix         read the final maps (maps_final.npz) of the Table III
+                       runs in results/: CMax-anchor for maps, one figure per
+                       other model for appendix.
 distortion             needs only the raw events.
 
 Configuration
@@ -44,6 +44,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import provenance  # merged run.json reader (after sys.path points at ROOT)
+from viz import grad_to_rgb
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -53,6 +54,9 @@ os.makedirs(FIG, exist_ok=True)
 # tables must describe the same runs, or a reader comparing them finds a
 # disagreement that is only a difference of protocol.
 DT, N_TRACK, N_MAPS = 0.02, 75, 75
+# beta-vs-speed pools seven segments, of which only the Table II ones were run
+# at 1.5 s; it uses the 3 s (150-frame) runs of tab:anchor throughout instead.
+N_BETA = 150
 TUNED = dict(delta_FR=0.1, delta_IMU=0.5)
 
 # (dataset, segment id, t_start, label) — Table II
@@ -63,6 +67,26 @@ SEGMENTS = [
     ('bycicle_sinthetic', 'seg_A', 1.001,  'bicycle'),
     ('street_sinthetic',  'seg_A', 1.001,  'street'),
 ]
+
+# fig_maps rows (index into SEGMENTS, label, frame shown, run root). Every
+# sequence at the last frame of its Table III run, except poster: its last
+# frame falls in the anchored excursion, so it is shown at POSTER_FRAME, the
+# frame of highest |r| for CMax-anchor and also for the mean over all five
+# models, from runs stopped there (run_experiments --what sweep --name
+# maps_poster --duration 0.88). The runs are deterministic, so that frame is
+# the Table III run's own frame 44.
+POSTER_FRAME = 44
+MAP_ROWS = [(0, 'boxes\n(real)', N_MAPS, 'results'),
+            (1, f'poster\n(real, frame {POSTER_FRAME})', POSTER_FRAME,
+             'experiments/maps_poster'),
+            (2, 'dynamic\n(person in scene)', N_MAPS, 'results'),
+            (3, 'bicycle\n(synthetic)', N_MAPS, 'results'),
+            (4, 'street\n(synthetic)', N_MAPS, 'results')]
+# the appendix repeats those frames for every model but the CMax-anchor one;
+# names as the report's Table III writes them
+APPENDIX_MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax_v2']
+DISPLAY = {'cook': 'cook', 'thesis': 'thesis (no anchor)',
+           'thesis_imu': 'thesis+IMU', 'thesis_cmax_v2': 'CMax-inloop'}
 
 # every segment of the two real sequences — the beta-vs-speed population
 BETA_SEGMENTS = [
@@ -85,8 +109,9 @@ def _save(fig, name, **kw):
 
 
 def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
-             poisson='iterative', deltas=None):
-    """Locate the results/ directory matching this configuration exactly.
+             poisson='iterative', deltas=None, n_frames=N_TRACK, dt=DT,
+             root='results'):
+    """Locate the run directory under `root` matching this configuration exactly.
 
     Matching on the step sizes ALONE is not enough. results/ accumulates runs
     from earlier configurations -- different iteration counts, and in particular
@@ -100,9 +125,14 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
     solver comparison: a run differing only in the I-update or in one of the
     remaining relaxation rates must not be picked up as if it were this one.
     Older runs carry no 'poisson' key and are treated as 'iterative'.
+    The regularisers default to off, as everywhere outside their own section,
+    so e.g. the _curl0.6 ablation run is not mistaken for the reported one.
     """
+    deltas = {'delta_shrinkI': 0.0, 'delta_map': 0.0, 'delta_curl': 0.0,
+              **(deltas or {})}
     hits = []
-    for d in sorted(glob.glob(f'results/{ds}/{model}/{sid}_t{t0}_dt20ms_n150_*')):
+    pat = f'{root}/{ds}/{model}/{sid}_t{t0}_dt{round(dt * 1000)}ms_n{n_frames}_*'
+    for d in sorted(glob.glob(pat)):
         try:
             cfg = provenance.read_config(d)
             pr = cfg['params']
@@ -119,7 +149,7 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
         if cfg.get('poisson', 'iterative') != poisson:
             continue
         if any(abs(pr.get(k, float('nan')) - v) > 1e-9
-               for k, v in (deltas or {}).items()):
+               for k, v in deltas.items()):
             continue
         hits.append(d)
     if len(hits) > 1:
@@ -149,9 +179,9 @@ def fig_beta_speed(E):
     }
     data = {k: ([], []) for k in series}
     for ds, sid, t0 in BETA_SEGMENTS:
-        w = np.linalg.norm(reference_omega(E, ds, t0), axis=1).mean()
+        w = np.linalg.norm(reference_omega(E, ds, t0, N_BETA), axis=1).mean()
         for key, (model, d_fr, d_a, _, _, _) in series.items():
-            d = find_run(ds, sid, t0, model, d_fr, d_a)
+            d = find_run(ds, sid, t0, model, d_fr, d_a, n_frames=N_BETA)
             if d is None:
                 print(f'    (missing {ds}/{sid}/{model} dFR={d_fr})')
                 continue
@@ -209,47 +239,53 @@ def fig_tracking(E):
 
 
 # ------------------------------------------------------------------- map panels
-def compute_maps(E):
-    """Run the network N_MAPS frames per sequence; cache the final maps."""
-    from data_loader import EventFrameSequence, CameraCalibration, load_events_fast
-    cache = os.path.join(FIG, '.maps_cache.npz')
-    if os.path.exists(cache):
-        z = np.load(cache)
-        return [(z[f'V{i}'], z[f'I{i}'], z[f'G{i}'], z[f'F{i}'], z[f'R{i}'])
-                for i in range(len(SEGMENTS))]
+def compute_maps(E, model):
+    """Final maps of one model's runs at the MAP_ROWS frames (Table III runs,
+    except poster: see MAP_ROWS).
+
+    Read from each run's maps_final.npz rather than re-running the network: a
+    re-run here once passed the events without the CMax anchor, so the figure
+    showed an unanchored network under a caption naming the anchored one.
+    A sequence without a completed run comes back as None.
+    """
+    from data_loader import EventFrameSequence
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    d_anchor = TUNED['delta_IMU'] if model in ('thesis_imu', 'thesis_cmax') else None
     maps = []
-    for ds, sid, t0, label in SEGMENTS:
+    for i, _lab, n, root in MAP_ROWS:
+        ds, sid, t0, label = SEGMENTS[i]
+        d = find_run(ds, sid, t0, model, TUNED['delta_FR'], d_anchor,
+                     n_frames=n, root=root)
+        if d is None or not os.path.exists(os.path.join(d, 'maps_final.npz')):
+            print(f'    (missing {ds}/{model})')
+            maps.append(None)
+            continue
         p = E.get_dataset_paths(ds)
-        calib = CameraCalibration(p['calib'])
         sq = EventFrameSequence(p['events'], p['calib'], frame_duration=DT, t_start=t0,
-                                n_frames=N_MAPS, clip_value=10.0, undistort=False,
+                                n_frames=n, clip_value=10.0, undistort=False,
                                 sensor_size=(180, 240))
-        H, W = sq.H, sq.W
-        rc = E.RunConfig(dataset=ds, model='thesis_cmax',
-                         segment={'id': sid, 't_start': t0, 'frame_duration': DT,
-                                  'n_frames': N_MAPS, 'initial_R': None,
-                                  'sensor_size': (180, 240)},
-                         n_frames=N_MAPS, **dict(TUNED))
-        net = E.make_network(rc, H, W, calib.fx, calib.fy, calib.cx, calib.cy)
-        net.initialize_from_rotation(rc.initial_R)
-        ev = load_events_fast(p['events'], t_start=t0, duration=N_MAPS * DT + 0.05)
-        V = None
-        for k, (V, _tm) in enumerate(sq):
-            win = ev[(ev[:, 0] >= t0 + k*DT) & (ev[:, 0] < t0 + (k+1)*DT)]
-            net.step(V, n_iters=75, events=win)
-        # Store the exact read-out of Eq. 6.64 as well: every reconstruction
-        # number in the report refers to that, not to the in-loop map.
-        from interacting_maps.network_dissertation import solve_poisson_exact
-        I_ro = solve_poisson_exact(net.G[:H, :W], 'fft')
-        maps.append((V.copy(), net.I[:H, :W].copy(), net.G.copy(),
-                     net.F.copy(), I_ro))
-        print(f'    {label} done')
-    np.savez_compressed(cache, **{f'{n}{i}': m for i, tup in enumerate(maps)
-                                  for n, m in zip('VIGFR', tup)})
+        V = list(sq)[-1][0]
+        m = np.load(os.path.join(d, 'maps_final.npz'))
+        # The exact read-out of Eq. 6.64 as well: every reconstruction number
+        # in the report refers to that, not to the in-loop map.
+        maps.append((V, m['I'], m['G'], m['F'], solve_poisson_exact(m['G'], 'fft')))
+        print(f'    {label}/{model} ({os.path.basename(d)})')
     return maps
 
 
-def _draw_maps(maps, labels, name, height_per_row=1.72):
+def _direction_key(ax):
+    """Colour wheel beside a panel title: the hue each vector direction gets."""
+    yy, xx = np.mgrid[-1:1:65j, -1:1:65j]
+    wheel = grad_to_rgb(np.stack([xx, yy], -1), pct=100)
+    key = ax.inset_axes([0.0, 1.01, 0.2, 0.22])
+    key.imshow(np.dstack([wheel, np.hypot(xx, yy) <= 1]))
+    key.set_anchor('W')
+    key.axis('off')
+
+
+def _draw_maps(maps, labels, name, height_per_row=1.62, title=None):
+    labels = [lab for m, lab in zip(maps, labels) if m is not None]
+    maps = [m for m in maps if m is not None]
     fig, axes = plt.subplots(len(labels), 5,
                              figsize=(8.6, height_per_row * len(labels)))
     axes = np.atleast_2d(axes)
@@ -260,8 +296,7 @@ def _draw_maps(maps, labels, name, height_per_row=1.72):
         axes[r, 1].imshow(I, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
         lo, hi = np.percentile(I_ro, [1, 99])
         axes[r, 2].imshow(I_ro, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
-        g = np.linalg.norm(G, axis=-1)
-        axes[r, 3].imshow(g, cmap='gray', vmin=0, vmax=np.percentile(g, 99) or 1e-6)
+        axes[r, 3].imshow(grad_to_rgb(G))           # hue = direction
         ang = (np.arctan2(F[..., 1], F[..., 0]) + np.pi) / (2 * np.pi)
         mag = np.linalg.norm(F, axis=-1)
         mag = mag / (np.percentile(mag, 99) + 1e-9)
@@ -273,25 +308,26 @@ def _draw_maps(maps, labels, name, height_per_row=1.72):
         axes[r, 0].set_ylabel(lab, fontsize=7)
     for c, ttl in enumerate([r'events  $V$ (input)', r'intensity  $I$ (in-loop)',
                              r'intensity  $I$ (read-out)',
-                             r'gradient  $\|G\|$', r'flow  $F$']):
-        axes[0, c].set_title(ttl, fontsize=8, pad=4)
+                             r'gradient  $G$', r'flow  $F$']):
+        axes[0, c].set_title(ttl, fontsize=8, pad=4, y=1.0)  # y: ignore the key
+    if title:
+        fig.suptitle(title, fontsize=9)
     fig.tight_layout(pad=0.25)
+    _direction_key(axes[0, 3])
     _save(fig, name)
     plt.close(fig)
 
 
 def fig_maps(E):
-    maps = compute_maps(E)
-    idx = [1, 2, 4]                       # poster, dynamic, street
-    _draw_maps([maps[i] for i in idx],
-               ['poster (real)', 'dynamic (person in scene)', 'street (synthetic)'],
+    _draw_maps(compute_maps(E, 'thesis_cmax'), [r[1] for r in MAP_ROWS],
                'fig_maps')
 
 
 def fig_appendix(E):
-    maps = compute_maps(E)
-    labels = [f'{lab}\n{sid}' for _ds, sid, _t0, lab in SEGMENTS]
-    _draw_maps(maps, labels, 'fig_appendix_maps', height_per_row=1.62)
+    """The frames of fig_maps for every other model, one figure each."""
+    for model in APPENDIX_MODELS:
+        _draw_maps(compute_maps(E, model), [r[1] for r in MAP_ROWS],
+                   f'fig_appendix_maps_{model}', title=DISPLAY[model])
 
 
 # ------------------------------------------------------------------ distortion

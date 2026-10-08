@@ -398,7 +398,7 @@ def cmd_converge(E, args):
                 axes[r, c].set_xticks([]); axes[r, c].set_yticks([])
                 if r == 0:
                     axes[r, c].set_title(f'iter {it}', fontsize=8)
-            axes[r, 0].set_ylabel(model.replace('thesis_', 'th_'), fontsize=7)
+            axes[r, 0].set_ylabel(DISPLAY[model], fontsize=7)
         fig.suptitle(f'{lab} {sid}: intensity map across message-passing '
                      f'iterations (frame {args.frame})', fontsize=10)
         fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.955))
@@ -625,7 +625,7 @@ def cmd_recon(E, args):
                 a.set_ylabel(lab, fontsize=8)
             if col > 0 and ref is not None:
                 r = _corr(_crop(img), _crop(ref))
-                a.set_xlabel(f'$r={r:.2f}$', fontsize=7, labelpad=1.5)
+                a.set_xlabel(f'$|r|={r:.2f}$', fontsize=7, labelpad=1.5)
         print(f"  {lab}: done", flush=True)
     fig.tight_layout(pad=0.25, h_pad=0.5, w_pad=0.2)
     out = os.path.join(ROOT, 'report', 'figures', 'fig_recon.pdf')
@@ -697,7 +697,7 @@ def cmd_dissoc(E, args):
             if c_i == 0:
                 a.set_ylabel(lab, fontsize=7)
             if st is not None:
-                a.set_xlabel(f"$r={float(st['recon']):.2f}$,  "
+                a.set_xlabel(f"$|r|={float(st['recon']):.2f}$,  "
                              f"$\\omega$ err $={float(st['err']):.1f}$",
                              fontsize=6.5, labelpad=1.5)
         print(f'  {lab}: done', flush=True)
@@ -761,7 +761,7 @@ def cmd_regfig(E, args):
                 m = np.load(os.path.join(hits[0], 'maps_final.npz'))
                 img = solve_poisson_exact(m['G'], 'fft')
                 if ref is not None and ref.shape == img.shape:
-                    a.set_xlabel(f'$r={_corr(_crop(img), _crop(ref)):.2f}$',
+                    a.set_xlabel(f'$|r|={_corr(_crop(img), _crop(ref)):.2f}$',
                                  fontsize=6.5, labelpad=1.5)
             if img is None:
                 a.axis('off'); continue
@@ -780,6 +780,99 @@ def cmd_regfig(E, args):
                     bbox_inches='tight', pad_inches=0.02)
     plt.close(fig)
     print('-> fig_regularisers.pdf / .png')
+
+
+# ------------------------------------- report figure: settings for the image
+#: (model, dt, delta_curl) searched for image quality. The 20 ms points are
+#: the runs of Table III and of the curl table; the 10 ms ones are made by
+#:   --what sweep --vary 'dt=0.01;delta_curl=0,0.6' --mode grid --name best_image
+IMG_SEARCH = [(m, dt, c) for m in ('thesis', 'thesis_cmax')
+              for dt in (0.02, 0.01) for c in (0.0, 0.6)]
+SYNTHETIC = ('bicycle', 'street')
+
+
+def _track_stats(d):
+    """(track mean |r| of the read-out, mean omega error) of one run."""
+    rows = list(csv.DictReader(open(os.path.join(d, 'tracking.csv'))))
+    r = np.abs([float(x['recon_r']) for x in rows])
+    return float(np.nanmean(r)), provenance.read_summary(d)['mean_err_deg_s']
+
+
+def cmd_imgfig(E, args):
+    """Table + figure for 'Settings for the Image'.
+
+    Table params minimise the omega error; the picture wants other settings,
+    and different ones on real and synthetic data. For each kind the
+    IMG_SEARCH point with the highest mean |r| is chosen, its table rows are
+    printed, and every sequence is drawn at the omega configuration next to
+    the image configuration of its kind. Nothing is recomputed.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+
+    img_root = os.path.join('experiments', args.name or 'best_image')
+
+    def run_dir(ds, sid, t0, model, dt, curl):
+        return _cfg(E, ds, sid, t0, model, dt, int(round(args.duration / dt)),
+                    out_root=None if dt == 0.02 else img_root,
+                    deltas={'delta_curl': curl} if curl else None).output_dir
+
+    kinds = {k: [s for s in SEGMENTS if (s[3] in SYNTHETIC) == (k == 'synthetic')]
+             for k in ('real', 'synthetic')}
+    score, best = {}, {}
+    for kind, seqs in kinds.items():
+        for cfg in IMG_SEARCH:
+            try:
+                score[kind, cfg] = np.mean([_track_stats(run_dir(ds, sid, t0, *cfg))
+                                            for ds, sid, t0, _ in seqs], axis=0)
+            except OSError:
+                print(f'    missing runs for {kind} {cfg}')
+        best[kind] = max((c for c in IMG_SEARCH if (kind, c) in score),
+                         key=lambda c: score[kind, c][0])
+    print('% model & dt & curl & real |r| & real err & synth |r| & synth err')
+    for cfg in IMG_SEARCH:
+        cells = ' & '.join(f'{score[k, cfg][0]:.2f} & {score[k, cfg][1]:.1f}'
+                           if (k, cfg) in score else '--- & ---' for k in kinds)
+        print(f'{DISPLAY[cfg[0]]} & {cfg[1]*1000:.0f} & {cfg[2]:g} & {cells} \\\\')
+    print('best:', best)
+
+    omega_cfg = ('thesis_cmax', 0.02, 0.0)            # Table params
+    fig, axes = plt.subplots(len(SEGMENTS), 3, figsize=(5.1, 1.62 * len(SEGMENTS)))
+    for row, (ds, sid, t0, lab) in enumerate(SEGMENTS):
+        kind = 'synthetic' if lab in SYNTHETIC else 'real'
+        panels = [('APS', _aps(E, ds, t0 + args.duration), None)]
+        for ttl, cfg in ((r'configured for $\omega$', omega_cfg),
+                         ('configured for the image', best[kind])):
+            d = run_dir(ds, sid, t0, *cfg)
+            img = solve_poisson_exact(np.load(os.path.join(d, 'maps_final.npz'))['G'], 'fft')
+            panels.append((ttl, img, _track_stats(d) + cfg))
+        for c, (ttl, img, st) in enumerate(panels):
+            a = axes[row, c]
+            a.set_xticks([]); a.set_yticks([])
+            if img is None:
+                a.axis('off'); continue
+            lo, hi = np.percentile(img, [1, 99])
+            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
+            if row == 0:
+                a.set_title(ttl, fontsize=7.5)
+            if c == 0:
+                a.set_ylabel(f'{lab}\n({kind})', fontsize=7)
+            if st is not None:
+                r, err, model, dt, curl = st
+                a.set_xlabel(f'{DISPLAY[model]}\n{dt*1000:.0f} ms, '
+                             f'$\\delta_{{curl}}={curl:g}$\n'
+                             f'$|r|={r:.2f}$,  $\\omega$ err $={err:.1f}$',
+                             fontsize=6.5, labelpad=1.5)
+        print(f'  {lab}: done', flush=True)
+    fig.tight_layout(pad=0.25, h_pad=0.4, w_pad=0.15)
+    out = os.path.join(ROOT, 'report', 'figures', 'fig_image_settings.pdf')
+    for ext in ('pdf', 'png'):
+        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
+                    bbox_inches='tight', pad_inches=0.02)
+    plt.close(fig)
+    print('-> fig_image_settings.pdf / .png')
 
 
 # ------------------------------------------------- fft vs dct, as a read-out
@@ -865,16 +958,15 @@ def _crop(a, frac=0.1):
 
 
 def _corr(a, b):
-    """Pearson r, invariant to the scale and offset the reconstruction is
-    free in. |r| is used: I is log-intensity up to a sign-free scale, but a
-    negative correlation would mean an inverted image, so the sign is kept."""
+    """|Pearson r|, invariant to the scale, offset and sign the reconstruction
+    is free in (beta < 0 inverts I; see metrics._corr_to_aps)."""
     a = np.asarray(a, dtype=np.float64).ravel()
     b = np.asarray(b, dtype=np.float64).ravel()
     if a.size != b.size:
         return float('nan')
     a = a - a.mean(); b = b - b.mean()
     d = np.sqrt((a * a).sum() * (b * b).sum())
-    return float((a * b).sum() / d) if d > 0 else float('nan')
+    return float(abs((a * b).sum()) / d) if d > 0 else float('nan')
 
 
 # ------------------------------------------------------- front-end baselines
@@ -944,7 +1036,8 @@ COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
             'readout': cmd_readout, 'recon': cmd_recon,
-            'regfig': cmd_regfig, 'dissoc': cmd_dissoc}
+            'regfig': cmd_regfig, 'dissoc': cmd_dissoc,
+            'imgfig': cmd_imgfig}
 
 
 def main():
