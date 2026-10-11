@@ -44,7 +44,7 @@ and schemas, metric key names, the reference-ω choice in Exp 1/3/6.
 | ω unit in plots | deg/s everywhere. Data files stay rad/s; conversion happens only when plotting. R (rad/frame) is never plotted, always converted to ω = R/dt. |
 | Time axis | Seconds since segment start, at frame midpoints: `t = (k + 0.5)·dt`. Titles carry the absolute `t_start`. |
 | Non-time axes | Exempt: iterations (exp1, convergence), parameter values (exp3, grids). `find_segments` plots a whole dataset before any segment exists and keeps absolute dataset seconds. |
-| V | `RdBu_r` (red +, blue −, white 0), symmetric ±p99 of \|V\|. |
+| V | `bwr` (red +, blue −, exactly white at 0), symmetric ±p99 of \|V\|. |
 | I | Grey, 1–99 percentile (`normalise_robust`). |
 | APS | log(APS+1), then the same encoding as I (I is a log-intensity estimate and is scored against log APS). |
 | G and F | One encoding for any 2-vector field: hue = direction, saturation = \|v\|/p99 clipped to [0,1], value = 1 (white base). Square colour key inset at the bottom-left of the image. |
@@ -80,11 +80,10 @@ Two core modules. Matplotlib is the only plotting dependency.
   `"error (°/s)"`, `"direction error (°)"`, `r"scale $\beta$"`, and default map
   titles ("events $V$", "intensity $I$", "gradient $G$", "flow $F$",
   "APS (log)", "IWE").
-- `use_style('paper' | 'screen')` sets rcParams. Both presets: same font family,
+- `use_style('paper' | 'screen')` returns a context manager (`with use_style('screen'):`) applying rcParams only inside the block. Both presets: same font family,
   grid α 0.3, top and right spines hidden. `paper`: 8 pt, widths 3.4 in
   (single column) / 7.05 in (double column). `screen`: 10 pt, width 12 in.
-- `save(fig, path)`: PNG at 200 dpi, `bbox_inches='tight'`; additionally a PDF
-  when `path` is under `report/figures/`; then closes the figure.
+- `save(fig, path, show=False)`: PNG at 200 dpi, `bbox_inches='tight'`; additionally a PDF when `path` is in `report/figures/`; then closes the figure, or calls `plt.show()` when `show=True` (notebooks).
 
 ### `interacting_maps/viz.py` — drawing
 
@@ -96,7 +95,7 @@ never create figures or axes and never save.
 
 | function | encoding |
 |---|---|
-| `render_V(V, scale=None)` | `RdBu_r`, symmetric ±scale (default p99 of \|V\|) |
+| `render_V(V, scale=None)` | `bwr`, symmetric ±scale (default p99 of \|V\|) |
 | `render_I(I, scale=None)` | grey via `normalise_robust` (default 1–99 percentile); `scale=(lo, hi)` overrides |
 | `render_vec(v, scale=None)` | hue = direction in image coordinates (`[...,0]` = x right, `[...,1]` = y down), saturation = \|v\|/scale clipped, value = 1 (default scale p99 of \|v\|) |
 | `render_IWE(iwe, scale=None)` | grey, \|IWE\|/scale clipped (default p99) |
@@ -104,6 +103,8 @@ never create figures or axes and never save.
 
 Degenerate input (all zero or constant) returns the neutral colour: white for
 V/G/F, mid-grey for I, black for IWE (no events).
+
+Percentile scales fall back to the maximum when the 99th percentile is ~0 (maps with under 1 % non-zero pixels).
 
 **Map drawer**: `draw_map(ax, kind, arr, title=None, scale=None)` with `kind`
 in `'V' | 'I' | 'aps' | 'G' | 'F' | 'IWE'`. `'aps'` applies log(APS+1) then
@@ -135,7 +136,7 @@ Each step leaves the repo runnable. Plotting bugs listed in the inventory are
 fixed in the step that touches that code.
 
 1. **Core**: add `style.py`; extend `viz.py`; `iwe_io` uses `render_IWE` and
-   `frame_times`, and no longer forces the Agg backend at import.
+   `frame_times`, and no longer forces the Agg backend at import. `plot_contrast_curve(out_dir, t_start)` gains `t_start` for its seconds axis.
 2. **`evaluation.py`**: `_plot_tracking` (fixes the omega_gt label),
    `_save_3col_frame` (video frame; keeps its steady display range by passing
    `scale=`), exp1, exp3, exp6.
