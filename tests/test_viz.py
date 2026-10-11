@@ -12,6 +12,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from interacting_maps import style
+from types import SimpleNamespace
+from interacting_maps import viz
 
 FAILURES = []
 
@@ -50,7 +52,47 @@ def test_style():
               and not plt.fignum_exists(fig.number))
 
 
+def test_maps():
+    print('viz.py maps')
+    white = np.ones(3)
+    check('render_vec: zero vector is white',
+          np.allclose(viz.render_vec(np.zeros((4, 4, 2)))[0, 0], white))
+    plus_x = viz.render_vec(np.array([[[1.0, 0.0]]]), scale=1.0)[0, 0]
+    key = viz.vec_key(65)
+    check('render_vec: +x matches right-edge centre of key', np.allclose(plus_x, key[32, -1]))
+    check('vec_key: centre is white', np.allclose(key[32, 32], white))
+    check('render_vec: weak vector is pale (white base)',
+          viz.render_vec(np.array([[[0.1, 0.0]]]), scale=1.0)[0, 0].min() > 0.85)
+    V = np.zeros((10, 10)); V[0, 0], V[0, 1] = 1.0, -1.0
+    rv = viz.render_V(V)
+    check('render_V: zero is white', rv[5, 5].min() > 0.99)
+    check('render_V: positive is red', rv[0, 0, 0] > 0.9 and rv[0, 0, 2] < 0.1)
+    check('render_V: all-zero is white', np.allclose(viz.render_V(np.zeros((3, 3))), 1.0))
+    check('render_I: constant is mid-grey',
+          np.allclose(viz.render_I(np.full((5, 5), 3.0)), 0.5))
+    check('render_I: explicit scale', np.allclose(viz.render_I(np.array([[2.0]]), scale=(0.0, 4.0)), 0.5))
+    check('render_IWE: all-zero is black', np.allclose(viz.render_IWE(np.zeros((3, 3))), 0.0))
+    sparse = np.zeros((100, 100)); sparse[0, 0] = 5.0
+    check('render_IWE: sparse map falls back to max', viz.render_IWE(sparse)[0, 0].min() > 0.99)
+    H, W = 6, 8
+    cook = SimpleNamespace(I=np.zeros((H + 1, W + 1)), G=np.zeros((H, W, 2)), F=np.zeros((H, W, 2)))
+    thesis = SimpleNamespace(I=np.zeros((H, W)), G=np.zeros((H, W, 2)), F=np.zeros((H, W, 2)))
+    check('net_maps crops Cook and thesis alike',
+          all(viz.net_maps(n, H, W)['I'].shape == (H, W) for n in (cook, thesis)))
+    fig, axes = plt.subplots(1, 6)
+    arrs = {'V': V, 'I': np.random.rand(10, 10), 'aps': np.random.rand(10, 10, 3),
+            'G': np.random.rand(10, 10, 2) - 0.5, 'F': np.random.rand(10, 10, 2) - 0.5,
+            'IWE': np.random.rand(10, 10)}
+    for ax, (kind, a) in zip(axes, arrs.items()):
+        viz.draw_map(ax, kind, a)
+    check('draw_map: default titles', [a.get_title() for a in axes] == [style.MAP_TITLES[k] for k in arrs])
+    check('draw_map: key inset only for G and F',
+          [len(a.child_axes) for a in axes] == [0, 0, 0, 1, 1, 0])
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     test_style()
+    test_maps()
     print('all checks passed' if not FAILURES else f"FAILED: {', '.join(FAILURES)}")
     sys.exit(1 if FAILURES else 0)

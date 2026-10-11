@@ -1,14 +1,15 @@
 """
-Display helpers: map fields to colour, normalise for stable frames
-(R3 of architecture_review.md).
+Drawing helpers. Every convention (names, colours, units, labels) comes from
+style.py; nothing here defines its own.
 
-Pure, RunConfig-free rendering helpers extracted verbatim from evaluation.py.
-The experiment-coupled plotters (_plot_tracking, _save_3col_frame) stay in
-evaluation.py because they depend on RunConfig and the run's maps. evaluation
-re-exports every name here, so existing callers are unchanged.
+Maps: renderers turn an array into an RGB (H, W, 3) array in [0, 1] and never
+touch figures; draw_map puts one on an axis. Line plots: draw_omega,
+draw_error and draw_series fill one axis each, time in seconds.
 """
 
 import numpy as np
+
+from interacting_maps.style import MAP_TITLES
 
 
 def normalise(x):
@@ -58,3 +59,87 @@ def grad_to_rgb(G, pct=99.0):
     hi = np.percentile(mag, pct)
     val = np.clip(mag / (hi + 1e-12), 0.0, 1.0)
     return hsv_to_rgb(np.stack([ang, np.ones_like(ang), val], axis=-1))
+
+
+def _robust_max(a, pct=99.0):
+    hi = float(np.percentile(a, pct))
+    return hi if hi > 1e-12 else float(a.max())
+
+
+def _gray(g):
+    return np.repeat(g[..., None], 3, axis=-1)
+
+
+def render_V(V, scale=None):
+    """bwr: red positive, blue negative, white zero; symmetric ±scale (default p99 |V|)."""
+    from matplotlib import colormaps
+    s = _robust_max(np.abs(V)) if scale is None else scale
+    if s <= 1e-12:
+        return np.ones(V.shape + (3,))
+    return colormaps['bwr'](0.5 + 0.5 * np.clip(V / s, -1.0, 1.0))[..., :3]
+
+
+def render_I(I, scale=None):
+    """Grey; 1-99 percentile by default, or an explicit (lo, hi)."""
+    if scale is None:
+        return _gray(normalise_robust(I))
+    lo, hi = scale
+    if hi - lo < 1e-9:
+        return _gray(np.full(I.shape, 0.5))
+    return _gray(np.clip((I - lo) / (hi - lo), 0.0, 1.0))
+
+
+def render_vec(v, scale=None):
+    """Hue = direction (image coords, y down), saturation = |v|/scale, white base."""
+    from matplotlib.colors import hsv_to_rgb
+    mag = np.hypot(v[..., 0], v[..., 1])
+    s = _robust_max(mag) if scale is None else scale
+    if s <= 1e-12:
+        return np.ones(v.shape[:2] + (3,))
+    hue = (np.arctan2(v[..., 1], v[..., 0]) / (2 * np.pi)) % 1.0
+    sat = np.clip(mag / s, 0.0, 1.0)
+    return hsv_to_rgb(np.stack([hue, sat, np.ones_like(hue)], axis=-1))
+
+
+def render_IWE(iwe, scale=None):
+    """Grey, white = many events; |IWE| / scale (default p99)."""
+    a = np.abs(iwe)
+    s = _robust_max(a) if scale is None else scale
+    if s <= 1e-12:
+        return np.zeros(iwe.shape + (3,))
+    return _gray(np.clip(a / s, 0.0, 1.0))
+
+
+def vec_key(n=65):
+    """Square direction key, centre white; coloured by render_vec itself."""
+    u = np.linspace(-1.0, 1.0, n)
+    X, Y = np.meshgrid(u, u)
+    return render_vec(np.stack([X, Y], axis=-1), scale=1.0)
+
+
+def _render_aps(aps, scale=None):
+    a = np.asarray(aps, dtype=np.float64)
+    if a.ndim == 3:
+        a = a[..., :3].mean(axis=-1)
+    return render_I(np.log1p(a), scale)
+
+
+_RENDERERS = {'V': render_V, 'I': render_I, 'aps': _render_aps,
+              'G': render_vec, 'F': render_vec, 'IWE': render_IWE}
+
+
+def net_maps(net, H, W):
+    """I, G, F cropped to the H x W pixel grid (Cook's I is (H+1) x (W+1))."""
+    return {'I': net.I[:H, :W], 'G': net.G[:H, :W], 'F': net.F[:H, :W]}
+
+
+def draw_map(ax, kind, arr, title=None, scale=None):
+    ax.imshow(_RENDERERS[kind](arr, scale=scale), interpolation='nearest')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.grid(False)
+    ax.set_title(MAP_TITLES[kind] if title is None else title)
+    if kind in ('G', 'F'):
+        key = ax.inset_axes([0.02, 0.02, 0.2, 0.2])
+        key.imshow(vec_key(), interpolation='nearest')
+        key.set_axis_off()
