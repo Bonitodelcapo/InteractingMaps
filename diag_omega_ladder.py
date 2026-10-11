@@ -23,11 +23,11 @@ import yaml as _yaml
 
 import config
 from config import get_dataset_paths
-from eval_io import load_imu, get_gyro_for_frame, load_omega_gt, omega_gt_at
-from data_loader import EventFrameSequence
+from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_omega_gt, omega_gt_at
+from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
-from metrics import compute_metrics, curl_share
+from interacting_maps.metrics import compute_metrics, curl_share
 
 # Cap on frames per segment for a fast local smoke test; set from --limit.
 LIMIT = None
@@ -74,7 +74,7 @@ def load_calibration(paths):
         H, W = int(y['image_height']), int(y['image_width'])
         src = os.path.basename(yamls[0])
     else:
-        from data_loader import CameraCalibration
+        from interacting_maps.data_loader import CameraCalibration
         c = CameraCalibration(paths['calib'])
         fx, fy, cx, cy = c.fx, c.fy, c.cx, c.cy
         dist = np.asarray(getattr(c, 'dist', []), dtype=np.float64)

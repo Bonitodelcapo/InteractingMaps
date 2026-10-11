@@ -50,7 +50,7 @@ N_FRAMES = cfg['n_frames']
 # ---------------------------------------------------------------------------
 
 def make_real_source():
-    from data_loader import EventFrameSequence
+    from interacting_maps.data_loader import EventFrameSequence
     seq = EventFrameSequence(
         EVENTS_FILE, CALIB_FILE,
         frame_duration=cfg['frame_duration'],
@@ -98,7 +98,7 @@ else:
 
 if USE_THESIS_VERSION and USE_IMU:
     # Canonical loaders (R3); previously reached into archive_, which is frozen.
-    from eval_io import load_imu, get_gyro_for_frame
+    from interacting_maps.eval_io import load_imu, get_gyro_for_frame
     imu_data = load_imu(IMU_FILE)
 
 # ---------------------------------------------------------------------------

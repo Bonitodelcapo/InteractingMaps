@@ -51,7 +51,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-import provenance  # merged run.json reader (after sys.path points at ROOT)
+import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
 
 # the segments reported in Table II -- do not substitute others
 SEGMENTS = [
@@ -152,7 +152,7 @@ def _split(point):
 def _run(E, rc, save_frames, stride):
     t = time.time()
     E.experiment_tracking(rc, save_frames=save_frames, frame_stride=stride)
-    s = provenance.read_summary(rc.output_dir)
+    s = experiment_tracking.read_summary(rc.output_dir)
     return s, time.time() - t
 
 
@@ -329,7 +329,7 @@ def cmd_converge(E, args):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    from data_loader import (EventFrameSequence, CameraCalibration,
+    from interacting_maps.data_loader import (EventFrameSequence, CameraCalibration,
                              load_events_fast, undistort_events)
     from cmax import CMaxAngularVelocity
 
@@ -888,7 +888,7 @@ def cmd_baseline(E, args):
     experiment_tracking -- same undistorted events into CMax, same warm start
     from the previous frame, same reference omega, same compute_metrics.
     """
-    from data_loader import load_events_fast, undistort_events, CameraCalibration
+    from interacting_maps.data_loader import load_events_fast, undistort_events, CameraCalibration
     from cmax import CMaxAngularVelocity
 
     nf = int(round(args.duration / args.dt))

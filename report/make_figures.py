@@ -43,7 +43,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-import provenance  # merged run.json reader (after sys.path points at ROOT)
+import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -101,7 +101,7 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
     hits = []
     for d in sorted(glob.glob(f'results/{ds}/{model}/{sid}_t{t0}_dt20ms_n150_*')):
         try:
-            cfg = provenance.read_config(d)
+            cfg = experiment_tracking.read_config(d)
             pr = cfg['params']
         except Exception:
             continue
@@ -152,7 +152,7 @@ def fig_beta_speed(E):
             if d is None:
                 print(f'    (missing {ds}/{sid}/{model} dFR={d_fr})')
                 continue
-            b = provenance.read_summary(d)['mean_beta']
+            b = experiment_tracking.read_summary(d)['mean_beta']
             data[key][0].append(w)
             data[key][1].append(b)
 
@@ -208,7 +208,7 @@ def fig_tracking(E):
 # ------------------------------------------------------------------- map panels
 def compute_maps(E):
     """Run the network N_MAPS frames per sequence; cache the final maps."""
-    from data_loader import EventFrameSequence, CameraCalibration, load_events_fast
+    from interacting_maps.data_loader import EventFrameSequence, CameraCalibration, load_events_fast
     cache = os.path.join(FIG, '.maps_cache.npz')
     if os.path.exists(cache):
         z = np.load(cache)
@@ -285,7 +285,7 @@ def fig_appendix(E):
 
 # ------------------------------------------------------------------ distortion
 def fig_distortion(E):
-    from data_loader import (CameraCalibration, load_events_fast,
+    from interacting_maps.data_loader import (CameraCalibration, load_events_fast,
                              undistort_events, events_to_vframe)
     ds, t0, dur, H, W = 'poster_rotation', 8.816, 0.20, 180, 240
     p = E.get_dataset_paths(ds)

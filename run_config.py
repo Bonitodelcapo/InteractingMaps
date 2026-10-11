@@ -13,7 +13,7 @@ from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAM
                     ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
                     get_dataset_paths)
 from best_config import best_params
-import provenance
+import experiment_tracking
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
 
@@ -189,7 +189,7 @@ class RunConfig:
         crash, and again at the end with the metrics filled in. Replaces the old
         split params.json/summary.json (read_run still falls back to those for
         runs written before this change)."""
-        return provenance.save_run(self.output_dir, self.to_dict(), summary)
+        return experiment_tracking.save_run(self.output_dir, self.to_dict(), summary)
 
     def save_params(self):
         """Back-compat: write the early run.json (config + provenance, no metrics
@@ -249,7 +249,7 @@ def resolve_best_kwargs(dataset, segment_id, model, cli_overrides=None):
 
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig; distortion handling from rc.distortion_mode."""
-    from data_loader import CameraCalibration
+    from interacting_maps.data_loader import CameraCalibration
     mode = rc.distortion_mode
     if mode == 'undistort_events':
         dist_coeffs = None                                    # events already undistorted → pinhole C

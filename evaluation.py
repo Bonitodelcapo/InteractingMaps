@@ -67,19 +67,19 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from config import DATASET_SEGMENTS, DISTORTION_MODE, get_dataset_paths
-from data_loader import EventFrameSequence
-import provenance
+from interacting_maps.data_loader import EventFrameSequence
+import experiment_tracking
 
 # Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
 # re-exported here so existing callers (incl. report scripts' E.<name>) are
 # unchanged. See eval_io.py / metrics.py / viz.py / run_config.py.
-from eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu,
+from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu,
                      get_gyro_for_frame, load_groundtruth, _quat_to_rotmat,
                      gt_omega_body, load_omega_gt, omega_gt_at,
                      get_reference_omega)
-from metrics import (compute_metrics, curl_share, _intensity_stats,
+from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from viz import normalise, normalise_robust, flow_to_rgb, grad_to_rgb
+from interacting_maps.viz import normalise, normalise_robust, flow_to_rgb, grad_to_rgb
 from run_config import (RunConfig, resolve_best_kwargs, make_network,
                         _try_load_gt_images)
 
@@ -267,7 +267,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     omega_cmax_prev = np.zeros(3)
     omega_anchor = None
     if getattr(rc, 'use_cmax', False):
-        from data_loader import load_events_fast, undistort_events
+        from interacting_maps.data_loader import load_events_fast, undistort_events
         dur = rc.n_frames * rc.frame_duration + 0.1
         cmax_events = undistort_events(
             load_events_fast(rc.paths['events'], t_start=rc.t_start, duration=dur),
@@ -285,7 +285,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
     iwe_dir = None
     if getattr(rc, 'save_iwe', False) and getattr(rc, 'use_cmax', False):
-        from cmax.iwe_io import save_iwe, plot_contrast_curve, make_gif
+        from interacting_maps.iwe_io import save_iwe, plot_contrast_curve, make_gif
         iwe_dir = os.path.join(rc.output_dir, 'iwe')
         os.makedirs(iwe_dir, exist_ok=True)
         print(f"  Saving final IWE per frame to: {iwe_dir}/")
@@ -439,7 +439,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # logged by default; throwaway sweeps under experiments/ are skipped unless
     # IM_MLFLOW_ALL=1, so the tracking store is not flooded. IM_MLFLOW=0 disables.
     if os.environ.get('IM_MLFLOW_ALL') == '1' or rc.out_root == 'results':
-        provenance.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
+        experiment_tracking.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
 
     print(f"\n  {'='*50}")
     print(f"  RESULTS: {rc.model}, {rc.dataset}, {rc.duration_s:.1f}s")
