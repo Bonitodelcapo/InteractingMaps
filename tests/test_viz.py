@@ -88,6 +88,7 @@ def test_maps():
     check('draw_map: default titles', [a.get_title() for a in axes] == [style.MAP_TITLES[k] for k in arrs])
     check('draw_map: key inset only for G and F',
           [len(a.child_axes) for a in axes] == [0, 0, 0, 1, 1, 0])
+    check('draw_map: no visible spines', not any(s.get_visible() for a in axes for s in a.spines.values()))
     plt.close(fig)
 
 

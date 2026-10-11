@@ -722,7 +722,7 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
         rng = (prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1]))
     rc._I_disp_range = rng
     I_ro = solve_poisson_exact(G, 'fft')
-    fmt_r = lambda r: f'   r = {r:+.2f}' if np.isfinite(r) else ''
+    fmt_r = lambda r: f'r = {r:+.2f}' if np.isfinite(r) else ''
     r_in = _corr_to_aps(np.asarray(I, dtype=np.float64), gt_images, t_mid)
     r_ro = _corr_to_aps(I_ro, gt_images, t_mid)
     w = to_deg_s(np.linalg.norm(net.R) / rc.frame_duration)
@@ -730,14 +730,14 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     with use_style('screen'):
         fig, axes = plt.subplots(1, 6, figsize=(SCREEN_WIDTH, 2.6))
         draw_map(axes[0], 'V', V)
-        draw_map(axes[1], 'I', I, scale=rng, title=f'I in-loop   std {I.std():.3f}{fmt_r(r_in)}')
-        draw_map(axes[2], 'I', I_ro, title=f'I from G (exact){fmt_r(r_ro)}')
+        draw_map(axes[1], 'I', I, scale=rng, title='I in-loop\n' + f'std {I.std():.3f}   ' + fmt_r(r_in))
+        draw_map(axes[2], 'I', I_ro, title='I from G (exact)\n' + fmt_r(r_ro))
         draw_map(axes[3], 'G', G)
-        draw_map(axes[4], 'F', maps['F'], title=f'flow $F$   |ω| {w:.0f} °/s')
+        draw_map(axes[4], 'F', maps['F'], title=f'flow $F$\n|ω| {w:.0f} °/s')
         if gt_images:
             t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
             draw_map(axes[5], 'aps', plt.imread(path),
-                     title=f'APS (log)   Δt {1000 * abs(t_aps - t_mid):.0f} ms')
+                     title=f'APS (log)\nΔt {1000 * abs(t_aps - t_mid):.0f} ms')
         else:
             draw_map(axes[5], 'aps', np.zeros((H, W)), title='APS (n/a)')
         anchor = f'   δ_anchor {rc.params["delta_IMU"]:.2f}' if rc.use_imu else ''

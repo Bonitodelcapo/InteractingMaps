@@ -140,6 +140,8 @@ def draw_map(ax, kind, arr, title=None, scale=None):
     ax.set_xticks([])
     ax.set_yticks([])
     ax.grid(False)
+    for s in ax.spines.values():
+        s.set_visible(False)
     ax.set_title(MAP_TITLES[kind] if title is None else title)
     if kind in ('G', 'F'):
         key = ax.inset_axes([0.02, 0.02, 0.2, 0.2])
