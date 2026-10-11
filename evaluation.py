@@ -79,7 +79,10 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
                      get_reference_omega)
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from interacting_maps.viz import normalise, normalise_robust, flow_to_rgb, grad_to_rgb
+from interacting_maps.viz import normalise, flow_to_rgb, grad_to_rgb, draw_map, draw_omega, draw_error, net_maps
+from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
+                                    LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
+                                    to_deg_s, ref_label, use_style, save)
 from run_config import (RunConfig, resolve_best_kwargs, make_network,
                         _try_load_gt_images)
 
@@ -456,46 +459,28 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     return summary
 
 def _plot_tracking(rows, rc: RunConfig):
-    """Tracking plot with ω components + error."""
-    times = np.array([r['time'] for r in rows]) - rows[0]['time']
-    omega_est = np.array([[r['est_wx'], r['est_wy'], r['est_wz']] for r in rows])
-    omega_gt = np.array([[r['gt_wx'], r['gt_wy'], r['gt_wz']] for r in rows])
-    err = np.array([r['err_deg_s'] for r in rows])
+    """ω components and error against seconds since segment start."""
+    t = frame_times(rc.frame_duration, len(rows))
+    col = lambda p: np.array([[r[f'{p}_wx'], r[f'{p}_wy'], r[f'{p}_wz']] for r in rows])
+    est, ref, imu = col('est'), col('gt'), col('imu')
+    ref_src = rows[0]['ref_source']
 
-    ref_src = rows[0].get('ref_source', 'imu')
-    ref_label = 'GT (Vicon quat)' if ref_src == 'groundtruth' else 'GT (IMU)'
-    # Only overlay the gyro separately when it is NOT the scoring reference.
-    has_imu_col = 'imu_wx' in rows[0]
-    omega_imu = (np.array([[r['imu_wx'], r['imu_wy'], r['imu_wz']] for r in rows])
-                 if has_imu_col else None)
-
-    fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
-    fig.suptitle(f'ω Tracking — {rc.dataset} ({rc.model})\n'
-                 f'dt={rc.frame_duration*1000:.0f}ms, {rc.n_iters} iters, '
-                 f'{rc.duration_s:.1f}s  |  scored vs {ref_label}', fontsize=11)
-
-    labels = ['ωx', 'ωy', 'ωz']
-    colors = ['#4e79a7', '#f28e2b', '#e15759']
-
-    for i in range(3):
-        axes[i].plot(times, omega_gt[:, i], 'k-', lw=1.0, alpha=0.8, label=ref_label)
-        if omega_imu is not None and ref_src == 'groundtruth':
-            axes[i].plot(times, omega_imu[:, i], color='#59a14f', lw=0.8, ls=':',
-                         alpha=0.7, label='IMU gyro (model input)')
-        axes[i].plot(times, omega_est[:, i], color=colors[i], lw=1.5, label='Estimated')
-        axes[i].set_ylabel(f'{labels[i]} (rad/s)')
-        axes[i].legend(loc='upper right', fontsize=8)
-        axes[i].grid(True, alpha=0.3)
-
-    axes[3].plot(times, err, 'r-', lw=1.0)
-    axes[3].set_ylabel('Error (°/s)')
-    axes[3].set_xlabel('Time (s)')
-    axes[3].set_title(f'Error: mean={np.mean(err):.1f}°/s, median={np.median(err):.1f}°/s')
-    axes[3].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'tracking_plot.png'), dpi=150)
-    plt.close()
+    with use_style('screen'):
+        fig, axes = plt.subplots(4, 1, figsize=(SCREEN_WIDTH, 10), sharex=True)
+        fig.suptitle(f'ω tracking — {MODELS[rc.model][0]}   [{rc.dataset} {rc.segment_id}, '
+                     f't_start {rc.t_start:.3f} s]\n'
+                     f'dt {rc.frame_duration*1000:.0f} ms, {rc.n_iters} iters, '
+                     f'{rc.duration_s:.1f} s, scored vs {ref_label(ref_src)}')
+        for i in range(3):
+            draw_omega(axes[i], t, est[:, i], ref=ref[:, i], imu=imu[:, i], axis=i,
+                       ref_src=ref_src)
+            axes[i].legend(loc='upper right')
+        err = np.array([r['err_deg_s'] for r in rows])
+        draw_error(axes[3], t, err)
+        axes[3].set_title(f'error: mean {err.mean():.1f} °/s, median {np.median(err):.1f} °/s')
+        for ax in axes:
+            ax.label_outer()
+        save(fig, os.path.join(rc.output_dir, 'tracking_plot.png'))
 
 def experiment_distortion_ablation(rc: RunConfig, save_frames=False):
     """
