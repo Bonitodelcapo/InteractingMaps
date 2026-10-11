@@ -54,8 +54,8 @@ def plot_contrast_curve(out_dir, t_start):
         save(fig, os.path.join(out_dir, 'contrast_curve.png'))
 
 
-def make_gif(out_dir, fps=15):
-    """Assemble frame_*.png -> iwe_sequence.gif (per-frame brightness). Best-effort."""
+def make_gif(out_dir, fps=15, name='iwe_sequence.gif'):
+    """Assemble frame_*.png -> out_dir/name (per-frame brightness). Best-effort."""
     files = sorted(glob.glob(os.path.join(out_dir, 'frame_*.png')))
     if not files:
         return
@@ -65,6 +65,6 @@ def make_gif(out_dir, fps=15):
         except ImportError:
             import imageio
         frames = [imageio.imread(f) for f in files]
-        imageio.mimsave(os.path.join(out_dir, 'iwe_sequence.gif'), frames, fps=fps)
+        imageio.mimsave(os.path.join(out_dir, name), frames, fps=fps)
     except Exception as e:
         print(f"  (GIF skipped: {e})")

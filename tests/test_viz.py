@@ -134,6 +134,16 @@ def test_iwe_io():
               img[2, 3, :3].min() > 0.99 and img[0, 0, :3].max() < 0.01)
         iwe_io.plot_contrast_curve(d, t_start=10.0)
         check('contrast curve written', os.path.exists(os.path.join(d, 'contrast_curve.png')))
+        iwe_io.make_gif(d, fps=5, name='named.gif')
+        check('make_gif writes the named file', os.path.exists(os.path.join(d, 'named.gif')))
+
+
+def test_metrics():
+    print('metrics.py')
+    from interacting_maps.metrics import flow_epe
+    F = np.zeros((4, 5, 2)); G = np.zeros((4, 5, 2)); G[..., 0], G[..., 1] = 3.0, 4.0
+    check('flow_epe: identical is 0', flow_epe(F, F) == 0.0)
+    check('flow_epe: (3,4) offset is 5', np.isclose(flow_epe(F, G), 5.0))
 
 
 if __name__ == '__main__':
@@ -141,5 +151,6 @@ if __name__ == '__main__':
     test_maps()
     test_lines()
     test_iwe_io()
+    test_metrics()
     print('all checks passed' if not FAILURES else f"FAILED: {', '.join(FAILURES)}")
     sys.exit(1 if FAILURES else 0)

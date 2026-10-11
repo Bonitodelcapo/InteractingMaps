@@ -25,6 +25,11 @@ def compute_metrics(omega_est, omega_gt):
     return err, dir_err, beta
 
 
+def flow_epe(F, F_ref):
+    """Mean endpoint error (px/frame) between two (H, W, 2) flow fields."""
+    return float(np.mean(np.linalg.norm(F - F_ref, axis=-1)))
+
+
 def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
     """Pearson r between an intensity map and the nearest APS frame.
 
