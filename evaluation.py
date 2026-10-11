@@ -17,7 +17,7 @@ Experiments (``--exp N``)
   1. Single-frame convergence (maps at iteration checkpoints)
   2. Multi-frame tracking (ω_est vs ω_ref over time)   ← the core; 4/7/8/9 call it
   3. Parameter influence (iterations & frame-duration sweeps for one frame)
-  4. Qualitative video (tracking with 3-column frames: Events | I | GT APS)
+  4. Qualitative video (tracking with per-frame panels: V | I | I read-out | G | F | APS)
   5. Assemble MP4s from saved frames (batch)
   6. Basin of attraction (how far can init-R be from GT and still converge?)
   7. Full evaluation (all datasets × models × segments → full_evaluation.csv)
@@ -79,7 +79,7 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
                      get_reference_omega)
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from interacting_maps.viz import normalise, flow_to_rgb, grad_to_rgb, draw_map, draw_omega, draw_error, net_maps
+from interacting_maps.viz import normalise, flow_to_rgb, draw_map, draw_omega, draw_error, net_maps
 from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
                                     LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
                                     to_deg_s, ref_label, use_style, save)
@@ -223,7 +223,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
       - run.json (provenance + config + summary, one self-describing file)
     Reported runs are also mirrored to the local MLflow store (see provenance.py).
     If save_frames=True (default):
-      - video_frames/frame_XXXX.png (3-col: Events | I | GT)
+      - video_frames/frame_XXXX.png (V | I | I read-out | G | F | APS)
     """
     print("\n" + "="*70)
     print("EXPERIMENT 2: Multi-Frame Angular Velocity Tracking")
@@ -700,104 +700,51 @@ def experiment_qualitative_video(rc: RunConfig):
 
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     """
-    One inspection frame per time step: events | I | exact read-out of I |
-    G (direction-coloured) | flow | ground-truth APS.
+    One inspection frame per time step: V | in-loop I | I read out from G by
+    the exact solve (what recon_r scores) | G | F | nearest APS frame.
 
-    Both intensity panels are shown because they differ and only one of them is
-    scored. `Estimated I` is the in-loop map, which the iterative update of
-    Eq. 6.61 leaves as an edge map; `I from G (exact)` solves Eq. 6.64 on the
-    same G and is what recon_r measures. Judging a run by the first panel while
-    the numbers describe the second is how a comparison goes wrong.
-
-    Every quantity the network infers is shown, because the angular-velocity
-    number alone cannot tell you whether the interpretation behind it is sound.
-    G is coloured by direction rather than shown as magnitude only -- see
-    grad_to_rgb.
+    The in-loop I keeps a display range smoothed across frames, so a map that
+    loses contrast shows washed out instead of being re-stretched; its std and
+    correlation with APS are in the title.
     """
-    fig, axes = plt.subplots(1, 6, figsize=(22, 4))
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    maps = net_maps(net, H, W)
+    I, G = maps['I'], maps['G']
+    t_rel = (k + 0.5) * rc.frame_duration
+    t_mid = rc.t_start + t_rel
 
-    axes[0].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
-    axes[0].set_title('Events (V)', fontsize=10)
-    axes[0].axis('off')
-
-    I_disp = net.I if net.I.shape == (H, W) else net.I[:H, :W]
-    # Display range is carried across frames with a slow EMA rather than
-    # recomputed per frame. Per-frame percentile normalisation removes flicker
-    # but also HIDES loss of contrast: when I collapses (which it does
-    # transiently at high rotation speed) a near-flat map gets stretched to full
-    # black-to-white, so amplified noise reads as texture. A slowly-adapting
-    # range keeps the video steady while letting a genuine collapse show up as
-    # what it is -- a washed-out frame. The measured contrast is printed in the
-    # title so it can be read off rather than inferred from appearance.
-    lo, hi = np.percentile(I_disp, [1.0, 99.0])
-    if hi - lo < 1e-9:
-        lo, hi = lo - 0.5, hi + 0.5
+    lo, hi = np.percentile(I, [1.0, 99.0])
     prev = getattr(rc, '_I_disp_range', None)
     if prev is None or k == 0:
-        rng = [lo, hi]
+        rng = (lo, hi)
     else:
         a = 0.05                      # slow: ~20 frames to follow a real change
-        rng = [prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1])]
+        rng = (prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1]))
     rc._I_disp_range = rng
-    axes[1].imshow(I_disp, cmap='gray', vmin=rng[0], vmax=rng[1])
-    _r_in = _corr_to_aps(np.asarray(I_disp, dtype=np.float64), gt_images,
-                         rc.t_start + (k + 0.5) * rc.frame_duration)
-    axes[1].set_title(f'Estimated I (in-loop)   std {I_disp.std():.3f}'
-                      + ('' if not np.isfinite(_r_in) else f'   r = {_r_in:+.2f}'),
-                      fontsize=10)
-    axes[1].axis('off')
+    I_ro = solve_poisson_exact(G, 'fft')
+    fmt_r = lambda r: f'   r = {r:+.2f}' if np.isfinite(r) else ''
+    r_in = _corr_to_aps(np.asarray(I, dtype=np.float64), gt_images, t_mid)
+    r_ro = _corr_to_aps(I_ro, gt_images, t_mid)
+    w = to_deg_s(np.linalg.norm(net.R) / rc.frame_duration)
 
-    # The quantity recon_r actually scores: I recovered from THIS G by the
-    # exact solve of Eq. 6.64, not the in-loop iterative map beside it.
-    G = net.G[:H, :W]
-    try:
-        from interacting_maps.network_dissertation import solve_poisson_exact
-        I_ro = solve_poisson_exact(G, 'fft')
-        lo_r, hi_r = np.percentile(I_ro, [1.0, 99.0])
-        axes[2].imshow(I_ro, cmap='gray', vmin=lo_r, vmax=max(hi_r, lo_r + 1e-9))
-        r = _corr_to_aps(I_ro, gt_images,
-                         rc.t_start + (k + 0.5) * rc.frame_duration)
-        axes[2].set_title('I from G (exact)'
-                          + ('' if not np.isfinite(r) else f'   r = {r:+.2f}'),
-                          fontsize=10)
-    except Exception:
-        axes[2].set_title('I from G (exact) - failed', fontsize=10)
-    axes[2].axis('off')
-
-    axes[3].imshow(grad_to_rgb(net.G))
-    axes[3].set_title(r'Gradient G   hue = direction'
-                      f'   (max |G| {np.abs(net.G).max():.2f})', fontsize=10)
-    axes[3].axis('off')
-
-    axes[4].imshow(flow_to_rgb(net.F))
-    axes[4].set_title(r'Flow F   hue = direction'
-                      f'   (|w| {np.linalg.norm(net.R)/rc.frame_duration:.2f} rad/s)',
-                      fontsize=10)
-    axes[4].axis('off')
-
-    if gt_images is not None and len(gt_images) > 0:
-        t_frame = rc.t_start + k * rc.frame_duration + rc.frame_duration / 2
-        closest = min(gt_images, key=lambda x: abs(x[0] - t_frame))
-        gt_img = plt.imread(closest[1])
-        axes[5].imshow(gt_img, cmap='gray')
-        axes[5].set_title(f'GT Image (APS)  dt {1000*abs(closest[0]-t_frame):.0f} ms',
-                          fontsize=10)
-    else:
-        axes[5].text(0.5, 0.5, 'No GT', ha='center', va='center',
-                     fontsize=14, transform=axes[5].transAxes)
-        axes[5].set_facecolor('#f0f0f0')
-        axes[5].set_title('GT (N/A)', fontsize=10)
-    axes[5].axis('off')
-
-    plt.suptitle(f'Frame {k:04d}    t = {rc.t_start + k*rc.frame_duration:.3f} s'
-                 f'    {rc.model}   dFR={rc.params["delta_FR"]:.2f}'
-                 + (f"  dAnchor={rc.params['delta_IMU']:.2f}"
-                    if getattr(rc, 'use_imu', False) else '')
-                 + f'   dt={1000*rc.frame_duration:.0f} ms  {rc.distortion_mode}',
-                 fontsize=10)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'frame_{k:04d}.png'), dpi=100)
-    plt.close(fig)
+    with use_style('screen'):
+        fig, axes = plt.subplots(1, 6, figsize=(SCREEN_WIDTH, 2.6))
+        draw_map(axes[0], 'V', V)
+        draw_map(axes[1], 'I', I, scale=rng, title=f'I in-loop   std {I.std():.3f}{fmt_r(r_in)}')
+        draw_map(axes[2], 'I', I_ro, title=f'I from G (exact){fmt_r(r_ro)}')
+        draw_map(axes[3], 'G', G)
+        draw_map(axes[4], 'F', maps['F'], title=f'flow $F$   |ω| {w:.0f} °/s')
+        if gt_images:
+            t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
+            draw_map(axes[5], 'aps', plt.imread(path),
+                     title=f'APS (log)   Δt {1000 * abs(t_aps - t_mid):.0f} ms')
+        else:
+            draw_map(axes[5], 'aps', np.zeros((H, W)), title='APS (n/a)')
+        anchor = f'   δ_anchor {rc.params["delta_IMU"]:.2f}' if rc.use_imu else ''
+        fig.suptitle(f'{MODELS[rc.model][0]}   frame {k:04d}   t {t_rel:.3f} s '
+                     f'(segment start {rc.t_start:.3f} s)   δ_FR {rc.params["delta_FR"]:.2f}'
+                     f'{anchor}   dt {1000 * rc.frame_duration:.0f} ms   {rc.distortion_mode}')
+        save(fig, os.path.join(out_dir, f'frame_{k:04d}.png'))
 
 
 # ===========================================================================
