@@ -50,10 +50,10 @@ with `F_gt = C·R_gt` (`gt_flow`). I has no reference on ECRot city (no
 - `trace_relaxation(..., on_iter=None)`: if given, `on_iter(net)` after each
   single-iteration step. Unchanged otherwise.
 - `rung0_baseline`, `rung1b_clamped_flow`: optional `on_frame=None`
-  (`on_frame(k, net, V, F_gt)` after frame k) and `iter_frame=None` (at that frame
+  (`on_frame(k, net)` after frame k), `on_iter=None` and `iter_frame=None` (at that frame
   index use `trace_relaxation(..., on_iter=...)` instead of `net.step`). Default
   path byte-for-byte as today.
-- `rung1c_clamped_R(ctx, on_frame=None, iter_frame=None)`: same shape as rung 1b;
+- `rung1c_clamped_R(ctx, on_frame=None, on_iter=None, iter_frame=None)`: same shape as rung 1b;
   warm-start from gyro at `t_start` (as the other rungs), per frame
   `clamp_R(net, w*dt)` then step with `config.ITERS_PER_FRAME`; scores ω (trivially
   ~0, kept for uniform columns) and `flow_epe(net.F, gt_flow(net, w*dt))`.
@@ -62,7 +62,7 @@ with `F_gt = C·R_gt` (`gt_flow`). I has no reference on ECRot city (no
 - `--mode maps --segment <name> --frame K` (defaults: `city_short`, `K = n//2`):
   runs rows `1c_R`, `1b_free`, `0` on that segment, collects per frame
   `viz.net_maps` + V + F_gt, and per iteration at frame K the I, G, F maps.
-  Writes `diag_maps_<segment>.npz` (`savez_compressed`, float32):
+  Writes `diag_maps_<segment>.npz` (`savez_compressed`, float16 — visual use, halves the size):
   `V (n,H,W)`, `F_gt (n,H,W,2)`, `I (3,n,H,W)`, `G (3,n,H,W,2)`, `F (3,n,H,W,2)`,
   `I_it (3,T,H,W)`, `G_it (3,T,H,W,2)`, `F_it (3,T,H,W,2)` (T = iterations),
   `rungs`, `dt`, `t_start`, `K`. `--limit` applies.
@@ -73,7 +73,7 @@ Each map plot runs only if `diag_maps_<segment>.npz` exists.
   I: p1–p99 of row 1c; G: p99 |G| of row 1c; F, F_gt, error: p99 |F_gt|. Same
   scales for every row and every GIF frame (so the free row may look washed
   out/saturated — that is the β-ambiguity being shown).
-- `draw_maps_grid(axes, maps_t, scales)`: fills the 3×6 grid via `viz.draw_map`;
+- `draw_maps_grid(axes, maps_t, scales, rungs)`: fills the 3×6 grid via `viz.draw_map`;
   row name as y-label of the first column. Shared by GIFs and the static figure.
 - `gif_frames.gif`: one figure per frame, suptitle frame index + time (s) from
   `style.frame_times`; PNGs to `diag_maps_<seg>/frames/`, assembled with
@@ -81,13 +81,13 @@ Each map plot runs only if `diag_maps_<segment>.npz` exists.
 - `gif_iters.gif`: one figure per iteration at frame K, suptitle
   "frame K, iter i/T"; V and F_gt columns constant; PNGs to
   `diag_maps_<seg>/iters/`.
-- `diag_P4_maps_frameK.png`: static grid at frame K (end of relaxation).
-- `diag_P5_F_epe.png`: per-frame `flow_epe` vs time, one line per row
+- `diag_P4_maps_<seg>.png`: static grid at frame K (end of relaxation).
+- `diag_P5_F_epe_<seg>.png`: per-frame `flow_epe` vs time, one line per row
   (`viz.draw_series`), computed from the npz at plot time.
 
 ### `diag_omega_ladder.ipynb` (authored walkthrough)
 New section "Clamp R to ω_gt: do I and F relax well?": what-to-look-for markdown,
-small local run (`LIMIT=8`, `K=4`) of the maps collection, static grid + EPE plot,
+small local run (the notebook slice, `LIMIT=10`, `K = n//2`) of the maps collection, static grid + EPE plot,
 both GIFs inline via `IPython.display.Image`.
 
 ## Testing (script style, `[ok]`/`[FAIL]`)

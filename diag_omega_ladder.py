@@ -1,11 +1,13 @@
 """
-diag_omega_ladder.py — ω-recovery oracle ladder (rungs 0 / 1a / 1b) over several
-synthetic segments, plus comparison plots.
+diag_omega_ladder.py — ω-recovery oracle ladder (rungs 0 / 1a / 1b / 1c) over
+several synthetic segments, plus comparison plots.
 
-Run directly (NOT pytest). The compute path (--mode run) is cluster-ready: it
-writes diag_ladder_results.csv and diag_ladder_frames.csv. The --mode plots path
-is local and renders P1/P2/P3 from those CSVs. Read-only on the model: it only
-injects ground-truth flow into q_F.
+Run directly (NOT pytest). The compute paths are cluster-ready: --mode run
+writes diag_ladder_results.csv and diag_ladder_frames.csv; --mode maps writes
+diag_maps_<segment>.npz (I, G, F of rows 1c_R / 1b_free / 0 per frame, and per
+iteration at frame K). The --mode plots path is local and renders P1/P2/P3 from
+the CSVs and, per npz, P4 (maps grid), P5 (flow EPE) and two GIFs. Read-only on
+the model: it only injects ground-truth flow into q_F or ground-truth R into q_R.
 
 See docs/superpowers/specs/2026-10-07-omega-recovery-diagnostic-design.md and
 docs/superpowers/plans/2026-10-07-omega-ladder-multisegment-plots.md.
@@ -30,6 +32,8 @@ from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
 from interacting_maps.metrics import compute_metrics, curl_share, flow_epe
+from interacting_maps.viz import net_maps, draw_map, draw_series
+from interacting_maps.style import frame_times, use_style, save, SCREEN_WIDTH
 
 # Cap on frames per segment for a fast local smoke test; set from --limit.
 LIMIT = None
@@ -493,23 +497,184 @@ def plot_P3(path=FRAMES_CSV, out='diag_P3_omega_timeseries.png'):
     print(f"[ok] {out}")
 
 
+# %%
+MAP_RUNGS = ('1c_R', '1b_free', '0')
+
+
+def _map_run(ctx, rung, **hooks):
+    if rung == '1c_R':
+        return rung1c_clamped_R(ctx, **hooks)
+    if rung == '1b_free':
+        return rung1b_clamped_flow(ctx, anchored=False, **hooks)
+    return rung0_baseline(ctx, **hooks)
+
+
+def _snap(net, H, W):
+    return {m: a.astype(np.float16) for m, a in net_maps(net, H, W).items()}
+
+
+def collect_maps(ctx, K):
+    """Run the MAP_RUNGS rows on one segment. Returns end-of-frame I, G, F per
+    row (rung axis first), the per-iteration I, G, F at frame K, V and F_gt."""
+    H, W, dt = ctx['seq'].H, ctx['seq'].W, ctx['dt']
+    net = build_net(ctx)
+    d = {'V': np.stack([V for V, _ in ctx['frames']]).astype(np.float16),
+         'F_gt': np.stack([gt_flow(net, ref_omega(ctx['om'], *win) * dt)
+                           for win in ctx['wins']]).astype(np.float16)}
+    per = {m: [] for m in ('I', 'G', 'F', 'I_it', 'G_it', 'F_it')}
+    for rung in MAP_RUNGS:
+        fr, it = [], []
+        _map_run(ctx, rung, on_frame=lambda k, n: fr.append(_snap(n, H, W)),
+                 on_iter=lambda n: it.append(_snap(n, H, W)), iter_frame=K)
+        for m in 'IGF':
+            per[m].append(np.stack([s[m] for s in fr]))
+            per[m + '_it'].append(np.stack([s[m] for s in it]))
+    d.update({k: np.stack(v) for k, v in per.items()})
+    d.update(rungs=np.array(MAP_RUNGS), dt=dt, t_start=ctx['seg']['t_start'], K=K)
+    return d
+
+
+def maps_path(seg_name):
+    return f'diag_maps_{seg_name}.npz'
+
+
+def run_maps(seg_name, K=None):
+    """Cluster entry for --mode maps: collect_maps on one segment -> npz."""
+    seg = next(s for s in SEGMENTS if s['name'] == seg_name)
+    ctx = prep_segment_context(seg)
+    if ctx is None:
+        return
+    K = ctx['n'] // 2 if K is None else min(K, ctx['n'] - 1)
+    np.savez_compressed(maps_path(seg_name), **collect_maps(ctx, K))
+    print(f"[ok] wrote {maps_path(seg_name)} ({ctx['n']} frames, K={K})")
+
+
+def _map_scales(d):
+    """Fixed colour scales for every row and frame, set from the clamped-R row
+    (index 0) so differences between rows and frames are real."""
+    mag = lambda v: np.hypot(v[..., 0], v[..., 1])
+    lo, hi = np.percentile(d['I'][0], [1, 99])
+    return {'V': float(np.percentile(np.abs(d['V']), 99)),
+            'I': (float(lo), float(hi)),
+            'G': float(np.percentile(mag(d['G'][0]), 99)),
+            'F': float(np.percentile(mag(d['F_gt']), 99))}
+
+
+def _frame_maps(d, k):
+    return {'V': d['V'][k], 'F_gt': d['F_gt'][k],
+            **{m: d[m][:, k] for m in 'IGF'}}
+
+
+def _iter_maps(d, i):
+    K = int(d['K'])
+    return {'V': d['V'][K], 'F_gt': d['F_gt'][K],
+            **{m: d[m + '_it'][:, i] for m in 'IGF'}}
+
+
+def draw_maps_grid(axes, maps_t, scales, rungs):
+    """Fill a (len(rungs), 6) grid: V | I | G | F | F_gt | F - F_gt."""
+    for r, rung in enumerate(rungs):
+        cells = [('V', maps_t['V'], None), ('I', maps_t['I'][r], None),
+                 ('G', maps_t['G'][r], None), ('F', maps_t['F'][r], None),
+                 ('F', maps_t['F_gt'], r'$F_{gt} = C R_{gt}$'),
+                 ('F', maps_t['F'][r] - maps_t['F_gt'], r'$F - F_{gt}$')]
+        for c, (kind, arr, title) in enumerate(cells):
+            draw_map(axes[r, c], kind, arr, title=(title if r == 0 else ''),
+                     scale=scales[kind])
+        axes[r, 0].set_ylabel(RUNG_LABEL[str(rung)], fontsize=8)
+
+
+def _maps_figure(maps_t, scales, rungs, title):
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(len(rungs), 6, figsize=(15, 1.95 * len(rungs) + 0.5),
+                             squeeze=False)
+    draw_maps_grid(axes, maps_t, scales, rungs)
+    fig.suptitle(title)
+    return fig
+
+
+def plot_P4(d, out):
+    """Static maps grid at frame K (end of its relaxation)."""
+    K = int(d['K'])
+    t = frame_times(float(d['dt']), len(d['V']))[K]
+    save(_maps_figure(_frame_maps(d, K), _map_scales(d), list(d['rungs']),
+                      f'frame {K}  (t = {t:.3f} s)'), out)
+    print(f"[ok] {out}")
+
+
+def plot_P5(d, out):
+    """Per-frame flow EPE vs C*R_gt, one line per row."""
+    import matplotlib.pyplot as plt
+    n = len(d['V'])
+    t = frame_times(float(d['dt']), n)
+    with use_style('screen'):
+        fig, ax = plt.subplots(figsize=(SCREEN_WIDTH, 3.5))
+        for r, rung in enumerate(d['rungs']):
+            draw_series(ax, t, [flow_epe(d['F'][r, k], d['F_gt'][k]) for k in range(n)],
+                        'flow EPE (px/frame)', label=RUNG_LABEL[str(rung)])
+            ax.get_lines()[-1].set_color(RUNG_COLORS[str(rung)])
+        ax.legend()
+        save(fig, out)
+    print(f"[ok] {out}")
+
+
+def make_maps_gifs(d, out_dir, fps=8):
+    """gif_frames.gif (one figure per frame) and gif_iters.gif (one per
+    iteration of frame K). PNGs at a fixed size so every GIF frame matches."""
+    import matplotlib.pyplot as plt
+    from interacting_maps.iwe_io import make_gif
+    sc, rungs, K = _map_scales(d), list(d['rungs']), int(d['K'])
+    n, T = len(d['V']), d['I_it'].shape[1]
+    t = frame_times(float(d['dt']), n)
+    jobs = [('frames', n, lambda k: (_frame_maps(d, k), f'frame {k}  (t = {t[k]:.3f} s)')),
+            ('iters', T, lambda i: (_iter_maps(d, i), f'frame {K}, iteration {i + 1}/{T}'))]
+    for name, count, get in jobs:
+        sub = os.path.join(out_dir, name)
+        os.makedirs(sub, exist_ok=True)
+        for f in glob.glob(os.path.join(sub, 'frame_*.png')):
+            os.remove(f)
+        for j in range(count):
+            maps_t, title = get(j)
+            fig = _maps_figure(maps_t, sc, rungs, title)
+            fig.savefig(os.path.join(sub, f'frame_{j:04d}.png'), dpi=72)
+            plt.close(fig)
+        make_gif(sub, fps=fps, name=f'gif_{name}.gif')
+        print(f"[ok] {os.path.join(sub, f'gif_{name}.gif')}")
+
+
+def plot_maps(seg_name):
+    d = dict(np.load(maps_path(seg_name)))
+    plot_P4(d, f'diag_P4_maps_{seg_name}.png')
+    plot_P5(d, f'diag_P5_F_epe_{seg_name}.png')
+    make_maps_gifs(d, f'diag_maps_{seg_name}')
+
+
 def make_all_plots():
-    plot_P1(); plot_P2(); plot_P3()
+    if os.path.exists(RESULTS_CSV) and os.path.exists(FRAMES_CSV):
+        plot_P1(); plot_P2(); plot_P3()
+    for path in sorted(glob.glob('diag_maps_*.npz')):
+        plot_maps(path[len('diag_maps_'):-len('.npz')])
 
 
 # %%
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--mode', default='run',
-                    choices=['setup', 'run', 'plots'])
+                    choices=['setup', 'run', 'maps', 'plots'])
     ap.add_argument('--limit', type=int, default=None,
                     help='cap frames per segment (fast local smoke test)')
+    ap.add_argument('--segment', default='city_short',
+                    help='--mode maps: segment name from SEGMENTS')
+    ap.add_argument('--frame', type=int, default=None,
+                    help='--mode maps: frame K for the iteration GIF (default n//2)')
     args = ap.parse_args()
     LIMIT = args.limit
     if args.mode == 'setup':
         _selfcheck()
     elif args.mode == 'run':
         run_all_segments()
+    elif args.mode == 'maps':
+        run_maps(args.segment, args.frame)
     elif args.mode == 'plots':
         import matplotlib
         matplotlib.use('Agg')                # headless (cluster); notebooks stay inline
