@@ -560,15 +560,20 @@ def _map_scales(d):
             'F': float(np.percentile(mag(d['F_gt']), 99))}
 
 
+def _as32(maps):
+    """Stored maps are float16; matplotlib's colour conversion needs float32."""
+    return {m: a.astype(np.float32) for m, a in maps.items()}
+
+
 def _frame_maps(d, k):
-    return {'V': d['V'][k], 'F_gt': d['F_gt'][k],
-            **{m: d[m][:, k] for m in 'IGF'}}
+    return _as32({'V': d['V'][k], 'F_gt': d['F_gt'][k],
+                  **{m: d[m][:, k] for m in 'IGF'}})
 
 
 def _iter_maps(d, i):
     K = int(d['K'])
-    return {'V': d['V'][K], 'F_gt': d['F_gt'][K],
-            **{m: d[m + '_it'][:, i] for m in 'IGF'}}
+    return _as32({'V': d['V'][K], 'F_gt': d['F_gt'][K],
+                  **{m: d[m + '_it'][:, i] for m in 'IGF'}})
 
 
 def draw_maps_grid(axes, maps_t, scales, rungs):
