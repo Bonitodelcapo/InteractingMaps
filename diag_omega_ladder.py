@@ -10,8 +10,10 @@ injects ground-truth flow into q_F.
 See docs/superpowers/specs/2026-10-07-omega-recovery-diagnostic-design.md and
 docs/superpowers/plans/2026-10-07-omega-ladder-multisegment-plots.md.
 
-Kept in sync with diag_omega_ladder.ipynb (generated from this file's `# %%`
-cells; edit this file, then regenerate the notebook).
+Companion walkthrough: diag_omega_ladder.ipynb imports these functions and steps
+through the pipeline on one segment, with a figure or log per step. It is
+authored, not generated: when a function here changes, update the notebook cells
+that call it.
 """
 # %%
 import argparse
@@ -139,6 +141,26 @@ def gt_flow(net, R_gt):
     return np.einsum('hwij,j->hwi', net._C_mat, R_gt)
 
 
+def clamp_flow(net, F_star):
+    """Hold q_F at F_star: an instance-level no-op update freezes it through the
+    relaxation, while the other costs still update G, I and R."""
+    net.q_F.update = lambda lr: None
+    net.q_F.value = F_star.copy()
+
+
+def trace_relaxation(net, V, n_iters, dt, omega_imu=None):
+    """Step one frame's relaxation one iteration at a time (same result as a
+    single step(V, n_iters)) and record omega (n_iters, 3) in rad/s plus the
+    V+F.G and G-grad(I) residuals, for convergence plots."""
+    om, r_vfg, r_gi = [], [], []
+    for _ in range(n_iters):
+        net.step(V, n_iters=1, omega_imu=omega_imu)
+        om.append(net.R / dt)
+        r_vfg.append(net.residual_VFG(V))
+        r_gi.append(net.residual_GI())
+    return np.asarray(om), np.asarray(r_vfg), np.asarray(r_gi)
+
+
 def score_frames(est_list, ref_list):
     est, ref = np.asarray(est_list), np.asarray(ref_list)
     errs, dirs, betas = zip(*[compute_metrics(e, r) for e, r in zip(est, ref)])
@@ -222,13 +244,12 @@ def rung1b_clamped_flow(ctx, anchored):
     dt = ctx['dt']
     net.initialize_from_rotation(
         get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * dt)
-    net.q_F.update = lambda lr: None         # freeze F (instance-level no-op)
     est, ref = [], []
     max_drift = 0.0
     for (V, _t), (t_lo, t_hi) in zip(ctx['frames'], ctx['wins']):
         w = ref_omega(ctx['om'], t_lo, t_hi)
         F_star = gt_flow(net, w * dt)
-        net.q_F.value = F_star.copy()
+        clamp_flow(net, F_star)
         net.step(V, n_iters=config.ITERS_PER_FRAME,
                  omega_imu=(w if anchored else None))
         max_drift = max(max_drift, float(np.max(np.abs(net.q_F.value - F_star))))
@@ -311,8 +332,6 @@ def _read_results(path=RESULTS_CSV):
 def plot_P1(path=RESULTS_CSV, out='diag_P1_dir_beta.png'):
     """Grouped bars: dir (deg) and beta by segment, grouped by rung.
     Shows the oracle rungs collapsing to ~0 across every scene."""
-    import matplotlib
-    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     rows, segs = _read_results(path)
     val = {(r['segment'], r['rung']): r for r in rows}
@@ -336,8 +355,6 @@ def plot_P1(path=RESULTS_CSV, out='diag_P1_dir_beta.png'):
 def plot_P2(path=RESULTS_CSV, out='diag_P2_axis_heatmap.png'):
     """Heatmap segment x axis of rung-0 per-axis correlation axis_r.
     Diverging (-1..1, 0 neutral): reveals a recurring dead axis across scenes."""
-    import matplotlib
-    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
     rows, segs = _read_results(path)
@@ -364,8 +381,6 @@ def plot_P2(path=RESULTS_CSV, out='diag_P2_axis_heatmap.png'):
 def plot_P3(path=FRAMES_CSV, out='diag_P3_omega_timeseries.png'):
     """Small multiples: rung-0 estimated vs GT omega per axis over frames,
     one row per segment, one column per axis. Shows which axis diverges."""
-    import matplotlib
-    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     rows = list(csv.DictReader(open(path, newline='')))
     segs = []
@@ -414,4 +429,6 @@ if __name__ == '__main__':
     elif args.mode == 'run':
         run_all_segments()
     elif args.mode == 'plots':
+        import matplotlib
+        matplotlib.use('Agg')                # headless (cluster); notebooks stay inline
         make_all_plots()
