@@ -17,6 +17,9 @@ data/poster_rotation/images
 data/poster_rotation/images.txt
 data/poster_rotation/calib.txt
 
+EcRot_city/
+EcRot_street/
+
 
 ###################################
 # Python.gitignore
