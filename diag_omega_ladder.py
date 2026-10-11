@@ -29,7 +29,7 @@ from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_omega_gt
 from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
-from interacting_maps.metrics import compute_metrics, curl_share
+from interacting_maps.metrics import compute_metrics, curl_share, flow_epe
 
 # Cap on frames per segment for a fast local smoke test; set from --limit.
 LIMIT = None
@@ -148,17 +148,36 @@ def clamp_flow(net, F_star):
     net.q_F.value = F_star.copy()
 
 
-def trace_relaxation(net, V, n_iters, dt, omega_imu=None):
+def clamp_R(net, R_star):
+    """Hold q_R at R_star: with the kinematic R-update off (the V2 switch) and
+    no IMU anchor, no cost sends gradient to R, so the relaxation keeps it."""
+    net.cost_kin.update_r = False
+    net.q_R.value = R_star.copy()
+
+
+def trace_relaxation(net, V, n_iters, dt, omega_imu=None, on_iter=None):
     """Step one frame's relaxation one iteration at a time (same result as a
     single step(V, n_iters)) and record omega (n_iters, 3) in rad/s plus the
-    V+F.G and G-grad(I) residuals, for convergence plots."""
+    V+F.G and G-grad(I) residuals, for convergence plots. on_iter(net), if
+    given, is called after every iteration."""
     om, r_vfg, r_gi = [], [], []
     for _ in range(n_iters):
         net.step(V, n_iters=1, omega_imu=omega_imu)
         om.append(net.R / dt)
         r_vfg.append(net.residual_VFG(V))
         r_gi.append(net.residual_GI())
+        if on_iter is not None:
+            on_iter(net)
     return np.asarray(om), np.asarray(r_vfg), np.asarray(r_gi)
+
+
+def advance(net, V, k, dt, omega_imu=None, on_iter=None, iter_frame=None):
+    """One frame's relaxation; at frame iter_frame step it one iteration at a
+    time through trace_relaxation so on_iter sees every iteration."""
+    if on_iter is not None and k == iter_frame:
+        trace_relaxation(net, V, config.ITERS_PER_FRAME, dt, omega_imu, on_iter)
+    else:
+        net.step(V, n_iters=config.ITERS_PER_FRAME, omega_imu=omega_imu)
 
 
 def score_frames(est_list, ref_list):
@@ -191,23 +210,51 @@ def _selfcheck():
               f"{np.linalg.norm(w0):.3f} rad/s  [calib {c['src']}: "
               f"fx={c['fx']:.0f} cx={c['cx']:.0f} cy={c['cy']:.0f}"
               f"{' +dist' if c['dist_coeffs'] is not None else ''}]")
+        _selfcheck_clamps(ctx)
+
+
+def _selfcheck_clamps(ctx):
+    """clamp_R holds R exactly; trace_relaxation(on_iter) matches net.step."""
+    V, dt, n_it = ctx['frames'][0][0], ctx['dt'], config.ITERS_PER_FRAME
+    R_star = ref_omega(ctx['om'], *ctx['wins'][0]) * dt
+    a = build_net(ctx)
+    a.initialize_from_rotation(0.5 * R_star)
+    clamp_R(a, R_star)
+    a.step(V, n_iters=n_it)
+    print(f"  [{'ok' if np.array_equal(a.R, R_star) else 'FAIL'}] clamp_R holds R exactly")
+    b, c, seen = build_net(ctx), build_net(ctx), []
+    for net in (b, c):
+        net.initialize_from_rotation(R_star)
+    b.step(V, n_iters=n_it)
+    trace_relaxation(c, V, n_it, dt, on_iter=lambda net: seen.append(1))
+    same = all(np.array_equal(getattr(b, m), getattr(c, m)) for m in 'IGFR')
+    print(f"  [{'ok' if same and len(seen) == n_it else 'FAIL'}] "
+          f"trace_relaxation(on_iter) == net.step ({len(seen)} callbacks)")
+    print(f"  [{'ok' if flow_epe(a.F, a.F) == 0.0 else 'FAIL'}] flow_epe(F, F) == 0")
 
 
 # %%
-def rung0_baseline(ctx):
+def rung0_baseline(ctx, on_frame=None, on_iter=None, iter_frame=None):
     """Vision-only thesis net on one segment; characterize the failure.
-    Returns (score, est(N,3), ref(N,3))."""
+    Returns (score, est(N,3), ref(N,3)). on_frame(k, net) runs after each
+    frame; on_iter(net) after each iteration of frame iter_frame."""
     net = build_net(ctx)
     # Warm start from the gyro at t_start (mirrors reported runs: initial_R None).
     net.initialize_from_rotation(
         get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * ctx['dt'])
-    est, ref, curls = [], [], []
-    for (V, _t), (t_lo, t_hi) in zip(ctx['frames'], ctx['wins']):
-        net.step(V, n_iters=config.ITERS_PER_FRAME)      # vision-only (no anchor)
-        est.append(net.R / ctx['dt'])
-        ref.append(ref_omega(ctx['om'], t_lo, t_hi))
+    dt = ctx['dt']
+    est, ref, curls, epes = [], [], [], []
+    for k, ((V, _t), (t_lo, t_hi)) in enumerate(zip(ctx['frames'], ctx['wins'])):
+        advance(net, V, k, dt, on_iter=on_iter, iter_frame=iter_frame)  # vision-only
+        w = ref_omega(ctx['om'], t_lo, t_hi)
+        est.append(net.R / dt)
+        ref.append(w)
         curls.append(curl_share(net.G))
+        epes.append(flow_epe(net.F, gt_flow(net, w * dt)))
+        if on_frame is not None:
+            on_frame(k, net)
     s = score_frames(est, ref)
+    s['F_epe'] = float(np.mean(epes))
     s['cond_M'] = float(np.linalg.cond(build_R_normal_equations(net._C_mat)))
     s['mean_curl_share'] = float(np.mean(curls))
     print(f"[rung0] {ctx['seg']['name']:12s} err={s['mean_err']:6.2f} "
@@ -237,30 +284,60 @@ def rung1a_kinematics(ctx):
     return s, ok
 
 
-def rung1b_clamped_flow(ctx, anchored):
+def rung1b_clamped_flow(ctx, anchored, on_frame=None, on_iter=None, iter_frame=None):
     """Clamp F = F* (perfect flow) through the relaxation; let R evolve.
-    anchored=False: pure vision; anchored=True: also anchor R toward omega_gt."""
+    anchored=False: pure vision; anchored=True: also anchor R toward omega_gt.
+    Hooks as in rung0_baseline."""
     net = build_net(ctx)
     dt = ctx['dt']
     net.initialize_from_rotation(
         get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * dt)
-    est, ref = [], []
+    est, ref, epes = [], [], []
     max_drift = 0.0
-    for (V, _t), (t_lo, t_hi) in zip(ctx['frames'], ctx['wins']):
+    for k, ((V, _t), (t_lo, t_hi)) in enumerate(zip(ctx['frames'], ctx['wins'])):
         w = ref_omega(ctx['om'], t_lo, t_hi)
         F_star = gt_flow(net, w * dt)
         clamp_flow(net, F_star)
-        net.step(V, n_iters=config.ITERS_PER_FRAME,
-                 omega_imu=(w if anchored else None))
+        advance(net, V, k, dt, omega_imu=(w if anchored else None),
+                on_iter=on_iter, iter_frame=iter_frame)
         max_drift = max(max_drift, float(np.max(np.abs(net.q_F.value - F_star))))
         est.append(net.R / dt)
         ref.append(w)
+        epes.append(flow_epe(net.F, F_star))
+        if on_frame is not None:
+            on_frame(k, net)
     s = score_frames(est, ref)
+    s['F_epe'] = float(np.mean(epes))
     s['cond_M'] = float(np.linalg.cond(build_R_normal_equations(net._C_mat)))
     tag = 'anchored' if anchored else 'free'
     print(f"[rung1b/{tag}] {ctx['seg']['name']:12s} err={s['mean_err']:6.2f} "
           f"dir={s['mean_dir']:6.2f} beta={s['mean_beta']:.3f} "
           f"(clamp drift {max_drift:.1e})")
+    return s
+
+
+def rung1c_clamped_R(ctx, on_frame=None, on_iter=None, iter_frame=None):
+    """Clamp R = R_gt through the relaxation; let I, G and F relax. Asks whether
+    the maps come out right once omega is right. Scored by flow EPE vs C*R_gt
+    (the omega metrics are ~0 by construction). Hooks as in rung0_baseline."""
+    net = build_net(ctx)
+    dt = ctx['dt']
+    net.initialize_from_rotation(
+        get_gyro_for_frame(ctx['imu'], *ctx['wins'][0]) * dt)
+    est, ref, epes = [], [], []
+    for k, ((V, _t), (t_lo, t_hi)) in enumerate(zip(ctx['frames'], ctx['wins'])):
+        w = ref_omega(ctx['om'], t_lo, t_hi)
+        clamp_R(net, w * dt)
+        advance(net, V, k, dt, on_iter=on_iter, iter_frame=iter_frame)
+        est.append(net.R / dt)
+        ref.append(w)
+        epes.append(flow_epe(net.F, gt_flow(net, w * dt)))
+        if on_frame is not None:
+            on_frame(k, net)
+    s = score_frames(est, ref)
+    s['F_epe'] = float(np.mean(epes))
+    print(f"[rung1c] {ctx['seg']['name']:12s} F_epe={s['F_epe']:.4f} px/frame "
+          f"(err={s['mean_err']:.2e}, R clamped)")
     return s
 
 
@@ -270,7 +347,8 @@ FRAMES_CSV = 'diag_ladder_frames.csv'
 
 RESULTS_HEADER = ['segment', 'ds', 'n_frames', 'rung', 'mean_err', 'median_err',
                   'mean_dir', 'median_dir', 'mean_beta',
-                  'axis_r_x', 'axis_r_y', 'axis_r_z', 'cond_M', 'curl_share']
+                  'axis_r_x', 'axis_r_y', 'axis_r_z', 'cond_M', 'curl_share',
+                  'F_epe']
 
 
 def _row(ctx, rung, s):
@@ -281,7 +359,8 @@ def _row(ctx, rung, s):
             round(s['axis_r'][0], 4), round(s['axis_r'][1], 4),
             round(s['axis_r'][2], 4),
             round(s.get('cond_M', float('nan')), 3),
-            round(s['mean_curl_share'], 4) if 'mean_curl_share' in s else '']
+            round(s['mean_curl_share'], 4) if 'mean_curl_share' in s else '',
+            round(s['F_epe'], 4) if 'F_epe' in s else '']
 
 
 def run_all_segments(out_results=RESULTS_CSV, out_frames=FRAMES_CSV):
@@ -300,6 +379,7 @@ def run_all_segments(out_results=RESULTS_CSV, out_frames=FRAMES_CSV):
         rrows.append(_row(ctx, '1a', s1a))
         rrows.append(_row(ctx, '1b_free', rung1b_clamped_flow(ctx, anchored=False)))
         rrows.append(_row(ctx, '1b_anchored', rung1b_clamped_flow(ctx, anchored=True)))
+        rrows.append(_row(ctx, '1c_R', rung1c_clamped_R(ctx)))
     with open(out_results, 'w', newline='') as f:
         w = csv.writer(f); w.writerow(RESULTS_HEADER); w.writerows(rrows)
     with open(out_frames, 'w', newline='') as f:
@@ -314,10 +394,12 @@ def run_all_segments(out_results=RESULTS_CSV, out_frames=FRAMES_CSV):
 # %%
 RUNG_ORDER = ['0', '1a', '1b_free', '1b_anchored']
 RUNG_COLORS = {'0': '#2a78d6', '1a': '#eb6834',
-               '1b_free': '#1baf7a', '1b_anchored': '#eda100'}
+               '1b_free': '#1baf7a', '1b_anchored': '#eda100',
+               '1c_R': '#8a5cd1'}
 RUNG_LABEL = {'0': 'rung 0 (vision-only)', '1a': 'rung 1a (kinematics)',
               '1b_free': 'rung 1b (flow, free)',
-              '1b_anchored': 'rung 1b (flow, anchored)'}
+              '1b_anchored': 'rung 1b (flow, anchored)',
+              '1c_R': 'rung 1c (R clamped)'}
 
 
 def _read_results(path=RESULTS_CSV):
