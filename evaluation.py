@@ -79,7 +79,7 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
                      get_reference_omega)
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from interacting_maps.viz import normalise, flow_to_rgb, draw_map, draw_omega, draw_error, net_maps
+from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps
 from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
                                     LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
                                     to_deg_s, ref_label, use_style, save)
@@ -149,10 +149,8 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
             res_history.append(net.residual_VFG(V))
 
             if it in snapshot_iters:
-                snapshots[it] = {
-                    'I': net.I.copy(), 'G': net.G.copy(),
-                    'F': net.F.copy(), 'R': net.R.copy(),
-                }
+                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
+                                 'R': net.R.copy()}
     else:
         for it in range(1, max_iters + 1):
             net.update_R_from_FC()
@@ -166,49 +164,37 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
             res_history.append(net.residual_VFG(V))
 
             if it in snapshot_iters:
-                snapshots[it] = {
-                    'I': net.I[:H, :W].copy(), 'G': net.G.copy(),
-                    'F': net.F.copy(), 'R': net.R.copy(),
-                }
+                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
+                                 'R': net.R.copy()}
 
     R_history = np.array(R_history)
 
     # --- Save plot ---
     rc.save_params()
     n_snaps = len(snapshot_iters)
-    fig, axes = plt.subplots(5, n_snaps, figsize=(3 * n_snaps, 14))
-    fig.suptitle(f'Exp 1: Map Convergence ({rc.model}, {rc.dataset})\n'
-                 f'GT ω = ({gt_omega[0]:.3f}, {gt_omega[1]:.3f}, {gt_omega[2]:.3f}) rad/s',
-                 fontsize=11)
-
-    for col, it in enumerate(snapshot_iters):
-        snap = snapshots[it]
-        omega_it = snap['R'] / rc.frame_duration
-
-        axes[0, col].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
-        axes[0, col].set_title(f'iter {it}', fontsize=9)
-        axes[1, col].imshow(normalise(snap['I']), cmap='gray')
-        G_mag = np.sqrt(snap['G'][..., 0]**2 + snap['G'][..., 1]**2)
-        axes[2, col].imshow(normalise(G_mag), cmap='hot')
-        axes[3, col].imshow(flow_to_rgb(snap['F']))
-
-        err = np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration * 180 / np.pi
-        axes[4, col].bar(['ωx','ωy','ωz'], omega_it,
-                        color=['#4e79a7','#f28e2b','#e15759'])
-        axes[4, col].bar(['ωx','ωy','ωz'], gt_omega,
-                        color='none', edgecolor='black', linewidth=2)
-        axes[4, col].set_title(f'err={err:.1f}°/s', fontsize=8)
-
-    row_labels = ['V (input)', 'I (intensity)', '|G| (gradient)', 'F (flow)', 'ω']
-    for row, label in enumerate(row_labels):
-        axes[row, 0].set_ylabel(label, fontsize=9)
-    for ax in axes[:4].flat:
-        ax.axis('off')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp1_convergence.png'), dpi=150)
-    plt.close()
-    print(f"  Saved: {rc.output_dir}/exp1_convergence.png")
+    path = os.path.join(rc.output_dir, 'exp1_convergence.png')
+    with use_style('screen'):
+        fig, axes = plt.subplots(5, n_snaps, figsize=(SCREEN_WIDTH, 11))
+        fig.suptitle(f'Exp 1: map convergence — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, frame {frame_idx}]')
+        for col, it in enumerate(snapshot_iters):
+            snap = snapshots[it]
+            draw_map(axes[0, col], 'V', V, title=f'iter {it}')
+            for row, kind in enumerate(('I', 'G', 'F'), start=1):
+                draw_map(axes[row, col], kind, snap[kind], title='')
+            err = to_deg_s(np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration)
+            ax = axes[4, col]
+            ax.bar(range(3), to_deg_s(snap['R'] / rc.frame_duration), color=OMEGA_AXIS_COLORS)
+            ax.bar(range(3), to_deg_s(gt_omega), color='none', edgecolor=REF_STYLE['color'],
+                   linewidth=1.5, label=ref_label('imu'))
+            ax.set_xticks(range(3), [r'$\omega_x$', r'$\omega_y$', r'$\omega_z$'])
+            ax.set_title(f'error {err:.1f} °/s')
+        for row, kind in enumerate(('V', 'I', 'G', 'F')):
+            axes[row, 0].set_ylabel(MAP_TITLES[kind])
+        axes[4, 0].set_ylabel(LABEL_OMEGA)
+        axes[4, 0].legend()
+        save(fig, path)
+    print(f"  Saved: {path}")
 
 
 # ===========================================================================
@@ -666,27 +652,24 @@ def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
         print(f"    dt={dt*1000:5.1f}ms | active={n_active:5d} | err={err2:.2f}°/s")
 
     # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(f'Exp 3: Parameter Influence ({rc.model}, {rc.dataset})', fontsize=11)
-
-    axes[0].plot([r['iters'] for r in iter_results],
-                [r['err'] for r in iter_results], 'bo-', lw=1.5)
-    axes[0].set_xlabel('Iterations per frame')
-    axes[0].set_ylabel('ω error (°/s)')
-    axes[0].set_title(f'(a) Iterations (dt={rc.frame_duration*1000:.0f}ms)')
-    axes[0].grid(True, alpha=0.3)
-    axes[0].set_xscale('log')
-
-    axes[1].plot([r['dt_ms'] for r in dt_results],
-                [r['err'] for r in dt_results], 'rs-', lw=1.5)
-    axes[1].set_xlabel('Frame duration (ms)')
-    axes[1].set_ylabel('ω error (°/s)')
-    axes[1].set_title(f'(b) Frame duration ({rc.n_iters} iters)')
-    axes[1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp3_parameters.png'), dpi=150)
-    plt.close()
+    color = MODELS[rc.model][1]
+    with use_style('screen'):
+        fig, axes = plt.subplots(1, 2, figsize=(SCREEN_WIDTH, 4.5))
+        fig.suptitle(f'Exp 3: parameter influence — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
+                     f'reference = IMU]')
+        axes[0].plot([r['iters'] for r in iter_results],
+                     [r['err'] for r in iter_results], 'o-', color=color)
+        axes[0].set_xscale('log')
+        axes[0].set_xlabel('iterations per frame')
+        axes[0].set_title(f'(a) iterations (dt {rc.frame_duration*1000:.0f} ms)')
+        axes[1].plot([r['dt_ms'] for r in dt_results],
+                     [r['err'] for r in dt_results], 's-', color=color)
+        axes[1].set_xlabel('frame duration (ms)')
+        axes[1].set_title(f'(b) frame duration ({rc.n_iters} iters)')
+        for ax in axes:
+            ax.set_ylabel(LABEL_ERROR)
+        save(fig, os.path.join(rc.output_dir, 'exp3_parameters.png'))
 
 
 # ===========================================================================
@@ -884,22 +867,25 @@ def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
         print(f"  {label:15s} | init={init_dist:.5f} | final={final_dist:.5f} | "
               f"{'✓' if converged else '✗'}")
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for r in results:
-        color = 'green' if r['converged'] else 'red'
-        ax.scatter(r['init_dist'], r['final_dist'], c=color, s=100, zorder=5)
-        ax.annotate(r['label'], (r['init_dist'], r['final_dist']), fontsize=8)
-    max_d = max(r['init_dist'] for r in results) * 1.1
-    ax.plot([0, max_d], [0, max_d], 'k--', alpha=0.3, label='no improvement')
-    ax.set_xlabel('Initial ||R - R_gt||')
-    ax.set_ylabel('Final ||R - R_gt||')
-    ax.set_title(f'Basin of Attraction ({rc.model}, {rc.dataset})')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp6_basin.png'), dpi=150)
-    plt.close()
+    # Plot: distances as angular-velocity error in deg/s; filled = converged
+    color = MODELS[rc.model][1]
+    to_w = lambda d: to_deg_s(d / rc.frame_duration)
+    with use_style('screen'):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for r in results:
+            x, y = to_w(r['init_dist']), to_w(r['final_dist'])
+            ax.scatter(x, y, s=80, zorder=5, color=color if r['converged'] else 'none',
+                       edgecolors=color, linewidths=1.5)
+            ax.annotate(r['label'], (x, y), fontsize=8)
+        max_d = to_w(max(r['init_dist'] for r in results)) * 1.1
+        ax.plot([0, max_d], [0, max_d], ls='--', color='0.5', label='no improvement')
+        ax.set_xlabel(r'initial $\|\omega - \omega_{ref}\|$ (°/s)')
+        ax.set_ylabel(r'final $\|\omega - \omega_{ref}\|$ (°/s)')
+        ax.set_title(f'Exp 6: basin of attraction — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
+                     f'reference = IMU; filled = converged]')
+        ax.legend()
+        save(fig, os.path.join(rc.output_dir, 'exp6_basin.png'))
 
 
 # ===========================================================================
