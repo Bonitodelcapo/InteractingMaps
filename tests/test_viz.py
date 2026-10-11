@@ -91,8 +91,39 @@ def test_maps():
     plt.close(fig)
 
 
+def test_lines():
+    print('viz.py line plots')
+    t = style.frame_times(0.02, 4)
+    est = np.full(4, np.pi)
+    fig, ax = plt.subplots()
+    viz.draw_omega(ax, t, est, ref=est, imu=est, axis=2, ref_src='groundtruth')
+    lines = ax.get_lines()
+    check('draw_omega: ref, imu, estimate', len(lines) == 3)
+    check('draw_omega: plotted in deg/s', np.allclose(lines[-1].get_ydata(), 180.0))
+    check('draw_omega: x is seconds at midpoints', np.allclose(lines[-1].get_xdata(), t))
+    check('draw_omega: axis colour when no model',
+          lines[-1].get_color() == style.OMEGA_AXIS_COLORS[2])
+    check('draw_omega: labels', ax.get_ylabel() == style.omega_label(2)
+          and ax.get_xlabel() == style.LABEL_TIME)
+    plt.close(fig)
+    fig, ax = plt.subplots()
+    viz.draw_omega(ax, t, est, ref=est, imu=est, axis=0, model='thesis_cmax', ref_src='imu')
+    lines = ax.get_lines()
+    check('draw_omega: IMU skipped when it is the reference', len(lines) == 2)
+    check('draw_omega: model colour and name',
+          lines[-1].get_color() == style.MODELS['thesis_cmax'][1]
+          and lines[-1].get_label() == 'CMax-anchor')
+    plt.close(fig)
+    fig, ax = plt.subplots()
+    viz.draw_error(ax, t, np.ones(4))
+    viz.draw_series(ax, t, np.ones(4), 'contrast')
+    check('draw_error/draw_series: one line each', len(ax.get_lines()) == 2)
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     test_style()
     test_maps()
+    test_lines()
     print('all checks passed' if not FAILURES else f"FAILED: {', '.join(FAILURES)}")
     sys.exit(1 if FAILURES else 0)

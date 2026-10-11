@@ -9,7 +9,9 @@ draw_error and draw_series fill one axis each, time in seconds.
 
 import numpy as np
 
-from interacting_maps.style import MAP_TITLES
+from interacting_maps.style import (MAP_TITLES, MODELS, OMEGA_AXIS_COLORS, REF_STYLE,
+                                    IMU_STYLE, LINE_COLOR, LABEL_TIME, LABEL_ERROR,
+                                    omega_label, ref_label, to_deg_s)
 
 
 def normalise(x):
@@ -143,3 +145,39 @@ def draw_map(ax, kind, arr, title=None, scale=None):
         key = ax.inset_axes([0.02, 0.02, 0.2, 0.2])
         key.imshow(vec_key(), interpolation='nearest')
         key.set_axis_off()
+
+
+def _line(model, label):
+    if model is None:
+        return LINE_COLOR, label
+    name, color = MODELS[model]
+    return color, label or name
+
+
+def draw_omega(ax, t, est, ref=None, imu=None, axis=0, model=None, ref_src=None, label=None):
+    """One ω component (inputs rad/s, drawn in deg/s) against time in seconds."""
+    if ref is not None:
+        ax.plot(t, to_deg_s(ref), label=ref_label(ref_src), **REF_STYLE)
+    if imu is not None and ref_src != 'imu':
+        ax.plot(t, to_deg_s(imu), **IMU_STYLE)
+    if model is None:
+        color, label = OMEGA_AXIS_COLORS[axis], label or 'estimate'
+    else:
+        color, label = _line(model, label)
+    ax.plot(t, to_deg_s(est), color=color, lw=1.2, label=label)
+    ax.set_ylabel(omega_label(axis))
+    ax.set_xlabel(LABEL_TIME)
+
+
+def draw_error(ax, t, err, model=None, label=None):
+    color, label = _line(model, label)
+    ax.plot(t, err, color=color, lw=1.0, label=label)
+    ax.set_ylabel(LABEL_ERROR)
+    ax.set_xlabel(LABEL_TIME)
+
+
+def draw_series(ax, t, y, ylabel, model=None, label=None):
+    color, label = _line(model, label)
+    ax.plot(t, y, color=color, lw=1.0, marker='.', ms=3, label=label)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel(LABEL_TIME)
