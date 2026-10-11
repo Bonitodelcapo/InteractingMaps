@@ -121,9 +121,24 @@ def test_lines():
     plt.close(fig)
 
 
+def test_iwe_io():
+    print('iwe_io.py')
+    from interacting_maps import iwe_io
+    with tempfile.TemporaryDirectory() as d:
+        iwe = np.zeros((6, 8)); iwe[2, 3] = 4.0
+        for k in range(3):
+            iwe_io.save_iwe(iwe, np.zeros(3), 1.0 + k, d, k, t_mid=10.0 + (k + 0.5) * 0.02)
+        img = plt.imread(os.path.join(d, 'frame_0000.png'))
+        check('save_iwe: event pixel white, background black',
+              img[2, 3, :3].min() > 0.99 and img[0, 0, :3].max() < 0.01)
+        iwe_io.plot_contrast_curve(d, t_start=10.0)
+        check('contrast curve written', os.path.exists(os.path.join(d, 'contrast_curve.png')))
+
+
 if __name__ == '__main__':
     test_style()
     test_maps()
     test_lines()
+    test_iwe_io()
     print('all checks passed' if not FAILURES else f"FAILED: {', '.join(FAILURES)}")
     sys.exit(1 if FAILURES else 0)

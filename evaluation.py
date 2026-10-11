@@ -382,7 +382,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
 
     # ─── IWE sequence artefacts (contrast curve + GIF) ────────────────
     if iwe_dir is not None:
-        plot_contrast_curve(iwe_dir)
+        plot_contrast_curve(iwe_dir, rc.t_start)
         make_gif(iwe_dir)
         print(f"  IWE: {rc.n_frames} PNGs + iwe_log.csv + contrast_curve.png "
               f"(+gif) → {iwe_dir}/")
