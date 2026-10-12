@@ -119,15 +119,32 @@ def vec_key(n=65):
     return render_vec(np.stack([X, Y], axis=-1), scale=1.0)
 
 
-def _render_aps(aps, scale=None):
+def _aps_log(aps):
     a = np.asarray(aps, dtype=np.float64)
     if a.ndim == 3:
         a = a[..., :3].mean(axis=-1)
-    return render_I(np.log1p(a), scale)
+    return np.log1p(a)
+
+
+def _render_aps(aps, scale=None):
+    return render_I(_aps_log(aps), scale)
 
 
 _RENDERERS = {'V': render_V, 'I': render_I, 'aps': _render_aps,
               'G': render_vec, 'F': render_vec, 'IWE': render_IWE}
+
+
+def map_scale(kind, arr):
+    """The scale draw_map picks for arr on its own; pass it as scale= to share it across panels."""
+    if kind == 'V' or kind == 'IWE':
+        return _robust_max(np.abs(arr))
+    if kind == 'I':
+        return tuple(np.percentile(arr, [1.0, 99.0]))
+    if kind == 'aps':
+        return tuple(np.percentile(_aps_log(arr), [1.0, 99.0]))
+    if kind in ('G', 'F'):
+        return _robust_max(np.hypot(arr[..., 0], arr[..., 1]))
+    raise ValueError(f'unknown kind: {kind}')
 
 
 def net_maps(net, H, W):

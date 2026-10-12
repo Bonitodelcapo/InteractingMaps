@@ -79,7 +79,7 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
                      get_reference_omega)
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps
+from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps, map_scale
 from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
                                     LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
                                     to_deg_s, ref_label, use_style, save)
@@ -176,12 +176,14 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
     with use_style('screen'):
         fig, axes = plt.subplots(5, n_snaps, figsize=(SCREEN_WIDTH, 11))
         fig.suptitle(f'Exp 1: map convergence — {MODELS[rc.model][0]}   '
-                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, frame {frame_idx}]')
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, frame {frame_idx}, '
+                     f'{ref_label("imu")}]')
+        scales = {k: map_scale(k, snapshots[snapshot_iters[-1]][k]) for k in ('I', 'G', 'F')}
         for col, it in enumerate(snapshot_iters):
             snap = snapshots[it]
             draw_map(axes[0, col], 'V', V, title=f'iter {it}')
             for row, kind in enumerate(('I', 'G', 'F'), start=1):
-                draw_map(axes[row, col], kind, snap[kind], title='')
+                draw_map(axes[row, col], kind, snap[kind], title='', scale=scales[kind])
             err = to_deg_s(np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration)
             ax = axes[4, col]
             ax.bar(range(3), to_deg_s(snap['R'] / rc.frame_duration), color=OMEGA_AXIS_COLORS)
@@ -460,7 +462,7 @@ def _plot_tracking(rows, rc: RunConfig):
         for i in range(3):
             draw_omega(axes[i], t, est[:, i], ref=ref[:, i], imu=imu[:, i], axis=i,
                        ref_src=ref_src)
-            axes[i].legend(loc='upper right')
+        axes[0].legend(loc='upper right')
         err = np.array([r['err_deg_s'] for r in rows])
         draw_error(axes[3], t, err)
         axes[3].set_title(f'error: mean {err.mean():.1f} °/s, median {np.median(err):.1f} °/s')
@@ -657,7 +659,7 @@ def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
         fig, axes = plt.subplots(1, 2, figsize=(SCREEN_WIDTH, 4.5))
         fig.suptitle(f'Exp 3: parameter influence — {MODELS[rc.model][0]}   '
                      f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
-                     f'reference = IMU]')
+                     f'{ref_label("imu")}]')
         axes[0].plot([r['iters'] for r in iter_results],
                      [r['err'] for r in iter_results], 'o-', color=color)
         axes[0].set_xscale('log')
@@ -681,29 +683,43 @@ def experiment_qualitative_video(rc: RunConfig):
     return experiment_tracking(rc, save_frames=True)
 
 
+def _steady_scale(rc, kind, arr, k, a=0.05):
+    """Per-frame scale smoothed across frames (EMA), so a fading map shows as fading."""
+    s = map_scale(kind, arr)
+    store = getattr(rc, '_disp_scale', None)
+    if store is None or k == 0:
+        store = {}
+        rc._disp_scale = store
+    prev = store.get(kind)
+    if prev is None:
+        blended = s
+    else:
+        blended = np.asarray(prev) + a * (np.asarray(s) - np.asarray(prev))
+        blended = tuple(blended) if kind == 'I' else float(blended)
+    store[kind] = blended
+    return blended
+
+
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     """
     One inspection frame per time step: V | in-loop I | I read out from G by
     the exact solve (what recon_r scores) | G | F | nearest APS frame.
 
-    The in-loop I keeps a display range smoothed across frames, so a map that
-    loses contrast shows washed out instead of being re-stretched; its std and
-    correlation with APS are in the title.
+    V, in-loop I, G and F keep a display scale smoothed across frames (EMA),
+    so a map that loses contrast shows washed out instead of being
+    re-stretched; I's std and correlation with APS are in the title. "I from
+    G (exact)" and APS keep per-image scaling.
     """
     from interacting_maps.network_dissertation import solve_poisson_exact
     maps = net_maps(net, H, W)
-    I, G = maps['I'], maps['G']
+    I, G, F = maps['I'], maps['G'], maps['F']
     t_rel = (k + 0.5) * rc.frame_duration
     t_mid = rc.t_start + t_rel
 
-    lo, hi = np.percentile(I, [1.0, 99.0])
-    prev = getattr(rc, '_I_disp_range', None)
-    if prev is None or k == 0:
-        rng = (lo, hi)
-    else:
-        a = 0.05                      # slow: ~20 frames to follow a real change
-        rng = (prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1]))
-    rc._I_disp_range = rng
+    v_scale = _steady_scale(rc, 'V', V, k)
+    rng = _steady_scale(rc, 'I', I, k)
+    g_scale = _steady_scale(rc, 'G', G, k)
+    f_scale = _steady_scale(rc, 'F', F, k)
     I_ro = solve_poisson_exact(G, 'fft')
     fmt_r = lambda r: f'r = {r:+.2f}' if np.isfinite(r) else ''
     r_in = _corr_to_aps(np.asarray(I, dtype=np.float64), gt_images, t_mid)
@@ -712,11 +728,11 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
 
     with use_style('screen'):
         fig, axes = plt.subplots(1, 6, figsize=(SCREEN_WIDTH, 2.6))
-        draw_map(axes[0], 'V', V)
+        draw_map(axes[0], 'V', V, scale=v_scale)
         draw_map(axes[1], 'I', I, scale=rng, title='I in-loop\n' + f'std {I.std():.3f}   ' + fmt_r(r_in))
         draw_map(axes[2], 'I', I_ro, title='I from G (exact)\n' + fmt_r(r_ro))
-        draw_map(axes[3], 'G', G)
-        draw_map(axes[4], 'F', maps['F'], title=f'flow $F$\n|ω| {w:.0f} °/s')
+        draw_map(axes[3], 'G', G, scale=g_scale)
+        draw_map(axes[4], 'F', F, scale=f_scale, title=f'flow $F$\n|ω| {w:.0f} °/s')
         if gt_images:
             t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
             draw_map(axes[5], 'aps', plt.imread(path),
@@ -883,7 +899,7 @@ def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
         ax.set_ylabel(r'final $\|\omega - \omega_{ref}\|$ (°/s)')
         ax.set_title(f'Exp 6: basin of attraction — {MODELS[rc.model][0]}   '
                      f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
-                     f'reference = IMU; filled = converged]')
+                     f'{ref_label("imu")}; filled = converged]')
         ax.legend()
         save(fig, os.path.join(rc.output_dir, 'exp6_basin.png'))
 

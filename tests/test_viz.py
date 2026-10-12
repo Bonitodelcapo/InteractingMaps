@@ -89,6 +89,19 @@ def test_maps():
     check('draw_map: key inset only for G and F',
           [len(a.child_axes) for a in axes] == [0, 0, 0, 1, 1, 0])
     check('draw_map: no visible spines', not any(s.get_visible() for a in axes for s in a.spines.values()))
+    I = np.random.rand(10, 10)
+    check('map_scale I matches render_I default',
+          np.allclose(viz.render_I(I, scale=viz.map_scale('I', I)), viz.render_I(I)))
+    Gv = np.random.rand(10, 10, 2) - 0.5
+    check('map_scale G matches render_vec default',
+          np.allclose(viz.render_vec(Gv, scale=viz.map_scale('G', Gv)), viz.render_vec(Gv)))
+    double_scale = viz.render_vec(Gv, scale=2 * viz.map_scale('G', Gv))
+    default = viz.render_vec(Gv)
+    check('render_vec: larger scale is paler',
+          double_scale.min(axis=-1).mean() > default.min(axis=-1).mean())
+    Varr = np.random.rand(10, 10) - 0.5
+    check('render_V with map_scale matches default',
+          np.allclose(viz.render_V(Varr, scale=viz.map_scale('V', Varr)), viz.render_V(Varr)))
     plt.close(fig)
 
 
