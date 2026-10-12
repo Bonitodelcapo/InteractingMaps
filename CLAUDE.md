@@ -16,7 +16,7 @@ file only adds the operational layer (commands, knobs, workflow) and flags where
 the code has moved past architecture.md.
 
 The CMax work (event-based, IMU-free angular-velocity anchor) has its own
-reference: [cmax/cmax.md](cmax/cmax.md).
+reference: [cmax.md](cmax.md).
 
 ## Environment & commands
 

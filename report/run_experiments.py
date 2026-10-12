@@ -330,7 +330,7 @@ def cmd_converge(E, args):
     import matplotlib.pyplot as plt
     from interacting_maps.data_loader import (EventFrameSequence, CameraCalibration,
                              load_events_fast, undistort_events)
-    from cmax import CMaxAngularVelocity
+    from interacting_maps.angular_velocity import CMaxAngularVelocity
 
     checkpoints = [int(x) for x in args.checkpoints.split(',')]
     nmax = max(checkpoints)
@@ -848,7 +848,7 @@ def cmd_baseline(E, args):
     from the previous frame, same reference omega, same compute_metrics.
     """
     from interacting_maps.data_loader import load_events_fast, undistort_events, CameraCalibration
-    from cmax import CMaxAngularVelocity
+    from interacting_maps.angular_velocity import CMaxAngularVelocity
 
     nf = int(round(args.duration / args.dt))
     path = os.path.join(OUTDIR, f'baseline_dt{int(args.dt*1000)}ms.csv')

@@ -86,15 +86,15 @@ Selected by the `model` string in the evaluation harness
 | `cook` | `InteractingMaps` | **Gauss-Seidel** (sequential; each sub-update sees the latest values) | — |
 | `thesis` | `InteractingMapsThesis` | **Jacobi** two-phase (all gradients from one snapshot, then all update) | — |
 | `thesis_imu` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`: a 4th cost pulling `R` toward the gyroscope reading (thesis §6.8.3 sensor fusion) |
-| `thesis_cmax` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`, but the per-frame anchor ω comes from a **CMax** solve on the events, not the gyro (IMU-free in-loop). **See [cmax/cmax.md](cmax/cmax.md).** |
-| `thesis_cmax_v2` | `InteractingMapsThesis` | Jacobi two-phase | `R` driven by **one CMax gradient step per iteration** (kinematics updates `F` only). **See [cmax/cmax.md](cmax/cmax.md).** |
+| `thesis_cmax` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`, but the per-frame anchor ω comes from a **CMax** solve on the events, not the gyro (IMU-free in-loop). **See [cmax.md](cmax.md).** |
+| `thesis_cmax_v2` | `InteractingMapsThesis` | Jacobi two-phase | `R` driven by **one CMax gradient step per iteration** (kinematics updates `F` only). **See [cmax.md](cmax.md).** |
 
 `thesis_imu` is the thesis's own fix for the β-ambiguity: the IMU gyro supplies
 an **absolute** angular-velocity reference that anchors the scale/sign, which
 pure vision lacks. The two `thesis_cmax*` variants replace that absolute
 reference with a Contrast-Maximization estimate from the events alone — their
 design and results are documented separately in
-[cmax/cmax.md](cmax/cmax.md); this file covers the first three.
+[cmax.md](cmax.md); this file covers the first three.
 
 ---
 
@@ -245,7 +245,7 @@ Turns events into V frames.
     native (distorted) pixel grid is back-projected to true undistorted rays and
     the flow is mapped back into distorted-pixel space via the Brown–Conrady
     Jacobian: `C = diag(fx,fy)·J_D(x',y')·A(x',y')`. This matches the
-    distortion-aware warp in `cmax/angular_velocity.py`.
+    distortion-aware warp in `interacting_maps/angular_velocity.py`.
 
   Either way distortion is applied **once** — at the event level (Way 1) or in `C`
   (Way 2), never both.

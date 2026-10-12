@@ -268,7 +268,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
                   f"(lr={rc.cmax_lr}, {len(cmax_events)} events).")
         else:
             # V1: standalone full-solve estimator, feeds the R anchor.
-            from cmax import CMaxAngularVelocity
+            from interacting_maps.angular_velocity import CMaxAngularVelocity
             cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
             print(f"  CMax V1 active — R anchored to full CMax ω per frame "
                   f"({len(cmax_events)} events).")

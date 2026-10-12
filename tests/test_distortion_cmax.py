@@ -42,7 +42,7 @@ from config import get_dataset_paths, DATASET_SEGMENTS
 from interacting_maps.data_loader import CameraCalibration, load_events_fast, undistort_events
 from interacting_maps.eval_io import gt_omega_body, get_gyro_for_frame, load_imu
 from interacting_maps.metrics import compute_metrics
-from cmax import CMaxAngularVelocity
+from interacting_maps.angular_velocity import CMaxAngularVelocity
 
 RAD = 180.0 / np.pi
 

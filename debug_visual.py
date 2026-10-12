@@ -31,7 +31,7 @@ from run_config import RunConfig, make_network, _try_load_gt_images
 from interacting_maps.eval_io import load_imu, get_gyro_for_frame, gt_omega_body
 from interacting_maps.metrics import compute_metrics
 from interacting_maps.viz import flow_to_rgb, normalise_robust
-from cmax import CMaxAngularVelocity
+from interacting_maps.angular_velocity import CMaxAngularVelocity
 
 RAD = 180.0 / np.pi
 OUT = 'results/debug'

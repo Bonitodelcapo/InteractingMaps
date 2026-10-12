@@ -260,7 +260,7 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
         )
         # V2: CMax drives R inside the loop (kinematics → F only, no IMU).
         if getattr(rc, 'use_cmax_v2', False):
-            from cmax import CMaxAngularVelocity
+            from interacting_maps.angular_velocity import CMaxAngularVelocity
             est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
             net.enable_cmax_r_update(est, lr=rc.cmax_lr)
         net.initialize_from_rotation(rc.initial_R)
