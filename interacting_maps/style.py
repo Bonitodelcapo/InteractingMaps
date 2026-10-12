@@ -20,6 +20,13 @@ OMEGA_AXIS_COLORS = ('#4e79a7', '#f28e2b', '#e15759')
 REF_STYLE = dict(color='k', lw=1.2, ls='-')
 IMU_STYLE = dict(color='0.55', lw=0.9, ls=':', label='IMU gyro (input)')
 LINE_COLOR = '0.25'
+NEUTRAL_COLOR = '0.5'
+EST_STYLE = dict(lw=1.2)
+ERR_STYLE = dict(lw=1.0)
+SERIES_STYLE = dict(lw=1.0, marker='.', ms=3)
+KEY_RECT = (0.02, 0.02, 0.2, 0.2)
+HEATMAP_CMAP = 'viridis'
+ERROR_RANGE = (0.0, 15.0)
 
 LABEL_TIME = 'time (s)'
 LABEL_OMEGA = r'$\omega$ (°/s)'
@@ -33,7 +40,8 @@ _REF_NAMES = {'omega_gt': r'$\omega_{gt}$', 'groundtruth': 'Vicon', 'imu': 'IMU'
 PAPER_WIDTH, PAPER_WIDE, SCREEN_WIDTH = 3.4, 7.05, 12.0
 _BASE = {'axes.grid': True, 'grid.alpha': 0.3, 'axes.spines.top': False,
          'axes.spines.right': False, 'legend.frameon': False,
-         'font.family': 'DejaVu Sans', 'mathtext.fontset': 'dejavusans'}
+         'font.family': 'DejaVu Sans', 'mathtext.fontset': 'dejavusans',
+         'figure.constrained_layout.use': True}
 _PRESETS = {
     'paper':  {'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 8,
                'legend.fontsize': 7, 'xtick.labelsize': 7, 'ytick.labelsize': 7},
@@ -71,12 +79,13 @@ def _wants_pdf(path):
 
 
 def save(fig, path, show=False):
-    """PNG at 200 dpi (+ PDF for report/figures/), then close or show."""
+    """PNG at 200 dpi (+ PDF for report/figures/), then close or show. path ends in .png or .pdf."""
     import matplotlib.pyplot as plt
+    base = os.path.splitext(path)[0]
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    fig.savefig(path, dpi=200, bbox_inches='tight', pad_inches=0.02)
+    fig.savefig(base + '.png', dpi=200, bbox_inches='tight', pad_inches=0.02)
     if _wants_pdf(path):
-        fig.savefig(os.path.splitext(path)[0] + '.pdf', bbox_inches='tight', pad_inches=0.02)
+        fig.savefig(base + '.pdf', bbox_inches='tight', pad_inches=0.02)
     if show:
         plt.show()
     else:

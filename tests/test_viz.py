@@ -50,6 +50,16 @@ def test_style():
         check('save writes png and closes', os.path.exists(path)
               and not os.path.exists(path[:-4] + '.pdf')
               and not plt.fignum_exists(fig.number))
+    with tempfile.TemporaryDirectory() as d:
+        fig, _ = plt.subplots()
+        style.save(fig, os.path.join(d, 'y.pdf'))
+        check('save accepts a .pdf path (writes the png)',
+              os.path.exists(os.path.join(d, 'y.png')) and not os.path.exists(os.path.join(d, 'y.pdf')))
+    with style.use_style('screen'):
+        fig = plt.figure()
+    check('presets use constrained layout',
+          type(fig.get_layout_engine()).__name__ == 'ConstrainedLayoutEngine')
+    plt.close(fig)
 
 
 def test_maps():
@@ -117,6 +127,7 @@ def test_lines():
     check('draw_omega: x is seconds at midpoints', np.allclose(lines[-1].get_xdata(), t))
     check('draw_omega: axis colour when no model',
           lines[-1].get_color() == style.OMEGA_AXIS_COLORS[2])
+    check('draw_omega: estimate width from EST_STYLE', lines[-1].get_linewidth() == style.EST_STYLE['lw'])
     check('draw_omega: labels', ax.get_ylabel() == style.omega_label(2)
           and ax.get_xlabel() == style.LABEL_TIME)
     plt.close(fig)
@@ -132,6 +143,12 @@ def test_lines():
     viz.draw_error(ax, t, np.ones(4))
     viz.draw_series(ax, t, np.ones(4), 'contrast')
     check('draw_error/draw_series: one line each', len(ax.get_lines()) == 2)
+    try:
+        viz.draw_omega(ax, t, est, ref=est)
+        raised = False
+    except ValueError:
+        raised = True
+    check('draw_omega: ref without ref_src is refused', raised)
     plt.close(fig)
 
 
