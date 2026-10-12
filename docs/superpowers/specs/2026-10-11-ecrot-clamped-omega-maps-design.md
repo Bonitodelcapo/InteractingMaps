@@ -134,3 +134,5 @@ is clipped.
 
 Open check: count pixels with |F| > 2.9 px/frame on the report segments, to see
 whether reported results are affected.
+
+**Derivation of the bound.** Per pixel, along F (g = F̂·G): g_new = (1 − 2·δ_VFG·|F|² − δ_IG)·g + const (OFCE step + Cost_Spatial pull toward ∇I). Stable iff |λ| < 1 ⇒ |F| < √((2−δ_IG)/(2δ_VFG)) ≈ 2.8 px/frame; sign flips (λ < 0) from |F| > √((1−δ_IG)/(2δ_VFG)) ≈ 1.9 px/frame (δ_VFG=0.12, δ_IG=0.10). Ignoring δ_IG gives 1/√δ_VFG ≈ 2.9. Single-pixel, F-fixed, clip-free linearisation: indicative, not proven — the δ_VFG sweep (onset should scale as 1/√δ_VFG) is the test.
