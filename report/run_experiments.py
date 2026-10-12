@@ -386,12 +386,11 @@ def cmd_converge(E, args):
             rows[model] = snaps
             print(f"  {lab}/{model} done", flush=True)
 
-        last = checkpoints[-1]
         with use_style('paper'):
             fig, axes = plt.subplots(len(MODELS), len(checkpoints),
                                      figsize=(PAPER_WIDE, 1.0 * len(MODELS) + 0.4))
             for r, model in enumerate(MODELS):
-                scale = map_scale('I', rows[model][last])
+                scale = map_scale('I', np.stack([rows[model][it] for it in checkpoints]))
                 for c, it in enumerate(checkpoints):
                     draw_map(axes[r, c], 'I', rows[model][it], scale=scale,
                              title=f'iter {it}' if r == 0 else '')
@@ -518,25 +517,25 @@ def cmd_poisson(E, args):
                 _run(E, rc, not args.no_frames, args.frame_stride)
             maps[mode] = np.load(npz)
 
-        panels = [('APS reference', _aps(E, ds, t0 + nf * args.dt), None)]
+        panels = [('APS reference', _aps(E, ds, t0 + nf * args.dt), 'aps')]
         for m in maps:
             panels.append((f'{m} in-loop' if m != 'iterative'
-                           else 'iterative (Eq. 6.61)', maps[m]['I'], None))
+                           else 'iterative (Eq. 6.61)', maps[m]['I'], 'I'))
         for m in ('fft', 'dct'):
             panels.append((f'{m} read-out',
-                           solve_poisson_exact(maps['iterative']['G'], m), None))
+                           solve_poisson_exact(maps['iterative']['G'], m), 'I'))
 
         print(f"\n{lab}: {'low_freq':>10} {'contrast':>10}")
         out = os.path.join(root, f'poisson_{lab}{args.tag}.png')
         with use_style('paper'):
             fig, ax = plt.subplots(1, len(panels), figsize=(PAPER_WIDE, 1.9))
-            for a, (ttl, img, _) in zip(ax, panels):
+            for a, (ttl, img, kind) in zip(ax, panels):
                 if img is None:
                     a.set_axis_off()
                     continue
                 st = E._intensity_stats(img)
                 print(f"  {ttl:<22} {st['low_freq_share']:10.3f} {st['contrast']:10.3f}")
-                draw_map(a, 'aps' if ttl == 'APS reference' else 'I', img, title=ttl)
+                draw_map(a, kind, img, title=ttl)
             fig.suptitle(f'{lab}: the same G, five ways of turning it into I')
             save(fig, out)
         print(f"  -> {out}")

@@ -194,7 +194,7 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
         for row, kind in enumerate(('V', 'I', 'G', 'F')):
             axes[row, 0].set_ylabel(MAP_TITLES[kind])
         axes[4, 0].set_ylabel(LABEL_OMEGA)
-        axes[4, 0].legend()
+        axes[4, 0].legend(loc='upper right')
         save(fig, path)
     print(f"  Saved: {path}")
 

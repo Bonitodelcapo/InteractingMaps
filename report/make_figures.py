@@ -45,7 +45,7 @@ os.chdir(ROOT)
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
 from interacting_maps.style import (MODELS, PAPER_WIDTH, PAPER_WIDE, NEUTRAL_COLOR, LABEL_BETA,
                                     frame_times, to_deg_s, use_style, save)
-from interacting_maps.viz import draw_map, draw_omega, map_scale
+from interacting_maps.viz import draw_map, draw_omega, map_scale, net_maps
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -223,7 +223,8 @@ def compute_maps(E):
         for k, (V, _tm) in enumerate(sq):
             win = ev[(ev[:, 0] >= t0 + k*DT) & (ev[:, 0] < t0 + (k+1)*DT)]
             net.step(V, n_iters=75, events=win)
-        maps.append((V.copy(), net.I[:H, :W].copy(), net.G.copy(), net.F.copy()))
+        m = net_maps(net, H, W)
+        maps.append((V.copy(), m['I'].copy(), m['G'].copy(), m['F'].copy()))
         print(f'    {label} done')
     np.savez_compressed(cache, **{f'{n}{i}': m for i, tup in enumerate(maps)
                                   for n, m in zip('VIGF', tup)})

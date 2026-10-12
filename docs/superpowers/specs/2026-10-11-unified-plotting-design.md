@@ -46,7 +46,7 @@ and schemas, metric key names, the reference-ω choice in Exp 1/3/6.
 | Non-time axes | Exempt: iterations (exp1, convergence), parameter values (exp3, grids). `find_segments` plots a whole dataset before any segment exists and keeps absolute dataset seconds. |
 | V | `bwr` (red +, blue −, exactly white at 0), symmetric ±p99 of \|V\|. |
 | I | Grey, 1–99 percentile (`normalise_robust`). |
-| APS | log(APS+1), then the same encoding as I (I is a log-intensity estimate and is scored against log APS). |
+| APS | log(APS+1), then the same encoding as I (I is a log-intensity estimate and is scored against log APS). APS frames load in [0, 1] (8-bit PNG via plt.imread), where log(x+1) is close to linear; the log is kept so the panel shows exactly what recon r is computed on, not for contrast compression. |
 | G and F | One encoding for any 2-vector field: hue = direction, saturation = \|v\|/p99 clipped to [0,1], value = 1 (white base). Square colour key inset at the bottom-left of the image. |
 | IWE | Grey, \|IWE\|/p99, white = high. |
 | Scaling rule | A single image is scaled per image (p99). Panels meant to be compared share one `scale=` so magnitude differences (e.g. β-scale errors) stay visible. Videos pass a temporally steady scale. |
