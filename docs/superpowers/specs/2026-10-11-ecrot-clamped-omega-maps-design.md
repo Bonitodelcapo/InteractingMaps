@@ -101,3 +101,36 @@ both GIFs inline via `IPython.display.Image`.
 ## Data note
 Only `ecrot_city` is local; its `omega_gt` ends at 1.5 s, so `city_short`
 (t_start 0.05 s, 20 ms) is capped by `cap_to_coverage` to ~72 frames. `ecrot_street` segments work identically on the cluster.
+
+## Findings (2026-10-12)
+
+**Striped I with the correct ω is an OFCE step instability, not a plotting bug**
+(measured in float64 on city_short, last of 8 frames, 20 ms).
+
+- `Cost_OFCE` updates G with an explicit gradient step. Along F the residual is
+  multiplied per iteration by `1 − 2·δ_VFG·|F|²`, so the step is unstable once
+  `|F| > 1/√δ_VFG ≈ 2.9 px/frame` (`δ_VFG = 0.12`).
+- There G flips sign almost every iteration; only the per-pixel `max_grad=5`
+  clip keeps it bounded. The Poisson step integrates the oscillating G into the
+  stripes seen in I.
+
+| row | pixels with \|F\| > 2.9 px/frame | G sign flips per iteration there |
+|---|---|---|
+| 0 (free) | 18 % | 0.23 (0.00 below the bound) |
+| 1c (R clamped) | ~100 % | 0.81–0.99 |
+| 1b (F clamped) | ~100 % | 0.80–0.98 |
+
+The free row is barely striped only because its β ≈ 2.9 scale error shrinks F
+about 3× into the stable range. Related: in the cluster's 75-frame run rung 1b
+reported clamp drift 0.61, i.e. `F_gt` exceeds `CLIP_F = 10` px/frame there and
+is clipped.
+
+**Proposed remedies** (not applied — `THESIS_PARAMS` drive the reported numbers):
+
+1. Shorter `dt` (F scales with dt); 5–10 ms keeps |F| under the bound here.
+2. Smaller `δ_VFG` (the bound `1/√δ_VFG` grows).
+3. Scale the G step by `1/|F|²` per pixel (Newton-like / implicit step), which
+   is stable for any |F|.
+
+Open check: count pixels with |F| > 2.9 px/frame on the report segments, to see
+whether reported results are affected.
