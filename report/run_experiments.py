@@ -52,6 +52,8 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
+from interacting_maps.style import MODELS as MODEL_STYLE, PAPER_WIDE, use_style, save
+from interacting_maps.viz import draw_map, map_scale, net_maps
 
 # the segments reported in Table II -- do not substitute others
 SEGMENTS = [
@@ -62,12 +64,9 @@ SEGMENTS = [
     ('street_sinthetic',  'seg_A', 1.001,  'street'),
 ]
 MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
-#: names as the report writes them, for figure titles
-DISPLAY = {'cook': 'cook', 'thesis': 'thesis (no anchor)',
-           'thesis_imu': 'IMU-anchor', 'thesis_cmax': 'CMax-anchor',
-           'thesis_cmax_v2': 'CMax-inloop'}
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 os.makedirs(OUTDIR, exist_ok=True)
+FIGDIR = os.path.join(ROOT, 'report', 'figures')
 
 
 def _cfg(E, ds, sid, t0, model, dt, nf, out_root=None, **kw):
@@ -383,30 +382,23 @@ def cmd_converge(E, args):
                 except TypeError:
                     net.step(V, n_iters=1)
                 if it in checkpoints:
-                    I = net.I if net.I.shape == (H, W) else net.I[:H, :W]
-                    snaps[it] = I.copy()
+                    snaps[it] = net_maps(net, H, W)['I'].copy()
             rows[model] = snaps
             print(f"  {lab}/{model} done", flush=True)
 
-        fig, axes = plt.subplots(len(MODELS), len(checkpoints),
-                                 figsize=(1.8*len(checkpoints), 1.55*len(MODELS)))
-        for r, model in enumerate(MODELS):
-            for c, it in enumerate(checkpoints):
-                I = rows[model][it]
-                lo_, hi_ = np.percentile(I, [1, 99])
-                axes[r, c].imshow(I, cmap='gray', vmin=lo_, vmax=max(hi_, lo_+1e-9))
-                axes[r, c].set_xticks([]); axes[r, c].set_yticks([])
-                if r == 0:
-                    axes[r, c].set_title(f'iter {it}', fontsize=8)
-            axes[r, 0].set_ylabel(model.replace('thesis_', 'th_'), fontsize=7)
-        fig.suptitle(f'{lab} {sid}: intensity map across message-passing '
-                     f'iterations (frame {args.frame})', fontsize=10)
-        fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.955))
-        out = os.path.join(ROOT, 'report', 'figures', f'fig_converge_{lab}.pdf')
-        for ext in ('pdf', 'png'):
-            fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=150,
-                        bbox_inches='tight', pad_inches=0.02)
-        plt.close(fig)
+        last = checkpoints[-1]
+        with use_style('paper'):
+            fig, axes = plt.subplots(len(MODELS), len(checkpoints),
+                                     figsize=(PAPER_WIDE, 1.0 * len(MODELS) + 0.4))
+            for r, model in enumerate(MODELS):
+                scale = map_scale('I', rows[model][last])
+                for c, it in enumerate(checkpoints):
+                    draw_map(axes[r, c], 'I', rows[model][it], scale=scale,
+                             title=f'iter {it}' if r == 0 else '')
+                axes[r, 0].set_ylabel(MODEL_STYLE[model][0])
+            fig.suptitle(f'{lab} {sid}: intensity map across message-passing '
+                         f'iterations (frame {args.frame})')
+            save(fig, os.path.join(FIGDIR, f'fig_converge_{lab}.png'))
         print(f"-> fig_converge_{lab}.pdf / .png")
 
 
@@ -535,22 +527,18 @@ def cmd_poisson(E, args):
                            solve_poisson_exact(maps['iterative']['G'], m), None))
 
         print(f"\n{lab}: {'low_freq':>10} {'contrast':>10}")
-        fig, ax = plt.subplots(1, len(panels), figsize=(2.4 * len(panels), 2.6))
-        for a, (ttl, img, _) in zip(ax, panels):
-            if img is None:
-                a.axis('off'); continue
-            st = E._intensity_stats(img)
-            print(f"  {ttl:<22} {st['low_freq_share']:10.3f} {st['contrast']:10.3f}")
-            lo, hi = np.percentile(img, [1, 99])
-            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
-            a.set_title(ttl, fontsize=8)
-            a.set_xticks([]); a.set_yticks([])
-        fig.suptitle(f'{lab}: the same G, five ways of turning it into I',
-                     fontsize=10)
-        fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.9))
         out = os.path.join(root, f'poisson_{lab}{args.tag}.png')
-        fig.savefig(out, dpi=130, bbox_inches='tight')
-        plt.close(fig)
+        with use_style('paper'):
+            fig, ax = plt.subplots(1, len(panels), figsize=(PAPER_WIDE, 1.9))
+            for a, (ttl, img, _) in zip(ax, panels):
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                st = E._intensity_stats(img)
+                print(f"  {ttl:<22} {st['low_freq_share']:10.3f} {st['contrast']:10.3f}")
+                draw_map(a, 'aps' if ttl == 'APS reference' else 'I', img, title=ttl)
+            fig.suptitle(f'{lab}: the same G, five ways of turning it into I')
+            save(fig, out)
         print(f"  -> {out}")
 
 
@@ -590,50 +578,41 @@ def cmd_recon(E, args):
     base = {'delta_FR': 0.10, 'delta_IMU': 0.50}
     dur = args.duration
 
-    fig, axes = plt.subplots(len(seqs), 4, figsize=(7.1, 1.85 * len(seqs)))
-    axes = np.atleast_2d(axes)
-    for row, (ds, sid, t0, lab) in enumerate(seqs):
-        got = {}
-        for dt in (0.02, 0.01):
-            nf = int(round(dur / dt))
-            rc = _cfg(E, ds, sid, t0, args.model, dt, nf, out_root=root,
-                      poisson='iterative', deltas=dict(base))
-            npz = os.path.join(rc.output_dir, 'maps_final.npz')
-            if not os.path.exists(npz):
-                print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
-                _run(E, rc, not args.no_frames, args.frame_stride)
-            got[dt] = np.load(npz)
-        aps = _aps(E, ds, t0 + dur)
-        ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
-        panels = [
-            ('APS', aps),
-            (r'iterative, $\Delta t = 20$ ms', got[0.02]['I']),
-            (r'iterative, $\Delta t = 10$ ms', got[0.01]['I']),
-            (r'exact read-out, $\Delta t = 10$ ms',
-             solve_poisson_exact(got[0.01]['G'], 'fft')),
-        ]
-        for col, (ttl, img) in enumerate(panels):
-            a = axes[row, col]
-            a.set_xticks([]); a.set_yticks([])
-            if img is None:
-                a.axis('off'); continue
-            lo, hi = np.percentile(img, [1, 99])
-            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
-            if row == 0:
-                a.set_title(ttl, fontsize=7.5)
-            if col == 0:
-                a.set_ylabel(lab, fontsize=8)
-            if col > 0 and ref is not None:
-                r = _corr(_crop(img), _crop(ref))
-                a.set_xlabel(f'$r={r:.2f}$', fontsize=7, labelpad=1.5)
-        print(f"  {lab}: done", flush=True)
-    fig.tight_layout(pad=0.25, h_pad=0.5, w_pad=0.2)
-    out = os.path.join(ROOT, 'report', 'figures', 'fig_recon.pdf')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    for ext in ('pdf', 'png'):
-        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
-                    bbox_inches='tight', pad_inches=0.02)
-    plt.close(fig)
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), 4, figsize=(PAPER_WIDE, 1.85 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for row, (ds, sid, t0, lab) in enumerate(seqs):
+            got = {}
+            for dt in (0.02, 0.01):
+                nf = int(round(dur / dt))
+                rc = _cfg(E, ds, sid, t0, args.model, dt, nf, out_root=root,
+                          poisson='iterative', deltas=dict(base))
+                npz = os.path.join(rc.output_dir, 'maps_final.npz')
+                if not os.path.exists(npz):
+                    print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
+                    _run(E, rc, not args.no_frames, args.frame_stride)
+                got[dt] = np.load(npz)
+            aps = _aps(E, ds, t0 + dur)
+            ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
+            panels = [
+                ('APS', aps, 'aps'),
+                (r'iterative, $\Delta t = 20$ ms', got[0.02]['I'], 'I'),
+                (r'iterative, $\Delta t = 10$ ms', got[0.01]['I'], 'I'),
+                (r'exact read-out, $\Delta t = 10$ ms',
+                 solve_poisson_exact(got[0.01]['G'], 'fft'), 'I'),
+            ]
+            for col, (ttl, img, kind) in enumerate(panels):
+                a = axes[row, col]
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=ttl if row == 0 else '')
+                if col == 0:
+                    a.set_ylabel(lab)
+                if col > 0 and ref is not None:
+                    a.set_xlabel(f'$r={_corr(_crop(img), _crop(ref)):.2f}$')
+            print(f"  {lab}: done", flush=True)
+        save(fig, os.path.join(FIGDIR, 'fig_recon.png'))
     print(f"-> fig_recon.pdf / .png")
 
 
@@ -668,45 +647,37 @@ def cmd_dissoc(E, args):
             stats[(row['sequence'], row['model'])] = row
 
     cols = len(models) + 1
-    fig, axes = plt.subplots(len(seqs), cols, figsize=(1.7 * cols, 1.65 * len(seqs)))
-    axes = np.atleast_2d(axes)
-    for r_i, (ds, sid, t0, lab) in enumerate(seqs):
-        aps = _aps(E, ds, t0 + nf * args.dt)
-        panels = [('APS', aps, None)]
-        for m in models:
-            # Exact path from RunConfig, not a glob: results/ holds dozens of
-            # runs per model that differ only in parameters the pattern would
-            # not distinguish, and the oldest of them predate maps_final.npz.
-            rc = _cfg(E, ds, sid, t0, m, args.dt, nf)
-            npz = os.path.join(rc.output_dir, 'maps_final.npz')
-            img = None
-            if os.path.exists(npz):
-                img = solve_poisson_exact(np.load(npz)['G'], 'fft')
-            else:
-                print(f'    missing: {npz}', flush=True)
-            panels.append((m, img, stats.get((ds, m))))
-        for c_i, (title, img, st) in enumerate(panels):
-            a = axes[r_i, c_i]
-            a.set_xticks([]); a.set_yticks([])
-            if img is None:
-                a.axis('off'); continue
-            lo, hi = np.percentile(img, [1, 99])
-            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
-            if r_i == 0:
-                a.set_title(DISPLAY.get(title, title), fontsize=7.5)
-            if c_i == 0:
-                a.set_ylabel(lab, fontsize=7)
-            if st is not None:
-                a.set_xlabel(f"$r={float(st['recon']):.2f}$,  "
-                             f"$\\omega$ err $={float(st['err']):.1f}$",
-                             fontsize=6.5, labelpad=1.5)
-        print(f'  {lab}: done', flush=True)
-    fig.tight_layout(pad=0.25, h_pad=0.4, w_pad=0.15)
-    out = os.path.join(ROOT, 'report', 'figures', 'fig_dissociation.pdf')
-    for ext in ('pdf', 'png'):
-        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
-                    bbox_inches='tight', pad_inches=0.02)
-    plt.close(fig)
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), cols, figsize=(PAPER_WIDE, 1.65 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for r_i, (ds, sid, t0, lab) in enumerate(seqs):
+            aps = _aps(E, ds, t0 + nf * args.dt)
+            panels = [('APS', aps, None, 'aps')]
+            for m in models:
+                # Exact path from RunConfig, not a glob: results/ holds dozens of
+                # runs per model that differ only in parameters the pattern would
+                # not distinguish, and the oldest of them predate maps_final.npz.
+                rc = _cfg(E, ds, sid, t0, m, args.dt, nf)
+                npz = os.path.join(rc.output_dir, 'maps_final.npz')
+                img = None
+                if os.path.exists(npz):
+                    img = solve_poisson_exact(np.load(npz)['G'], 'fft')
+                else:
+                    print(f'    missing: {npz}', flush=True)
+                panels.append((MODEL_STYLE[m][0], img, stats.get((ds, m)), 'I'))
+            for c_i, (title, img, st, kind) in enumerate(panels):
+                a = axes[r_i, c_i]
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=title if r_i == 0 else '')
+                if c_i == 0:
+                    a.set_ylabel(lab)
+                if st is not None:
+                    a.set_xlabel(f"$r={float(st['recon']):.2f}$,  "
+                                 f"$\\omega$ err $={float(st['err']):.1f}$ °/s")
+            print(f'  {lab}: done', flush=True)
+        save(fig, os.path.join(FIGDIR, 'fig_dissociation.png'))
     print('-> fig_dissociation.pdf / .png')
 
 
@@ -738,47 +709,36 @@ def cmd_regfig(E, args):
             (r'$\delta_{\mathrm{curl}}{=}0.6$', '_curl0.6')]
     nf = int(round(args.duration / args.dt))
 
-    fig, axes = plt.subplots(len(seqs), len(cols),
-                             figsize=(1.55 * len(cols), 1.5 * len(seqs)))
-    axes = np.atleast_2d(axes)
-    for row, (ds, sid, t0, lab) in enumerate(seqs):
-        ref = None
-        aps = _aps(E, ds, t0 + nf * args.dt)
-        if aps is not None:
-            ref = np.log(aps.astype(np.float64) + 1.0)
-        for col, (title, suffix) in enumerate(cols):
-            a = axes[row, col]
-            a.set_xticks([]); a.set_yticks([])
-            if col == 0:
-                img = aps
-            else:
-                pat = (f'{root}/{ds}/{args.model}/{sid}_t{t0:.3f}_'
-                       f'dt{int(args.dt*1000)}ms_n{nf}_*C_full{suffix}')
-                hits = [d for d in sorted(glob.glob(pat))
-                        if os.path.basename(d).endswith('C_full' + suffix)]
-                if not hits:
-                    a.axis('off'); continue
-                m = np.load(os.path.join(hits[0], 'maps_final.npz'))
-                img = solve_poisson_exact(m['G'], 'fft')
-                if ref is not None and ref.shape == img.shape:
-                    a.set_xlabel(f'$r={_corr(_crop(img), _crop(ref)):.2f}$',
-                                 fontsize=6.5, labelpad=1.5)
-            if img is None:
-                a.axis('off'); continue
-            lo, hi = np.percentile(img, [1, 99])
-            a.imshow(img, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-9))
-            if row == 0:
-                a.set_title(title, fontsize=7)
-            if col == 0:
-                a.set_ylabel(lab, fontsize=7)
-        print(f'  {lab}: done', flush=True)
-    fig.tight_layout(pad=0.25, h_pad=0.35, w_pad=0.15)
-    out = os.path.join(ROOT, 'report', 'figures', 'fig_regularisers.pdf')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    for ext in ('pdf', 'png'):
-        fig.savefig(out.replace('.pdf', f'.{ext}'), dpi=200,
-                    bbox_inches='tight', pad_inches=0.02)
-    plt.close(fig)
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), len(cols), figsize=(PAPER_WIDE, 1.5 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for row, (ds, sid, t0, lab) in enumerate(seqs):
+            ref = None
+            aps = _aps(E, ds, t0 + nf * args.dt)
+            if aps is not None:
+                ref = np.log(aps.astype(np.float64) + 1.0)
+            for col, (title, suffix) in enumerate(cols):
+                a = axes[row, col]
+                kind, img = 'aps', aps
+                if col > 0:
+                    kind, img = 'I', None
+                    pat = (f'{root}/{ds}/{args.model}/{sid}_t{t0:.3f}_'
+                           f'dt{int(args.dt*1000)}ms_n{nf}_*C_full{suffix}')
+                    hits = [d for d in sorted(glob.glob(pat))
+                            if os.path.basename(d).endswith('C_full' + suffix)]
+                    if hits:
+                        img = solve_poisson_exact(
+                            np.load(os.path.join(hits[0], 'maps_final.npz'))['G'], 'fft')
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=title if row == 0 else '')
+                if col == 0:
+                    a.set_ylabel(lab)
+                elif ref is not None and ref.shape == img.shape:
+                    a.set_xlabel(f'$r={_corr(_crop(img), _crop(ref)):.2f}$')
+            print(f'  {lab}: done', flush=True)
+        save(fig, os.path.join(FIGDIR, 'fig_regularisers.png'))
     print('-> fig_regularisers.pdf / .png')
 
 
