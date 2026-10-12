@@ -201,7 +201,25 @@ def score_frames(est_list, ref_list):
     }
 
 
+def _selfcheck_maps_io():
+    """Maps saved to the float16 npz must load back to finite colour scales
+    (np.percentile on float16 overflows its index past 65504 elements)."""
+    import tempfile
+    rng = np.random.default_rng(0)
+    n, H, W = 3, 180, 240
+    d = {'V': rng.standard_normal((n, H, W)), 'F_gt': rng.standard_normal((n, H, W, 2)),
+         'I': rng.standard_normal((3, n, H, W)), 'G': rng.standard_normal((3, n, H, W, 2))}
+    d = {k: v.astype(np.float32) for k, v in d.items()} | {'dt': 0.02, 'K': 1}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'maps.npz')
+        np.savez_compressed(path, **_store16(d))
+        sc = _map_scales(_load32(path))
+    ok = all(np.all(np.isfinite(v)) for v in sc.values())
+    print(f"  [{'ok' if ok else 'FAIL'}] npz round trip gives finite colour scales {sc}")
+
+
 def _selfcheck():
+    _selfcheck_maps_io()
     for seg in SEGMENTS:
         ctx = prep_segment_context(seg)
         if ctx is None:
@@ -510,7 +528,7 @@ def _map_run(ctx, rung, **hooks):
 
 
 def _snap(net, H, W):
-    return {m: a.astype(np.float16) for m, a in net_maps(net, H, W).items()}
+    return {m: a.astype(np.float32) for m, a in net_maps(net, H, W).items()}
 
 
 def collect_maps(ctx, K):
@@ -518,9 +536,9 @@ def collect_maps(ctx, K):
     row (rung axis first), the per-iteration I, G, F at frame K, V and F_gt."""
     H, W, dt = ctx['seq'].H, ctx['seq'].W, ctx['dt']
     net = build_net(ctx)
-    d = {'V': np.stack([V for V, _ in ctx['frames']]).astype(np.float16),
+    d = {'V': np.stack([V for V, _ in ctx['frames']]).astype(np.float32),
          'F_gt': np.stack([gt_flow(net, ref_omega(ctx['om'], *win) * dt)
-                           for win in ctx['wins']]).astype(np.float16)}
+                           for win in ctx['wins']]).astype(np.float32)}
     per = {m: [] for m in ('I', 'G', 'F', 'I_it', 'G_it', 'F_it')}
     for rung in MAP_RUNGS:
         fr, it = [], []
@@ -538,6 +556,20 @@ def maps_path(seg_name):
     return f'diag_maps_{seg_name}.npz'
 
 
+def _store16(d):
+    """float32 maps -> float16, for the npz only (halves its size). Never compute
+    on float16: np.percentile overflows its index past 65504 elements."""
+    return {k: v.astype(np.float16) if np.asarray(v).dtype == np.float32 else v
+            for k, v in d.items()}
+
+
+def _load32(path):
+    """Read a maps npz back to float32, the dtype every plot function expects."""
+    with np.load(path) as z:
+        return {k: z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k]
+                for k in z.files}
+
+
 def run_maps(seg_name, K=None):
     """Cluster entry for --mode maps: collect_maps on one segment -> npz."""
     seg = next(s for s in SEGMENTS if s['name'] == seg_name)
@@ -545,7 +577,7 @@ def run_maps(seg_name, K=None):
     if ctx is None:
         return
     K = ctx['n'] // 2 if K is None else min(K, ctx['n'] - 1)
-    np.savez_compressed(maps_path(seg_name), **collect_maps(ctx, K))
+    np.savez_compressed(maps_path(seg_name), **_store16(collect_maps(ctx, K)))
     print(f"[ok] wrote {maps_path(seg_name)} ({ctx['n']} frames, K={K})")
 
 
@@ -560,20 +592,15 @@ def _map_scales(d):
             'F': float(np.percentile(mag(d['F_gt']), 99))}
 
 
-def _as32(maps):
-    """Stored maps are float16; matplotlib's colour conversion needs float32."""
-    return {m: a.astype(np.float32) for m, a in maps.items()}
-
-
 def _frame_maps(d, k):
-    return _as32({'V': d['V'][k], 'F_gt': d['F_gt'][k],
-                  **{m: d[m][:, k] for m in 'IGF'}})
+    return {'V': d['V'][k], 'F_gt': d['F_gt'][k],
+            **{m: d[m][:, k] for m in 'IGF'}}
 
 
 def _iter_maps(d, i):
     K = int(d['K'])
-    return _as32({'V': d['V'][K], 'F_gt': d['F_gt'][K],
-                  **{m: d[m + '_it'][:, i] for m in 'IGF'}})
+    return {'V': d['V'][K], 'F_gt': d['F_gt'][K],
+            **{m: d[m + '_it'][:, i] for m in 'IGF'}}
 
 
 def draw_maps_grid(axes, maps_t, scales, rungs):
@@ -648,7 +675,7 @@ def make_maps_gifs(d, out_dir, fps=8):
 
 
 def plot_maps(seg_name):
-    d = dict(np.load(maps_path(seg_name)))
+    d = _load32(maps_path(seg_name))
     plot_P4(d, f'diag_P4_maps_{seg_name}.png')
     plot_P5(d, f'diag_P5_F_epe_{seg_name}.png')
     make_maps_gifs(d, f'diag_maps_{seg_name}')
