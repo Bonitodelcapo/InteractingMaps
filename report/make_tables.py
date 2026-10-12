@@ -16,13 +16,12 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
+sys.path.insert(0, ROOT)
+from interacting_maps.style import MODELS as MODEL_STYLE
 
 # display name, csv model key
-MODELS = [(r'\texttt{cook}', 'cook'),
-          (r'\texttt{thesis}', 'thesis'),
-          (r'\texttt{thesis+IMU}', 'thesis_imu'),
-          (r'\texttt{CMax-anchor}', 'thesis_cmax'),
-          (r'\texttt{CMax-inloop}', 'thesis_cmax_v2')]
+MODELS = [(rf'\texttt{{{MODEL_STYLE[k][0]}}}', k)
+          for k in ('cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2')]
 # csv sequence key, display label, extra lines under the label
 SEQS = [('boxes_rotation', r'\texttt{boxes}', []),
         ('poster_rotation', r'\texttt{poster}', []),
