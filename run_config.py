@@ -14,6 +14,7 @@ from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAM
                     get_dataset_paths)
 from best_config import best_params
 import experiment_tracking
+from interacting_maps.eval_io import load_imu, get_gyro_for_frame
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
 
@@ -203,17 +204,8 @@ class RunConfig:
 
     def _compute_initial_R(self):
         """Compute initial R from IMU at THIS segment's t_start."""
-        imu_data = np.loadtxt(self.paths['imu'], dtype=np.float64)
-        t_lo = self.t_start
-        t_hi = self.t_start + self.frame_duration
-        mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
-
-        if np.sum(mask) > 0:
-            omega = np.mean(imu_data[mask, 4:7], axis=0)
-        else:
-            idx = np.argmin(np.abs(imu_data[:, 0] - self.t_start))
-            omega = imu_data[idx, 4:7]
-
+        omega = get_gyro_for_frame(load_imu(self.paths['imu']), self.t_start,
+                                   self.t_start + self.frame_duration)
         return omega * self.frame_duration  # rad/s → rad/frame
 
 

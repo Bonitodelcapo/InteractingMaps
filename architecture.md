@@ -175,7 +175,10 @@ Pure data + a couple of helpers.
   `delta_FR` kinematics, `delta_IMU` fusion strength).
 - **`ITERS_PER_FRAME = 75`** — inner iterations per frame (thesis uses 50–75).
 - **`get_dataset_paths(name)`** — resolves the 5 data files.
-- **`get_initial_R_from_imu(name)`** — warm-start `R = gyro(t_start)·dt`.
+
+The warm start `R = gyro(t_start)·dt` is computed with
+`eval_io.get_gyro_for_frame(imu, t_start, t_start+dt) * dt` (used by
+`RunConfig` and `demo.py`).
 
 > Note: `sensor_size` is authoritative (240×180 for the DAVIS240C). It is *not*
 > derived from `2·(cx,cy)` because the principal point is offset from center.

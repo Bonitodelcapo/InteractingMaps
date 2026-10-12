@@ -24,7 +24,8 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
 from interacting_maps.metrics import compute_metrics
 
 # %%
-rc = RunConfig(dataset='poster_rotation', model='thesis_imu', segment='seg_A')
+rc = RunConfig(dataset='poster_rotation', model='thesis_imu', segment='seg_A',
+               out_root='experiments/eval_pipeline')   # never write into results/
 print(rc)
 
 # %%

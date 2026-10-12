@@ -13,8 +13,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.gridspec import GridSpec
 
-from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths, get_initial_R_from_imu
+from config import DATASET_CONFIGS, THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME, get_dataset_paths
 from interacting_maps.camera import compute_calibration
+from interacting_maps.eval_io import load_imu, get_gyro_for_frame
 from interacting_maps.network_dissertation import InteractingMapsThesis
 from interacting_maps.network import InteractingMaps
 
@@ -30,11 +31,12 @@ USE_IMU = True  # Only applies when USE_THESIS_VERSION = True
 DIST_MODE = 'C_full'
 
 cfg = DATASET_CONFIGS[DATASET]
+paths = get_dataset_paths(DATASET)
 initial_R = cfg['initial_R']
 if initial_R is None:
-    initial_R = get_initial_R_from_imu(DATASET)
+    t0, dt = cfg['t_start'], cfg['frame_duration']
+    initial_R = get_gyro_for_frame(load_imu(paths['imu']), t0, t0 + dt) * dt
     print(f"Auto-initialized R from IMU: {initial_R}")
-paths = get_dataset_paths(DATASET)
 
 EVENTS_FILE = paths['events']
 CALIB_FILE = paths['calib']
