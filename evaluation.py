@@ -686,11 +686,8 @@ def experiment_qualitative_video(rc: RunConfig):
 def _steady_scale(rc, kind, arr, k, a=0.05):
     """Per-frame scale smoothed across frames (EMA), so a fading map shows as fading."""
     s = map_scale(kind, arr)
-    store = getattr(rc, '_disp_scale', None)
-    if store is None or k == 0:
-        store = {}
-        rc._disp_scale = store
-    prev = store.get(kind)
+    store = rc.__dict__.setdefault('_disp_scale', {})
+    prev = None if k == 0 else store.get(kind)
     if prev is None:
         blended = s
     else:
