@@ -80,10 +80,14 @@ class Cost_OFCE(Cost):
     Per-pixel gradient clipping prevents the cubic instability that arises
     when |F| and |G| are both large.
     """
-    def __init__(self, quantities_dict, delta_VFG, max_grad=5.0):
+    def __init__(self, quantities_dict, delta_VFG, max_grad=5.0, normalize=False):
         super().__init__(quantities_dict)
         self.delta_VFG = delta_VFG
         self.max_grad = max_grad
+        # normalize=True divides each step by (1 + |other map|²), the pre-
+        # 2026-05-27 form: stable for any |F| (the raw step diverges once
+        # |F| > ~1/sqrt(delta_VFG)). Off by default: reported numbers use raw.
+        self.normalize = normalize
 
     def compute_and_send_gradients(self):
         v = self.q['V'].value   # (H, W)
@@ -96,6 +100,9 @@ class Cost_OFCE(Cost):
         # Raw gradients from Table 6.1
         grad_F = 2.0 * error[..., np.newaxis] * g  # (H, W, 2)
         grad_G = 2.0 * error[..., np.newaxis] * f  # (H, W, 2)
+        if self.normalize:
+            grad_F = grad_F / (1.0 + np.sum(g * g, axis=-1))[..., np.newaxis]
+            grad_G = grad_G / (1.0 + np.sum(f * f, axis=-1))[..., np.newaxis]
 
         # Per-pixel clip to bound cubic growth
         grad_F = np.clip(grad_F, -self.max_grad, self.max_grad)
