@@ -7,6 +7,7 @@ Run from the repository root:
     python report/run_experiments.py --what main        # Table III, 5 models
     python report/run_experiments.py --what converge    # per-iteration figure data
     python report/run_experiments.py --what baseline    # CMax / gyro alone, no network
+    python report/run_experiments.py --what beta        # runs behind fig_beta_speed
     python report/run_experiments.py --what sweep \
         --vary 'delta_GI=0.05,0.5,1.0;poisson=iterative,fft,dct' \
         --base 'delta_FR=0.10,delta_IMU=0.50' --mode coord
@@ -899,11 +900,35 @@ def cmd_baseline(E, args):
     print('gyro on the synthetic sequences is meaningless (ESIM writes no IMU).')
 
 
+# ------------------------------------------------------- runs for fig_beta_speed
+#: every segment of the two real sequences -- must equal make_figures.BETA_SEGMENTS
+BETA_SEGMENTS = [
+    ('boxes_rotation', 'seg_A', 9.972), ('boxes_rotation', 'seg_B', 7.322),
+    ('boxes_rotation', 'seg_C', 4.422), ('boxes_rotation', 'seg_D', 1.922),
+    ('poster_rotation', 'seg_A', 14.166), ('poster_rotation', 'seg_C', 8.816),
+    ('poster_rotation', 'seg_D', 1.866),
+]
+#: (model, delta_FR, delta_anchor) -- the three series of fig_beta_speed
+BETA_CONFIGS = [('thesis_cmax', 0.5, 0.3), ('thesis_cmax', 0.1, 0.5),
+                ('thesis_cmax_v2', 0.5, None)]
+
+
+def cmd_beta(E, args):
+    """Runs behind fig_beta_speed: every real-sequence segment, three anchor settings."""
+    nf = int(round(args.duration / args.dt))
+    for ds, sid, t0 in BETA_SEGMENTS:
+        for model, d_fr, d_anc in BETA_CONFIGS:
+            rc = _cfg(E, ds, sid, t0, model, args.dt, nf, delta_FR=d_fr, delta_IMU=d_anc)
+            s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
+            print(f"  {ds}/{sid} {model} dFR={d_fr} anchor={d_anc}: "
+                  f"beta={s['mean_beta']:.3f} ({secs:.0f}s)", flush=True)
+
+
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
             'readout': cmd_readout, 'recon': cmd_recon,
-            'regfig': cmd_regfig, 'dissoc': cmd_dissoc}
+            'regfig': cmd_regfig, 'dissoc': cmd_dissoc, 'beta': cmd_beta}
 
 
 def main():

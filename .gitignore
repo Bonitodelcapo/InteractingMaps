@@ -257,3 +257,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SLURM job logs
+report/slurm/logs/
