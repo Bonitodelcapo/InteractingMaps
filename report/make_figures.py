@@ -7,7 +7,7 @@ Run from the repository root:
                                                #         maps appendix distortion
 
 Outputs PDFs (used by the LaTeX) and PNGs (for quick inspection) into
-report/figures/.
+report/figures/ via style.save.
 
 Where the data comes from
 -------------------------
@@ -37,13 +37,15 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
+from interacting_maps.style import (MODELS, PAPER_WIDTH, PAPER_WIDE, NEUTRAL_COLOR, LABEL_BETA,
+                                    frame_times, to_deg_s, use_style, save)
+from interacting_maps.viz import draw_map, draw_omega, map_scale
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -68,17 +70,6 @@ BETA_SEGMENTS = [
     ('poster_rotation', 'seg_A', 14.166), ('poster_rotation', 'seg_C', 8.816),
     ('poster_rotation', 'seg_D', 1.866),
 ]
-
-plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'legend.fontsize': 7,
-                     'xtick.labelsize': 7, 'ytick.labelsize': 7,
-                     'axes.grid': True, 'grid.alpha': 0.3})
-
-
-def _save(fig, name, **kw):
-    for ext in ('pdf', 'png'):
-        fig.savefig(os.path.join(FIG, f'{name}.{ext}'), dpi=190,
-                    bbox_inches='tight', pad_inches=0.02, **kw)
-    print(f'  wrote {name}.pdf / .png')
 
 
 def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
@@ -130,79 +121,77 @@ def reference_omega(E, ds, t0, n=N_TRACK):
     gt = E.load_groundtruth(p['groundtruth'])
     imu = E.load_imu(p['imu'])
     om = E.load_omega_gt(p.get('omega_gt'))
-    return np.array([E.get_reference_omega(gt, imu, t0 + k*DT, t0 + (k+1)*DT, om)[0]
-                     for k in range(n)])
+    refs = [E.get_reference_omega(gt, imu, t0 + k*DT, t0 + (k+1)*DT, om) for k in range(n)]
+    return np.array([w for w, _ in refs]), refs[0][1]
 
 
 # ---------------------------------------------------------------- beta vs speed
 def fig_beta_speed(E):
+    # (model, delta_FR, delta_anchor, filled marker)
     series = {
-        'default': ('thesis_cmax',    0.5, 0.3, 'o', 'tab:red',
-                    r'CMax-anchor, $\delta_{FR}=0.5$'),
-        'tuned':   ('thesis_cmax',    0.1, 0.5, 's', 'tab:blue',
-                    r'CMax-anchor, $\delta_{FR}=0.1$'),
-        'inloop':  ('thesis_cmax_v2', 0.5, None, '^', 'tab:grey',
-                    r'CMax-inloop'),
+        'default': ('thesis_cmax',    0.5, 0.3,  False),
+        'tuned':   ('thesis_cmax',    0.1, 0.5,  True),
+        'inloop':  ('thesis_cmax_v2', 0.5, None, True),
     }
     data = {k: ([], []) for k in series}
     for ds, sid, t0 in BETA_SEGMENTS:
-        w = np.linalg.norm(reference_omega(E, ds, t0), axis=1).mean()
-        for key, (model, d_fr, d_a, _, _, _) in series.items():
+        w = to_deg_s(np.linalg.norm(reference_omega(E, ds, t0)[0], axis=1).mean())
+        for key, (model, d_fr, d_a, _) in series.items():
             d = find_run(ds, sid, t0, model, d_fr, d_a)
             if d is None:
                 print(f'    (missing {ds}/{sid}/{model} dFR={d_fr})')
                 continue
-            b = experiment_tracking.read_summary(d)['mean_beta']
             data[key][0].append(w)
-            data[key][1].append(b)
+            data[key][1].append(experiment_tracking.read_summary(d)['mean_beta'])
 
-    fig, ax = plt.subplots(figsize=(3.4, 2.5))
-    for key, (_, _, _, mk, col, lab) in series.items():
-        x, y = np.array(data[key][0]), np.array(data[key][1])
-        if len(x) < 2:
-            continue
-        r = np.corrcoef(x, y)[0, 1]
-        ax.scatter(x, y, marker=mk, s=26, color=col, zorder=3,
-                   edgecolors='white', linewidths=0.4, label=f'{lab}  ($r={r:+.2f}$)')
-        xs = np.linspace(x.min(), x.max(), 20)
-        ax.plot(xs, np.polyval(np.polyfit(x, y, 1), xs), color=col, lw=1.0,
-                alpha=0.55, zorder=2)
-    ax.axhline(1.0, color='k', lw=0.8, ls=':', zorder=1)
-    ax.set_xlabel(r'rotation speed $\|\omega\|$  (rad/s)')
-    ax.set_ylabel(r'scale factor $\beta$')
-    ax.legend(frameon=False, loc='upper left')
-    _save(fig, 'fig_beta_speed')
-    plt.close(fig)
+    with use_style('paper'):
+        fig, ax = plt.subplots(figsize=(PAPER_WIDTH, 2.5))
+        for key, (model, d_fr, _, filled) in series.items():
+            x, y = np.array(data[key][0]), np.array(data[key][1])
+            if len(x) < 2:
+                continue
+            name, col = MODELS[model]
+            r = np.corrcoef(x, y)[0, 1]
+            ax.scatter(x, y, s=26, zorder=3, color=col if filled else 'none', edgecolors=col,
+                       linewidths=0.8, label=rf'{name}, $\delta_{{FR}}={d_fr}$  ($r={r:+.2f}$)')
+            xs = np.linspace(x.min(), x.max(), 20)
+            ax.plot(xs, np.polyval(np.polyfit(x, y, 1), xs), color=col, lw=1.0, alpha=0.55,
+                    ls='-' if filled else '--', zorder=2)
+        ax.axhline(1.0, color=NEUTRAL_COLOR, lw=0.8, ls=':', zorder=1)
+        ax.set_xlabel(r'rotation speed $\|\omega\|$ (°/s)')
+        ax.set_ylabel(LABEL_BETA)
+        ax.legend(loc='upper left')
+        save(fig, os.path.join(FIG, 'fig_beta_speed.png'))
+    print('  wrote fig_beta_speed.pdf / .png')
 
 
 # -------------------------------------------------------------------- tracking
 def fig_tracking(E):
     ds, sid, t0 = 'poster_rotation', 'seg_C', 8.816
-    ref = reference_omega(E, ds, t0)
-    t = np.arange(N_TRACK) * DT
-    runs = [('CMax-anchor', find_run(ds, sid, t0, 'thesis_cmax', 0.1, 0.5), 'tab:blue'),
-            ('thesis (no anchor)', find_run(ds, sid, t0, 'thesis', 0.1), 'tab:red')]
+    ref, ref_src = reference_omega(E, ds, t0)
+    t = frame_times(DT, N_TRACK)
+    runs = [('thesis_cmax', find_run(ds, sid, t0, 'thesis_cmax', 0.1, 0.5)),
+            ('thesis', find_run(ds, sid, t0, 'thesis', 0.1))]
 
-    fig, axes = plt.subplots(3, 1, figsize=(3.4, 3.6), sharex=True)
-    for i, comp in enumerate('xyz'):
-        axes[i].plot(t, np.degrees(ref[:, i]), color='k', lw=1.2, label='reference')
-        for name, d, col in runs:
+    with use_style('paper'):
+        fig, axes = plt.subplots(3, 1, figsize=(PAPER_WIDTH, 3.6), sharex=True)
+        first = True
+        for model, d in runs:
             if d is None:
-                print(f'    (missing run for {name})')
+                print(f'    (missing run for {MODELS[model][0]})')
                 continue
             rows = list(csv.DictReader(open(os.path.join(d, 'tracking.csv'))))
             est = np.array([[float(r['est_wx']), float(r['est_wy']), float(r['est_wz'])]
                             for r in rows])[:N_TRACK]
-            axes[i].plot(t, np.degrees(est[:, i]), color=col, lw=0.9, alpha=0.85,
-                         label=name)
-        axes[i].set_ylabel(rf'$\omega_{comp}$ ($^\circ$/s)')
-    axes[2].set_xlabel('time (s)')
-    h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, frameon=False, ncol=3, loc='upper center',
-               bbox_to_anchor=(0.55, 1.004), handlelength=1.4, columnspacing=1.0)
-    fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.945))
-    _save(fig, 'fig_tracking')
-    plt.close(fig)
+            for i in range(3):
+                draw_omega(axes[i], t[:len(est)], est[:, i], axis=i, model=model,
+                           ref=ref[:len(est), i] if first else None, ref_src=ref_src)
+            first = False
+        for ax in axes:
+            ax.label_outer()
+        fig.legend(*axes[0].get_legend_handles_labels(), loc='outside upper center', ncol=3)
+        save(fig, os.path.join(FIG, 'fig_tracking.png'))
+    print('  wrote fig_tracking.pdf / .png')
 
 
 # ------------------------------------------------------------------- map panels
@@ -242,31 +231,15 @@ def compute_maps(E):
 
 
 def _draw_maps(maps, labels, name, height_per_row=1.72):
-    fig, axes = plt.subplots(len(labels), 4,
-                             figsize=(7.05, height_per_row * len(labels)))
-    axes = np.atleast_2d(axes)
-    for r, ((V, I, G, F), lab) in enumerate(zip(maps, labels)):
-        m = np.percentile(np.abs(V), 99.5) or 1e-6
-        axes[r, 0].imshow(V, cmap='bwr', vmin=-m, vmax=m)          # V is signed
-        lo, hi = np.percentile(I, [1, 99])
-        axes[r, 1].imshow(I, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
-        g = np.linalg.norm(G, axis=-1)
-        axes[r, 2].imshow(g, cmap='gray', vmin=0, vmax=np.percentile(g, 99) or 1e-6)
-        ang = (np.arctan2(F[..., 1], F[..., 0]) + np.pi) / (2 * np.pi)
-        mag = np.linalg.norm(F, axis=-1)
-        mag = mag / (np.percentile(mag, 99) + 1e-9)
-        axes[r, 3].imshow(mcolors.hsv_to_rgb(
-            np.stack([ang, np.clip(mag, 0, 1), np.ones_like(ang)], -1)))
-        for c in range(4):
-            axes[r, c].set_xticks([]); axes[r, c].set_yticks([])
-            axes[r, c].grid(False)
-        axes[r, 0].set_ylabel(lab, fontsize=7)
-    for c, ttl in enumerate([r'events  $V$ (input)', r'intensity  $I$',
-                             r'gradient  $\|G\|$', r'flow  $F$']):
-        axes[0, c].set_title(ttl, fontsize=8, pad=4)
-    fig.tight_layout(pad=0.25)
-    _save(fig, name)
-    plt.close(fig)
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(labels), 4, figsize=(PAPER_WIDE, height_per_row * len(labels)))
+        axes = np.atleast_2d(axes)
+        for r, (arrs, lab) in enumerate(zip(maps, labels)):
+            for c, (kind, arr) in enumerate(zip('VIGF', arrs)):
+                draw_map(axes[r, c], kind, arr, title=None if r == 0 else '')
+            axes[r, 0].set_ylabel(lab)
+        save(fig, os.path.join(FIG, f'{name}.png'))
+    print(f'  wrote {name}.pdf / .png')
 
 
 def fig_maps(E):
@@ -296,18 +269,16 @@ def fig_distortion(E):
     V_und = events_to_vframe(undistort_events(ev, calib), H, W,
                              clip_value=40.0, normalise=True)
 
-    fig, ax = plt.subplots(1, 3, figsize=(7.0, 2.15))
     panels = [(V_raw, r'raw events (lens modelled in $\mathcal{C}$)'),
               (V_und, 'undistorted events'),
               (V_und[10:80, 140:230], 'detail (undistorted)')]
-    for a, (img, ttl) in zip(ax, panels):
-        m = np.percentile(np.abs(img), 99.5) or 1e-6
-        a.imshow(img, cmap='bwr', vmin=-m, vmax=m, interpolation='nearest')
-        a.set_title(ttl, fontsize=8, pad=4)
-        a.set_xticks([]); a.set_yticks([]); a.grid(False)
-    fig.subplots_adjust(left=0.01, right=0.99, top=0.86, bottom=0.02, wspace=0.06)
-    _save(fig, 'fig_distortion')
-    plt.close(fig)
+    scale = map_scale('V', V_und)
+    with use_style('paper'):
+        fig, ax = plt.subplots(1, 3, figsize=(PAPER_WIDE, 2.15))
+        for a, (img, ttl) in zip(ax, panels):
+            draw_map(a, 'V', img, title=ttl, scale=scale)
+        save(fig, os.path.join(FIG, 'fig_distortion.png'))
+    print('  wrote fig_distortion.pdf / .png')
 
 
 FIGURES = {'beta_speed': fig_beta_speed, 'tracking': fig_tracking,
