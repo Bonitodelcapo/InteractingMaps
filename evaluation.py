@@ -68,7 +68,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from config import DATASET_SEGMENTS, DISTORTION_MODE, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
-import experiment_tracking
+import experiment_tracking as run_store
 
 # Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
 # re-exported here so existing callers (incl. report scripts' E.<name>) are
@@ -430,7 +430,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # logged by default; throwaway sweeps under experiments/ are skipped unless
     # IM_MLFLOW_ALL=1, so the tracking store is not flooded. IM_MLFLOW=0 disables.
     if os.environ.get('IM_MLFLOW_ALL') == '1' or rc.out_root == 'results':
-        experiment_tracking.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
+        run_store.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
 
     print(f"\n  {'='*50}")
     print(f"  RESULTS: {rc.model}, {rc.dataset}, {rc.duration_s:.1f}s")
