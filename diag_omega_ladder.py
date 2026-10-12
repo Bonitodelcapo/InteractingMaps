@@ -29,7 +29,7 @@ import config
 from config import get_dataset_paths
 from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_omega_gt, omega_gt_at
 from interacting_maps.data_loader import EventFrameSequence
-from interacting_maps.network_dissertation import InteractingMapsThesis
+from interacting_maps.network_dissertation import InteractingMapsThesis, Cost_OFCE, Quantity
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
 from interacting_maps.metrics import compute_metrics, curl_share, flow_epe
 from interacting_maps.viz import net_maps, draw_map, draw_series
@@ -132,13 +132,17 @@ def ref_omega(om, t_lo, t_hi):
 def build_net(ctx):
     """Build a fresh network for one rung (guarantees isolated state)."""
     c = ctx['calib']
-    return InteractingMapsThesis(
+    net = InteractingMapsThesis(
         H=ctx['seq'].H, W=ctx['seq'].W,
         fx=c['fx'], fy=c['fy'], cx=c['cx'], cy=c['cy'],
         frame_duration=ctx['dt'],
         dist_coeffs=c['dist_coeffs'], poisson=config.POISSON_MODE,
-        **config.THESIS_PARAMS,
+        **{**config.THESIS_PARAMS, **ctx.get('params', {})},
     )
+    for cost in net.costs:                  # --mode ofce: max_grad / normalize
+        if isinstance(cost, Cost_OFCE):
+            vars(cost).update(ctx.get('ofce', {}))
+    return net
 
 
 def gt_flow(net, R_gt):
@@ -218,8 +222,35 @@ def _selfcheck_maps_io():
     print(f"  [{'ok' if ok else 'FAIL'}] npz round trip gives finite colour scales {sc}")
 
 
+def _ofce_g_only(F_mag, normalize, n_iters=200, V=1.0):
+    """One pixel, F fixed along x, only the OFCE step on G (q.update(1.0) as in
+    the network). Returns |V + F.G| after n_iters: ~0 iff the step converged."""
+    q = {k: Quantity(s, k) for k, s in (('V', (1, 1)), ('F', (1, 1, 2)), ('G', (1, 1, 2)))}
+    q['V'].value[:] = V
+    q['F'].value[..., 0] = F_mag
+    cost = Cost_OFCE(q, config.THESIS_PARAMS['delta_VFG'], normalize=normalize)
+    for _ in range(n_iters):
+        q['G'].reset_gradient()
+        cost.compute_and_send_gradients()
+        q['G'].update(1.0)
+    return float(abs(V + np.sum(q['F'].value * q['G'].value)))
+
+
+def _selfcheck_ofce_step():
+    """The raw OFCE step on G converges only for |F| < 1/sqrt(delta_VFG); the
+    normalised step converges for any |F|."""
+    b = 1.0 / np.sqrt(config.THESIS_PARAMS['delta_VFG'])
+    cases = [(0.9 * b, False, True), (1.1 * b, False, False), (10.0, True, True)]
+    for F_mag, norm, want in cases:
+        res = _ofce_g_only(F_mag, norm)
+        ok = (res < 1e-6) == want
+        print(f"  [{'ok' if ok else 'FAIL'}] OFCE G-step |F|={F_mag:.2f} "
+              f"normalize={norm}: residual {res:.2e} (expect {'converged' if want else 'not converged'})")
+
+
 def _selfcheck():
     _selfcheck_maps_io()
+    _selfcheck_ofce_step()
     for seg in SEGMENTS:
         ctx = prep_segment_context(seg)
         if ctx is None:
@@ -524,7 +555,7 @@ def _map_run(ctx, rung, **hooks):
         return rung1c_clamped_R(ctx, **hooks)
     if rung == '1b_free':
         return rung1b_clamped_flow(ctx, anchored=False, **hooks)
-    return rung0_baseline(ctx, **hooks)
+    return rung0_baseline(ctx, **hooks)[0]
 
 
 def _snap(net, H, W):
@@ -681,7 +712,125 @@ def plot_maps(seg_name):
     make_maps_gifs(d, f'diag_maps_{seg_name}')
 
 
+# %%
+# --mode ofce: is the striped I an OFCE step instability? One variant per call
+# (one SLURM array task); rows 1c_R (omega exact, isolates the OFCE step) and 0.
+OFCE_DIR = 'diag_ofce'
+OFCE_VARIANTS = {
+    'E0_base':      {},
+    'E1_dVFG006':   {'params': {'delta_VFG': 0.06}},
+    'E1_dVFG024':   {'params': {'delta_VFG': 0.24}},
+    'E2_noclip':    {'ofce': {'max_grad': np.inf}},
+    'E3_normalize': {'ofce': {'normalize': True}},
+    'E4_dt10':      {'dt': 0.010},
+    'E4_dt05':      {'dt': 0.005},
+}
+FLIP_BINS = (0, 1, 2, 3, 4, 6, np.inf)          # |F| px/frame
+OFCE_HEADER = (['variant', 'rung', 'dt_ms', 'n_frames', 'delta_VFG', 'max_grad',
+                'normalize', 'bound_px', 'frac_Fgt_above', 'F_epe', 'F_epe_rel',
+                'stripe_I', 'G_at_clip', 'finite', 'mean_err', 'mean_dir', 'mean_beta']
+               + [f'flip_{lo}_{hi}' for lo, hi in zip(FLIP_BINS[:-1], FLIP_BINS[1:])]
+               + ['secs'])
+
+
+def stability_bound(delta_VFG, delta_IG):
+    """|F| (px/frame) above which the explicit OFCE step on G diverges, from
+    lambda = 1 - 2*delta_VFG*|F|^2 - delta_IG (see spec, Findings)."""
+    return float(np.sqrt((2.0 - delta_IG) / (2.0 * delta_VFG)))
+
+
+def flip_rate(tail):
+    """Per-pixel rate of sign changes of G along F over the recorded
+    iterations, and |F| at the last one."""
+    par = np.stack([np.sum(G * F, -1) / np.maximum(np.linalg.norm(F, axis=-1), 1e-9)
+                    for G, F in tail])
+    return (np.sign(par[1:]) != np.sign(par[:-1])).mean(0), np.linalg.norm(tail[-1][1], axis=-1)
+
+
+def stripe_index(I):
+    """Scale-free high-frequency share of I: mean |discrete Laplacian| / std."""
+    lap = 4 * I[1:-1, 1:-1] - I[:-2, 1:-1] - I[2:, 1:-1] - I[1:-1, :-2] - I[1:-1, 2:]
+    return float(np.mean(np.abs(lap)) / max(float(np.std(I)), 1e-12))
+
+
+def run_ofce_variant(name, seg_name='city_short'):
+    """Run one OFCE_VARIANTS entry on rows 1c_R and 0 over the segment's span;
+    write diag_ofce/<name>.csv and diag_ofce/<name>.png (last-frame maps)."""
+    import time
+    from collections import deque
+    from interacting_maps.camera import CLIP_G
+    v = OFCE_VARIANTS[name]
+    base = next(s for s in SEGMENTS if s['name'] == seg_name)
+    dt = v.get('dt', base['dt'])
+    seg = {**base, 'dt': dt, 'n_frames': round(base['n_frames'] * base['dt'] / dt)}
+    ctx = prep_segment_context(seg)
+    if ctx is None:
+        return
+    ctx.update(params=v.get('params', {}), ofce=v.get('ofce', {}))
+    prm = {**config.THESIS_PARAMS, **ctx['params']}
+    ofce = {'max_grad': 5.0, 'normalize': False, **ctx['ofce']}
+    H, W, n, K = ctx['seq'].H, ctx['seq'].W, ctx['n'], ctx['n'] // 2
+    bound = stability_bound(prm['delta_VFG'], prm['delta_IG'])
+    net = build_net(ctx)
+    F_gt = [gt_flow(net, ref_omega(ctx['om'], *w) * dt) for w in ctx['wins']]
+    mag_gt = [np.linalg.norm(f, axis=-1) for f in F_gt]
+    rows, last = [], {}
+    for rung in ('1c_R', '0'):
+        tail, t0 = deque(maxlen=20), time.time()
+        s = _map_run(ctx, rung,
+                     on_frame=lambda k, nt: last.update({rung: _snap(nt, H, W)}),
+                     on_iter=lambda nt: tail.append((nt.G.copy(), nt.F.copy())),
+                     iter_frame=K)
+        flips, mag = flip_rate(tail)
+        m = last[rung]
+        bins = []
+        for lo, hi in zip(FLIP_BINS[:-1], FLIP_BINS[1:]):
+            sel = (mag >= lo) & (mag < hi)
+            bins.append(round(float(flips[sel].mean()), 3) if sel.sum() >= 50 else '')
+        rows.append([name, rung, dt * 1000, n, prm['delta_VFG'], ofce['max_grad'],
+                     ofce['normalize'], round(bound, 3),
+                     round(float(np.mean([(g > bound).mean() for g in mag_gt])), 3),
+                     round(s['F_epe'], 4),
+                     round(s['F_epe'] / float(np.mean([g.mean() for g in mag_gt])), 4),
+                     round(stripe_index(m['I']), 4),
+                     round(float((np.abs(m['G']) >= CLIP_G - 1e-6).any(-1).mean()), 4),
+                     bool(all(np.all(np.isfinite(a)) for a in m.values())),
+                     round(s['mean_err'], 3), round(s['mean_dir'], 3), round(s['mean_beta'], 3)]
+                    + bins + [round(time.time() - t0)])
+    os.makedirs(OFCE_DIR, exist_ok=True)
+    with open(os.path.join(OFCE_DIR, f'{name}.csv'), 'w', newline='') as f:
+        w = csv.writer(f); w.writerow(OFCE_HEADER); w.writerows(rows)
+    V_last = ctx['frames'][-1][0].astype(np.float32)
+    rungs = ['1c_R', '0']
+    maps_t = {'V': V_last, 'F_gt': F_gt[-1].astype(np.float32),
+              **{k: np.stack([last[r][k] for r in rungs]) for k in 'IGF'}}
+    sc = _map_scales({'V': V_last[None], 'F_gt': maps_t['F_gt'][None],
+                      'I': maps_t['I'][:, None], 'G': maps_t['G'][:, None]})
+    save(_maps_figure(maps_t, sc, rungs, f'{name}: last frame (dt = {dt * 1000:.0f} ms)'),
+         os.path.join(OFCE_DIR, f'{name}.png'))
+    print(f"[ok] {OFCE_DIR}/{name}.csv + .png  (bound {bound:.2f} px/frame, {n} frames)")
+
+
+def ofce_summary(out=os.path.join(OFCE_DIR, 'summary.csv')):
+    """Concatenate diag_ofce/E*.csv into summary.csv and print the key columns."""
+    rows = []
+    for p in sorted(glob.glob(os.path.join(OFCE_DIR, 'E*.csv'))):
+        rows += list(csv.DictReader(open(p, newline='')))
+    if not rows:
+        return
+    with open(out, 'w', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=OFCE_HEADER); w.writeheader(); w.writerows(rows)
+    keys = ['variant', 'rung', 'bound_px', 'frac_Fgt_above', 'F_epe_rel', 'stripe_I',
+            'mean_err'] + [k for k in OFCE_HEADER if k.startswith('flip_')]
+    print(' | '.join(keys))
+    for r in rows:
+        print(' | '.join(str(r[k]) for k in keys))
+    print(f"[ok] {out}")
+
+
 def make_all_plots():
+    if os.path.isdir(OFCE_DIR):
+        ofce_summary()
     if os.path.exists(RESULTS_CSV) and os.path.exists(FRAMES_CSV):
         plot_P1(); plot_P2(); plot_P3()
     for path in sorted(glob.glob('diag_maps_*.npz')):
@@ -692,7 +841,9 @@ def make_all_plots():
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--mode', default='run',
-                    choices=['setup', 'run', 'maps', 'plots'])
+                    choices=['setup', 'run', 'maps', 'ofce', 'plots'])
+    ap.add_argument('--variant', default='all', choices=list(OFCE_VARIANTS) + ['all'],
+                    help='--mode ofce: one OFCE_VARIANTS entry (one SLURM array task)')
     ap.add_argument('--limit', type=int, default=None,
                     help='cap frames per segment (fast local smoke test)')
     ap.add_argument('--segment', default='city_short',
@@ -707,6 +858,13 @@ if __name__ == '__main__':
         run_all_segments()
     elif args.mode == 'maps':
         run_maps(args.segment, args.frame)
+    elif args.mode == 'ofce':
+        import matplotlib
+        matplotlib.use('Agg')
+        for name in (OFCE_VARIANTS if args.variant == 'all' else [args.variant]):
+            run_ofce_variant(name, args.segment)
+        if args.variant == 'all':            # array tasks: summary via --mode plots
+            ofce_summary()
     elif args.mode == 'plots':
         import matplotlib
         matplotlib.use('Agg')                # headless (cluster); notebooks stay inline
