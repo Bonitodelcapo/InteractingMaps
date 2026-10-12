@@ -916,12 +916,14 @@ BETA_CONFIGS = [('thesis_cmax', 0.5, 0.3), ('thesis_cmax', 0.1, 0.5),
 def cmd_beta(E, args):
     """Runs behind fig_beta_speed: every real-sequence segment, three anchor settings."""
     nf = int(round(args.duration / args.dt))
-    for ds, sid, t0 in BETA_SEGMENTS:
-        for model, d_fr, d_anc in BETA_CONFIGS:
-            rc = _cfg(E, ds, sid, t0, model, args.dt, nf, delta_FR=d_fr, delta_IMU=d_anc)
-            s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
-            print(f"  {ds}/{sid} {model} dFR={d_fr} anchor={d_anc}: "
-                  f"beta={s['mean_beta']:.3f} ({secs:.0f}s)", flush=True)
+    runs = [(seg, cfg) for seg in BETA_SEGMENTS for cfg in BETA_CONFIGS]
+    if args.index >= 0:
+        runs = [runs[args.index]]
+    for (ds, sid, t0), (model, d_fr, d_anc) in runs:
+        rc = _cfg(E, ds, sid, t0, model, args.dt, nf, delta_FR=d_fr, delta_IMU=d_anc)
+        s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
+        print(f"  {ds}/{sid} {model} dFR={d_fr} anchor={d_anc}: "
+              f"beta={s['mean_beta']:.3f} ({secs:.0f}s)", flush=True)
 
 
 COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
@@ -967,6 +969,8 @@ def main():
     ap.add_argument('--modes', default='iterative,fft,dct',
                     help='poisson: which in-loop solvers to include')
     ap.add_argument('--tag', default='', help='poisson: suffix for the figure name')
+    ap.add_argument('--index', type=int, default=-1,
+                    help='beta: run only entry N of BETA_SEGMENTS x BETA_CONFIGS (0-20)')
     args = ap.parse_args()
     sys.argv = [sys.argv[0]]              # evaluation.py parses argv
     import evaluation as E
