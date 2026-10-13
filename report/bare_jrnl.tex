@@ -69,7 +69,7 @@ has a public implementation. We implement both on a shared camera model and
 evaluation harness and evaluate them on five rotation sequences, three real and
 two synthetic. As published, neither formulation is usable over a three-second
 track: the scale ambiguity inherent to the constraints resolves itself
-arbitrarily, leaving direction errors of $73$--$91^\circ$, and the two update
+arbitrarily, leaving direction errors of $73$--$92^\circ$, and the two update
 schemes fail identically. The method works only when an absolute
 angular-velocity reference enters the cost minimised at every iteration;
 supplying it once at initialisation is not sufficient. We show that this
@@ -323,7 +323,9 @@ of a rotating 3-D point~\cite{martel2019thesis}
 \end{pmatrix},
 \label{eq:cmat}
 \end{equation}
-where $(x',y')$ are the normalised image coordinates of pixel $(x,y)$. Notably
+where $(x',y')$ are the normalised image coordinates of pixel $(x,y)$; the
+flow in pixels is this matrix premultiplied by $\operatorname{diag}(f_x,f_y)$,
+as in~\eqref{eq:cdist}. Notably
 $\Cmat_{x,y}$ does not depend on scene depth: rotational flow carries no
 structure information, which is what makes the purely rotational model
 self-contained.
@@ -592,14 +594,16 @@ distorted-pixel units,
 \end{equation}
 with $A$ the matrix of~\eqref{eq:cmat}. The second route avoids re-quantising
 rectified sub-pixel coordinates onto the pixel grid during accumulation, and it
-performed better in our experiments; it is used for every result reported below.
-Sec.~\ref{sec:experiments} reports the comparison between the two.
+is used for every result reported below. Sec.~\ref{sec:distortion} verifies
+that the two routes describe the same lens and explains why the second is
+preferred.
 
-Because both formulations assume a rotation-only observer, evaluation segments
-are restricted to intervals in which this holds. A selection pass
-slides a window over the gyroscope record and flags intervals of low angular
-velocity variance; the selected segments span roughly a factor of five in
-rotation speed, which turns out to matter (Sec.~\ref{sec:experiments}).
+Evaluation segments are restricted to intervals of roughly constant angular
+velocity, because the Vicon reference is a difference of orientations
+(Sec.~\ref{sec:protocol}). A selection pass slides a window over the gyroscope
+record and flags intervals of low angular-velocity variance; the selected
+segments of the real sequences span a factor of four in rotation speed, which
+turns out to matter (Sec.~\ref{sec:speed}).
 
 \subsection{The Two Networks}
 
@@ -626,7 +630,7 @@ gradient in~\eqref{eq:cook_ofce} grows cubically when $|\Fmap|$ and $|\Gmap|$ ar
 both large, so it is clipped per pixel, and each quantity is clipped to a fixed
 range after every iteration. These bounds are not inert: at high rotation speed
 $\Gmap$ reaches its limit on real data, for the reason given in
-Sec.~\ref{sec:cmax_exp}. They do not, however, affect the angular velocity ---
+Sec.~\ref{sec:speed}. They do not, however, affect the angular velocity ---
 widening them by a factor of twenty changes the reported error by less than
 $0.05^\circ$/s --- so they bound the maps without shaping the result we measure.
 
@@ -719,8 +723,9 @@ ours explicitly, since some of them affect the comparison.
   rather than as the in-loop update; Sec.~\ref{sec:reconstruction} measures both
   and explains why.
 \item \textbf{Step sizes.} Neither source reports the values of the relaxation
-  step sizes. Ours were tuned by grid search (Table~\ref{tab:params}) and are
-  examined in Sec.~\ref{sec:experiments}.
+  step sizes. Two of ours, $\delta_{F\!R}$ and $\delta_{\text{anchor}}$, were
+  chosen by a parameter sweep and the other four set by hand
+  (Table~\ref{tab:params}); Sec.~\ref{sec:sensitivity} examines all six.
 \end{enumerate}
 
 \begin{table}[!t]
@@ -1048,9 +1053,13 @@ kinematic matrix~\eqref{eq:cdist}. Every model is warm-started identically and
 $\wvec$ is recurrent thereafter, so the numbers below include accumulated drift.
 
 Two of the six step sizes, $\delta_{F\!R}$ and $\delta_{\text{anchor}}$, were
-chosen by the sweep of Sec.~\ref{sec:sensitivity}, which also verified that both
-sit at an interior optimum on the real sequences rather than at the edge of the
-range searched. The remaining four were set by hand early on and were never
+chosen by the sweep of Sec.~\ref{sec:sensitivity}: moving either one from its
+original value towards the adopted one lowers the error on all five sequences.
+The adopted pair is a compromise, not the optimum of either kind of data: on
+the $1.5$\,s grid over both parameters the real sequences are best at
+$\delta_{F\!R} = 0.3$, $\delta_{\text{anchor}} = 0.5$ ($8.2$ against
+$9.3^\circ$/s) and the synthetic ones at $\delta_{F\!R} = 0.02$,
+$\delta_{\text{anchor}} = 0.9$ ($2.4$ against $7.2^\circ$/s). The remaining four were set by hand early on and were never
 optimised, so the configuration should be read as tuned in two dimensions, not
 as an optimum of the whole parameter space.
 
@@ -1292,7 +1301,7 @@ data. Without an absolute reference, neither formulation produces a usable
 estimate over three seconds: direction errors of $72$--$100^\circ$ mean the
 recovered axis carries essentially no information about the true one, and the
 magnitude is worse still --- on the fastest segment the Cook network settles at
-$\beta \approx 29$, i.e.\ an angular velocity too small by more than an order of
+$\beta \approx 148$, i.e.\ an angular velocity too small by two orders of
 magnitude. This is not a tuning failure. It is the ambiguity resolving itself
 arbitrarily, exactly as~\eqref{eq:beta} permits, and then being carried forward
 by the recurrent state.
@@ -1342,7 +1351,7 @@ $\|\wvec\|$ & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ \\
  & \texttt{thesis}        & 107.0 &  71.8 &  1.62 \\
  & \texttt{thesis+IMU}    &  11.8 &  14.6 &  1.07 \\
  & \texttt{CMax-anchor}   &  16.5 &  19.3 &  0.89 \\
- & \texttt{CMax-inloop}   &  24.0 &  34.0 &  0.77 \\
+ & \texttt{CMax-inloop}   &  24.0 &  33.9 &  0.77 \\
  & \emph{gyro vs Vicon}    & \emph{11.6} & \emph{14.8} & --- \\
 \midrule
 \multirow{6}{*}{$0.91$}
@@ -1374,7 +1383,7 @@ otherwise untouched and removes the second sensor from the loop.
 Compared at equal anchor weight, the substitution costs something, and it is
 worth being exact about how much. Over the fourteen segments measured, the
 gyroscope-anchored model is ahead of the contrast-anchored one by between
-$0.4$ and $4.7^\circ$/s, typically by $1$--$3$. The gap is narrowest on the
+$0.6$ and $4.7^\circ$/s, typically by $1$--$3$. The gap is narrowest on the
 synthetic sequences, where the reference is exact ($0.6$ and $0.8^\circ$/s), and
 widest on the fastest real segment (Table~\ref{tab:anchor}: $16.5$ against
 $11.8^\circ$/s at $1.67$\,rad/s). Set against $107^\circ$/s for the same network
@@ -1391,23 +1400,26 @@ One apparent advantage of the contrast anchor does not survive tuning, and is
 worth recording because it is the kind of result that would otherwise be reported
 as a finding. At the original defaults its scale factor was $1.00$ on both real
 sequences against $1.08$ and $1.16$ for the gyroscope, suggesting a visual anchor
-free of the inertial one's bias. At the configuration of
-Table~\ref{tab:main} the ordering reverses ($0.91$ and $0.86$ against $1.00$ and
+free of the inertial one's bias. At the parameters of
+Table~\ref{tab:params}, over the same three seconds, the ordering reverses ($0.91$ and $0.86$ against $1.00$ and
 $1.05$). Both anchors are biased, in opposite directions, by amounts comparable
 to the difference between them; neither is systematically better on scale, and
 the appearance that one was is an artefact of where the kinematic weight
 happened to sit.
 
 \subsubsection{Magnitude determination in the two couplings}
-\texttt{CMax-anchor} has the lower direction error on every segment
-($19.4$, $12.5$, $12.2^\circ$ against $34.0$, $16.6$, $14.3^\circ$). The
-comparison of total error is less straightforward and illustrates why $\beta$ is
-reported separately. On the fast segment \texttt{CMax-inloop} has the
-\emph{lower} total error ($24.0$ vs $32.8^\circ$/s) despite nearly twice the
-direction error, because the two estimators err in opposite directions in
-magnitude --- $\beta = 0.77$ against $1.18$ --- and for
-\texttt{CMax-inloop} the magnitude and direction errors partially cancel inside
-the norm. Ranking on total error alone would select the worse estimator. The
+\texttt{CMax-anchor} has the lower direction error on every segment of
+Table~\ref{tab:anchor} ($19.3$, $12.3$, $13.5^\circ$ against $33.9$, $16.6$,
+$14.3^\circ$), and at the parameters of Table~\ref{tab:params} the lower total
+error as well. At the original $\delta_{F\!R} = 0.5$,
+$\delta_{\text{anchor}} = 0.3$ the comparison of total error was less
+straightforward, and it illustrates why $\beta$ is reported separately: on the
+fast segment \texttt{CMax-inloop} had the \emph{lower} total error ($24.0$ vs
+$32.8^\circ$/s) despite nearly twice the direction error, because the two
+estimators erred in opposite directions in magnitude --- $\beta = 0.77$
+against $1.18$ --- and for \texttt{CMax-inloop} the magnitude and direction
+errors partially cancel inside the norm. Ranking on total error alone would
+have selected the worse estimator. The
 difference between the couplings is therefore almost entirely a difference in
 how $\|\wvec\|$ is determined, which is what Sec.~\ref{sec:coupling} predicts:
 only \texttt{CMax-anchor} leaves the kinematic constraint acting on $\wvec$.
@@ -1415,9 +1427,9 @@ only \texttt{CMax-anchor} leaves the kinematic constraint acting on $\wvec$.
 \subsubsection{Speed dependence of the magnitude error}
 \label{sec:speed}
 Pooling every segment of both real sequences, which spans
-$\|\wvec\| = 0.42$ to $1.67$\,rad/s, makes the pattern unambiguous. For
-\texttt{CMax-anchor} the scale factor is almost perfectly correlated with
-rotation speed,
+$\|\wvec\| = 0.42$ to $1.67$\,rad/s, makes the pattern unambiguous. At the
+original $\delta_{F\!R} = 0.5$, $\delta_{\text{anchor}} = 0.3$ the scale factor
+of \texttt{CMax-anchor} is almost perfectly correlated with rotation speed,
 \begin{equation}
 \operatorname{corr}\big(\|\wvec\|,\ \beta\big) = +0.96 \quad (n=7,\ p<0.001),
 \label{eq:betacorr}
@@ -1434,16 +1446,16 @@ input, the camera model and the maps, and differ in exactly one respect: whether
 the kinematic cost is allowed to update $\wvec$. The shrinkage appears only when
 it is, so it is produced by the kinematic update fitting $\wvec$ to a flow field
 that is systematically too slow. The gyroscope-anchored model shows the same
-trend ($\beta = 1.00, 1.16, 1.33$ over the three poster segments of
-Table~\ref{tab:anchor}), confirming that the effect belongs to the network and
+trend at that configuration ($\beta = 1.00, 1.16, 1.33$ over the three poster
+segments, slowest to fastest), confirming that the effect belongs to the network and
 not to any particular anchor.
 
 Why the inferred flow is too small follows from the ambiguity itself. Equation
 \eqref{eq:beta} leaves the split of the flow constraint between $\Fmap$ and
 $\Gmap$ undetermined, and the relaxation resolves it from the data. The anchor
 constrains $\wvec$ but nothing constrains that split, so the kinematic cost ---
-which carries a larger step size than the anchor
-(Table~\ref{tab:params}) --- pulls $\wvec$ towards whatever $\Fmap$ the visual
+which at the original configuration carried a larger step size than the anchor,
+$0.5$ against $0.3$ --- pulls $\wvec$ towards whatever $\Fmap$ the visual
 side has settled on, and that flow field is too slow.
 
 One natural refinement of this account is that the split should depend on scene
@@ -1452,11 +1464,12 @@ $\Fmap$ satisfies $\Vmap = -\Fmap\cdot\Gmap$ equally well. The two synthetic
 sequences test exactly this and refute it. They were rendered along the
 \emph{same} camera trajectory over different scenes and differ by a factor of
 four in event density, yet at matched parameters they yield
-$\beta = 1.480$ and $1.483$ --- indistinguishable. Scene content, at least as
+$\beta = 1.487$ on both (the $1.5$\,s grid of Sec.~\ref{sec:sensitivity}) ---
+indistinguishable. Scene content, at least as
 event density varies it, does not set the magnitude error.
 
 That leaves a difference we cannot presently explain. At
-$\|\wvec\| = 1.32$\,rad/s both synthetic sequences give $\beta \approx 1.48$
+$\|\wvec\| = 1.32$\,rad/s both synthetic sequences give $\beta \approx 1.49$
 where the trend of~\eqref{eq:betacorr} fitted to the real ones predicts
 $\approx 1.10$. Whatever distinguishes them is shared by both synthetic
 sequences and is not their scene, their event density or their rotation speed.
@@ -1486,16 +1499,17 @@ the one proposed here.
 A control supports the same conclusion. \texttt{CMax-inloop}, in which the
 kinematic cost does not act on $\wvec$ at all, returns \emph{identical} results
 at both configurations on every sequence for which both were run
-(Table~\ref{tab:main}): neither $\delta_{F\!R}$ nor $\delta_{\text{anchor}}$
+(the grey points of Fig.~\ref{fig:beta_speed} are the same at both): neither $\delta_{F\!R}$ nor $\delta_{\text{anchor}}$
 reaches it. The parameters act only through the paths the model says they do.
 
 The two couplings therefore trade off along different axes.
 \texttt{CMax-anchor} has the better direction estimate on every segment of both
-sequences, but its magnitude degrades with speed. \texttt{CMax-inloop} keeps a
-speed-independent magnitude and loses on direction. Which one has the lower
-\emph{total} error consequently depends on the sequence, and on the fast
-segments the ranking inverts purely because the two error components partially
-cancel for one of them.
+sequences, and its magnitude degrades with speed. \texttt{CMax-inloop} keeps a
+speed-independent magnitude and loses on direction. At the original
+$\delta_{F\!R}$ the speed dependence was strong enough to invert the ranking on
+total error on the fastest segment; at the adopted $\delta_{F\!R} = 0.1$, which
+weakens it, \texttt{CMax-anchor} has the lower total error on all seven
+segments.
 
 This reframes the fast-segment result. It is not a failure of contrast
 maximization, which supplies an accurate magnitude there, but a limitation of
@@ -1541,23 +1555,25 @@ Setting $\delta_{\text{anchor}} = 0$ makes the anchoring
 cost~\eqref{eq:anchorcost} contribute nothing, leaving the network exactly as
 Cook and Martel specify it. This is the ablation of the fusion term, and because
 the removed cost is the only place either anchor enters, it is the same model
-for both. The error rises by a factor of $2.9$ to $6.4$ and the direction error
+for both. Relative to the starting weight $0.3$, the error rises by a factor
+of $2.9$ to $5.4$ and the direction error
 from $6$--$13^\circ$ to $73$--$92^\circ$. Nothing else in the sweep comes close
 to this effect, which is the quantitative form of the argument in
 Sec.~\ref{sec:beta_exp}: the anchor is not a refinement of the method but the
 condition under which it works at all.
 
-Over the range in Table~\ref{tab:sweep} the anchor weight is monotone ---
-stronger is better, on every sequence, for \emph{both} anchors --- and $\beta$
-approaches unity as it increases. That trend does not continue indefinitely:
-raising $\delta_{\text{anchor}}$ to $0.7$ or $0.9$ is worse than $0.5$ on all
-five sequences, so this parameter, too, has an interior optimum. The two anchors
-also converge as the weight grows. At
-$\delta_{\text{anchor}} = 0.1$ they differ by up to $1.4^\circ$/s; at $0.5$ they
-agree to $0.5^\circ$/s or better on every sequence, and on the two synthetic
-ones to $0.2^\circ$/s. The better the anchor is trusted, the less it matters
-which one it is --- the clearest support we have for the claim that what the
-model requires is an absolute reference, not specifically an inertial one.
+Over the range in Table~\ref{tab:sweep}, at the original
+$\delta_{F\!R} = 0.5$, the anchor weight is monotone --- stronger is better, on
+every sequence, for \emph{both} anchors. That trend depends on $\delta_{F\!R}$:
+at the adopted $\delta_{F\!R} = 0.1$, raising $\delta_{\text{anchor}}$ beyond
+$0.5$ to $0.7$ or $0.9$ is worse on the three real sequences, while the
+synthetic ones keep improving (Sec.~\ref{sec:realvssynth}). Which anchor is
+used matters far less than whether one is used at all: at every weight in
+Table~\ref{tab:sweep} the two stay within $0.6^\circ$/s of each other on
+\texttt{poster}, \texttt{dynamic} and the synthetic sequences, and within
+$1.8^\circ$/s on \texttt{boxes}, where the gyroscope is consistently ahead.
+This is the support we have for the claim that what the model requires is an
+absolute reference, not specifically an inertial one.
 
 \subsubsection{Kinematic weight}
 The step size $\delta_{F\!R}$ of the kinematic update tests the mechanism
@@ -1575,11 +1591,12 @@ $2.5$ to $8.1^\circ$. A parameter the constraint system treats as arbitrary
 turns out to control the dominant error.
 
 Extending the sweep below the smallest value in Table~\ref{tab:sweep} shows that
-$\delta_{F\!R}$ has an optimum, and that where it lies depends on the data. On
-the three real sequences $\delta_{F\!R} = 0.1$ is the best of every value tested:
-going down to $0.05$ and $0.02$ makes the error worse again ($9.05 \rightarrow
-9.34 \rightarrow 9.60^\circ$/s on \texttt{boxes}, and similarly on the other
-two). On the two synthetic sequences it keeps improving, and steeply --- $7.30
+$\delta_{F\!R}$ has an optimum, and that where it lies depends on the data. At
+$\delta_{\text{anchor}} = 0.5$ the real sequences are best between $0.1$ and
+$0.3$ --- at $0.1$ on \texttt{boxes}, at $0.3$ on \texttt{poster} and
+\texttt{dynamic} --- and going down to $0.05$ and $0.02$ makes the error worse
+again ($9.05 \rightarrow 9.34 \rightarrow 9.60^\circ$/s on \texttt{boxes}, and
+similarly on the other two). On the two synthetic sequences it keeps improving, and steeply --- $7.30
 \rightarrow 4.50 \rightarrow 2.83^\circ$/s on \texttt{bicycle}, with $\beta$
 falling to $1.03$ and the direction error to $1.5^\circ$.
 
@@ -1614,8 +1631,9 @@ $\delta_{V\!F\!G}$ small), and the real sequences by the reverse. Sec.~\ref{sec:
 explains why: on the synthetic sequences contrast maximization alone already
 attains $2.1^\circ$/s and the maps have almost nothing to add, whereas on the
 real ones it attains only $8.4$--$13.9^\circ$/s and the network improves on it
-by $17$--$35\%$. The configuration of Table~\ref{tab:params} is therefore a
-compromise, chosen to favour the real sequences, and the synthetic columns of
+by $13$--$20\%$. The configuration of Table~\ref{tab:params} is therefore a
+compromise between the two kinds of data (Sec.~\ref{sec:objective}), and the
+synthetic columns of
 Table~\ref{tab:main} should be read as showing what the method does when its
 anchor is already near-perfect rather than as a second independent validation.
 The regularisers of Sec.~\ref{sec:regularisers} divide along the same line:
@@ -1657,8 +1675,9 @@ better than the flow field it is overriding.
 
 \subsubsection{Iterations}
 Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
-$150$ the error varies by under $0.7^\circ$/s on the real sequences and by
-$0.04^\circ$/s on the synthetic one, and a later sweep from the adopted
+$150$ the error varies by at most $1.4^\circ$/s on the real sequences and
+$0.2^\circ$/s on the synthetic ones (Table~\ref{tab:sweep}), and a later sweep
+from the adopted
 configuration reproduces this ($8.87$ at $25$ against $8.96$ at $150$, averaged
 over four sequences). The $50$--$75$ of~\cite{martel2019thesis} can therefore be
 reduced threefold at no cost.
@@ -1830,11 +1849,11 @@ accuracy.
 
 Which frame is shown matters, and not for presentational reasons. Repeating the
 figure at frame $18$ of the same segment --- the fastest-rotating frame of the
-track, $\lVert\wvec\rVert = 1.08$ against $1.01$\,rad/s here --- leaves the two
+track, $\lVert\wvec\rVert = 1.21$ against $1.00$\,rad/s here --- leaves the two
 unanchored rows unchanged but visibly degrades the three anchored ones. The
 cause is measurable rather than aesthetic: at that frame the standard deviation
 of $\Imap$ is $2.6$ times its track median for \texttt{IMU-anchor} and $6.7$
-times for \texttt{CMax-inloop}, against $0.9$ times for the unanchored network,
+times for \texttt{CMax-inloop}, against $1.0$ times for the unanchored network,
 which has no anchor to disagree with. It is the excursion described in
 Sec.~\ref{sec:mainresults}, and it concentrates where the anchor and the flow
 constraint disagree most, which is where $\wvec$ is largest. The frame shown
@@ -2384,9 +2403,9 @@ To our knowledge no implementation of either was previously available.
 
 The clearest result is negative and concerns the method as published. On
 three-second tracks neither formulation produces a usable angular velocity:
-direction errors of $73$--$91^\circ$ mean the recovered axis is uninformative,
+direction errors of $73$--$92^\circ$ mean the recovered axis is uninformative,
 and the magnitude can leave any plausible range entirely, reaching
-$\beta = 432$ on one sequence while the maps remain mutually consistent. This is
+$\beta = 436$ on one sequence while the maps remain mutually consistent. This is
 not a tuning failure but the scale ambiguity of~\eqref{eq:beta} resolving itself
 arbitrarily, and warm-starting from the correct value does not prevent it: the
 estimate leaves the initial scale as soon as the relaxation is free to rescale
@@ -2396,7 +2415,7 @@ same way.
 
 What makes the method work is an absolute reference inside the cost that is
 minimised at every iteration. Supplied by a gyroscope, as the thesis proposes,
-it reduces the error by three to nine times and brings the direction error to
+it reduces the error by six to nine times and brings the direction error to
 $1$--$13^\circ$. Our main positive result is that this reference need not be a
 measurement: a contrast-maximization estimate computed from the same events
 occupies the same place in the model and comes within $0.6$--$2.6^\circ$/s of
@@ -2409,7 +2428,8 @@ it, so the visual constraints are filtering the inertial signal rather than
 merely being overridden by it.
 
 We also characterised the residual error. It is almost entirely a magnitude
-error, it grows with rotation speed ($r = +0.96$ over seven segments), and it is
+error, it grows with rotation speed ($r = +0.96$ over seven segments at the
+original step size, $+0.60$ at the adopted one), and it is
 produced by the kinematic cost fitting $\wvec$ to a flow field that the visual
 side systematically underestimates: it appears only when that cost updates
 $\wvec$, and its step size controls it monotonically across the whole admissible
