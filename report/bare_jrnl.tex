@@ -187,8 +187,9 @@ contributions are:
 The remainder of the report is organised as follows. Section~\ref{sec:background}
 introduces the model and its two variants. Section~\ref{sec:implementation}
 describes the implementation and how it was developed.
-Section~\ref{sec:experiments} reports the results, and
-Section~\ref{sec:conclusion} concludes.
+Section~\ref{sec:experiments} reports the experiments on the angular
+velocity, Section~\ref{sec:recon_experiments} those on the reconstructed
+intensity, and Section~\ref{sec:conclusion} concludes.
 
 
 \section{Background}
@@ -842,11 +843,13 @@ results below are therefore reported over multiple segments spanning a range of
 rotation speeds, and never as a single aggregate number.
 
 
-\section{Experiments}
+\section{Experiments on Angular Velocity}
 \label{sec:experiments}
 
-\subsection{Protocol}
+\subsection{Setup}
 \label{sec:protocol}
+
+\subsubsection{Sequences and reference}
 
 We evaluate on three rotation sequences of the Event-Camera
 Dataset~\cite{mueggler2017}, recorded with a DAVIS240C ($240\times180$) that
@@ -871,29 +874,6 @@ $24\%$ of $\lVert\wvec\rVert$ on $x$, $y$ and $z$). What they isolate is the
 best case the method can be given, and Sec.~\ref{sec:baseline} uses them as
 exactly that: a measurement of what the front-end achieves when nothing in the
 imaging is working against it.
-
-\subsubsection{What is being optimised}
-\label{sec:objective}
-The model produces two things we care about --- an angular velocity and an
-intensity map --- and this report optimises for the first. The relaxation rates
-of Table~\ref{tab:params} were chosen by a search over the angular-velocity
-error alone; no reconstruction measurement entered that choice. The asymmetry is
-deliberate: $\wvec$ has an independent reference in the Vicon poses and the
-simulator twist, whereas $\Imap$ has none, since the APS frames differ from
-log-intensity in exposure and in time and can support a comparison between
-reconstructions but not an absolute one.
-
-The consequence is that the configuration reported here is not the best one for
-image quality, and Sec.~\ref{sec:reconstruction} shows the two requirements
-pulling in opposite directions --- on the accumulation window directly, where
-the window that minimises the angular-velocity error maximises the intra-frame
-smear that degrades the reconstruction. Reconstruction quality is reported
-throughout, as the column $|r|$ of Table~\ref{tab:main} and in
-Sec.~\ref{sec:reconstruction}, but as a measured property of a configuration
-chosen for something else rather than as a quantity that was tuned. The
-configurations that do maximise it, separately for real and synthetic data,
-are given in Sec.~\ref{sec:image_settings}; no angular-velocity result in this
-report uses them.
 
 One exclusion is worth stating. \texttt{shapes\_rotation} is not used: its scene
 contains a few isolated shapes on a blank background, and both formulations
@@ -927,8 +907,9 @@ therefore resolve differences between models that the real data cannot, at the
 cost of lacking both real sensor noise and a real lens.
 Usefully, the two were generated along the \emph{same} camera trajectory --- we
 verified that their pose records agree to $5\times10^{-7}$ in quaternion
-components --- over different scenes, and differ by a factor of three in event
-density ($4.6$ against $1.6$ events per pixel per frame). They therefore form a
+components --- over different scenes, and differ by a factor of four in event
+density over the reported segment ($5.6$ events per pixel per frame on
+\texttt{street} against $1.4$ on \texttt{bicycle}). They therefore form a
 controlled pair, varying scene content with the motion held fixed, which
 Sec.~\ref{sec:speed} uses to rule out one explanation of the magnitude error.
 
@@ -966,18 +947,6 @@ providing essentially all of the image motion --- since that is what decides
 whether the model's assumptions hold. The criterion is different from the other
 sequences and we state it rather than fold it in.
 
-Unless stated otherwise all runs use the parameters of
-Table~\ref{tab:params}, $75$ iterations per frame, and the distortion-aware
-kinematic matrix~\eqref{eq:cdist}. Every model is warm-started identically and
-$\wvec$ is recurrent thereafter, so the numbers below include accumulated drift.
-
-Two of the six step sizes, $\delta_{F\!R}$ and $\delta_{\text{anchor}}$, were
-chosen by the sweep of Sec.~\ref{sec:sensitivity}, which also verified that both
-sit at an interior optimum on the real sequences rather than at the edge of the
-range searched. The remaining four were set by hand early on and were never
-optimised, so the configuration should be read as tuned in two dimensions, not
-as an optimum of the whole parameter space.
-
 \begin{table}[!t]
 \renewcommand{\arraystretch}{1.2}
 \caption{Evaluation Sequences}
@@ -998,7 +967,94 @@ Sequence & Seg. & $\|\wvec\|$ & Floor & Source \\
 \end{tabular}
 \end{table}
 
-\subsection{Results}
+\subsubsection{Lens distortion}
+\label{sec:distortion}
+
+The DAVIS240C lens is appreciably distorted ($k_1 = -0.37$), and
+Sec.~\ref{sec:implementation} described two ways of accounting for it. Both are
+correct as geometry; they differ in where the correction is applied, and that
+turns out to matter for a reason unrelated to the geometry.
+
+We first verified that the distortion-aware kinematic
+matrix~\eqref{eq:cdist}, which is our own derivation rather than something taken
+from either source, encodes the lens correctly. Because the network's scale
+ambiguity would confound any end-to-end comparison, the check is made with the
+network removed, using contrast maximization as an independent estimator: one
+path undistorts the events and warps them under a pinhole model, the other keeps
+the events raw and carries the lens through the warp, as $\Cmat$ does. Three
+checks agree. The forward distortion model matches \texttt{cv2.projectPoints} to
+$2.8\times10^{-14}$\,px; undistortion and distortion compose to the identity to
+$10^{-8}$\,px; and --- the decisive one --- at a fixed rotation, warping the
+distortion-aware way and then undistorting the result lands on the pinhole warp
+to $0.043$\,px, well below one pixel. The two routes are the same map.
+
+The difference is one of sampling, not geometry, and it is visible directly in
+the input. \texttt{cv2.undistortPoints} returns sub-pixel float coordinates,
+which the accumulation of~\eqref{eq:eventframe} must then bin onto the integer
+pixel grid. Rectification compresses the periphery, so neighbouring events are
+rounded onto the same pixel while others are left empty, and the resulting event
+frame carries a concentric moir\'e pattern that is not present in the data
+(Fig.~\ref{fig:distortion}). Over the same events, undistorting first reduces
+the number of occupied pixels from $43.2$k to $33.7$k: roughly a fifth of the
+spatial support of $\Vmap$ is lost to rounding. The spatial gradient $\Gmap$ is
+computed by differencing neighbouring pixels of $\Imap$, so an artefact at
+exactly that scale is the worst kind for this model.
+
+Carrying the lens in $\Cmat$ avoids the resampling entirely: the events stay on
+the pixels that produced them, and the distortion is applied to the
+\emph{prediction} instead, where it costs nothing. We therefore use the
+distortion-aware $\Cmat$ for every result in this report.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig_distortion}
+\caption{Event frames over the same $200$\,ms of \texttt{poster}. Left: raw
+events, with the lens carried by $\Cmat$~\eqref{eq:cdist}. Middle: the same
+events after \texttt{cv2.undistortPoints}, showing the concentric moir\'e left
+by re-quantising sub-pixel coordinates onto the pixel grid. Right: detail of the
+periphery, where rectification compresses hardest and the artefact is strongest.
+The pattern is a sampling artefact, not scene structure. The frames are the
+first $200$\,ms of the \texttt{poster} segment of Table~\ref{tab:datasets},
+binned directly from the events; no network is run.}
+\label{fig:distortion}
+\end{figure}
+
+\subsubsection{Optimisation target}
+\label{sec:objective}
+The model produces two things we care about --- an angular velocity and an
+intensity map --- and this report optimises for the first. The relaxation rates
+of Table~\ref{tab:params} were chosen by a search over the angular-velocity
+error alone; no reconstruction measurement entered that choice. The asymmetry is
+deliberate: $\wvec$ has an independent reference in the Vicon poses and the
+simulator twist, whereas $\Imap$ has none, since the APS frames differ from
+log-intensity in exposure and in time and can support a comparison between
+reconstructions but not an absolute one.
+
+The consequence is that the configuration reported here is not the best one for
+image quality, and Sec.~\ref{sec:reconstruction} shows the two requirements
+pulling in opposite directions --- on the accumulation window directly, where
+the window that minimises the angular-velocity error maximises the intra-frame
+smear that degrades the reconstruction. Reconstruction quality is reported
+throughout, as the column $|r|$ of Table~\ref{tab:main} and in
+Sec.~\ref{sec:recon_experiments}, but as a measured property of a configuration
+chosen for something else rather than as a quantity that was tuned. The
+configurations that do maximise it, separately for real and synthetic data,
+are given in Sec.~\ref{sec:image_settings}; no angular-velocity result in this
+report uses them.
+
+Unless stated otherwise all runs use the parameters of
+Table~\ref{tab:params}, $75$ iterations per frame, and the distortion-aware
+kinematic matrix~\eqref{eq:cdist}. Every model is warm-started identically and
+$\wvec$ is recurrent thereafter, so the numbers below include accumulated drift.
+
+Two of the six step sizes, $\delta_{F\!R}$ and $\delta_{\text{anchor}}$, were
+chosen by the sweep of Sec.~\ref{sec:sensitivity}, which also verified that both
+sit at an interior optimum on the real sequences rather than at the edge of the
+range searched. The remaining four were set by hand early on and were never
+optimised, so the configuration should be read as tuned in two dimensions, not
+as an optimum of the whole parameter space.
+
+\subsection{Main Results}
 \label{sec:mainresults}
 
 Table~\ref{tab:main} reports every model on the five sequences at the
@@ -1026,8 +1082,8 @@ Adding an anchor changes the picture entirely, and most of what the anchor
 provides does not depend on where it comes from. Both anchored models recover the
 rotation axis to $6$--$13^\circ$ on the real sequences and to $1$--$2^\circ$ on
 the synthetic ones, against $76$--$85^\circ$ without an anchor, and both bring
-$\beta$ to within $12\%$ of unity where the unanchored \texttt{cook} reaches
-$181$ and $346$ on the two synthetic sequences. Measured against what the anchor
+$\beta$ to within $14\%$ of unity where the unanchored \texttt{cook} reaches
+$181$ and $338$ on the two synthetic sequences. Measured against what the anchor
 is for, the two are interchangeable.
 
 Measured on total error they are not quite. The gyroscope is consistently ahead
@@ -1070,57 +1126,6 @@ stays there, which is the $\beta$-ambiguity of~\eqref{eq:beta} resolving itself
 once and then persisting through the recurrent state. All panels come from the runs of Table~\ref{tab:main}: $75$ frames of $20$\,ms ($1.5$\,s), the parameters of Table~\ref{tab:params}, lens distortion carried in the kinematic matrix.}
 \label{fig:tracking}
 \end{figure}
-
-Figure~\ref{fig:maps} shows the remaining quantities, which the angular-velocity
-metrics do not capture, for the \texttt{CMax-anchor} runs of
-Table~\ref{tab:main} on all five sequences. On the real sequences the intensity
-map is recovered well enough for the scene to be recognised although $\Imap$ is
-never observed, and the gradient map concentrates on scene edges. On the two
-synthetic sequences the scene is recognisable but overlaid by a diagonal
-ripple, the anchored reconstruction that Sec.~\ref{sec:reconstruction}
-examines. In every case the flow field varies smoothly across the image as a
-pure rotation requires. Appendix~\ref{app:maps} repeats the same frames for the
-other four models. This is also the evidence for the caveat attached to
-\texttt{dynamic\_rotation} in Sec.~\ref{sec:protocol}: the reconstruction there
-is no worse than on the static sequences even though the scene contains a
-person, which is why we report the sequence rather than exclude it.
-
-The reconstruction is not, however, uniform along a track, and the figure shows
-favourable moments. Every row is the last frame of its track except
-\texttt{poster}, whose last frames are the tail of an excursion of the kind
-described next (frames $50$--$72$); it is shown at frame $44$, the frame of highest $|r|$ on that
-track ($0.75$ against a track mean of $0.19$), for \texttt{CMax-anchor} and for
-the mean over all five models alike. Following $\Imap$ frame by frame on the
-anchored model, its
-standard deviation varies between $0.03$ and $1.59$ over the $1.5$\,s of
-\texttt{poster}, with the excursions concentrated at the peaks of the rotation;
-the same network without an anchor stays between $0.02$ and $0.05$ throughout.
-During those excursions the map loses its structure and the gradient map reaches
-the bound of Sec.~\ref{sec:implementation}. The angular velocity is unaffected
---- the errors reported here are computed over the whole track, excursions
-included --- but the visual interpretation and the quantity we score are not
-equally reliable at all times, and only the latter has been measured
-systematically.
-
-\begin{figure*}[!t]
-\centering
-\includegraphics[width=\textwidth]{fig_maps}
-\caption{Jointly inferred quantities for all five sequences, from the
-\texttt{CMax-anchor} runs of Table~\ref{tab:main} (parameters of
-Table~\ref{tab:params}, lens distortion in $\Cmat$): the final maps after
-$75$ frames ($1.5$\,s), except \texttt{poster}, shown at frame $44$ from a run
-stopped there, which reproduces that frame of the Table~\ref{tab:main} run
-exactly.
-Two intensity columns are shown because they differ and only one of them
-is scored: $\Imap$ (in-loop) is the map the network carries, while
-$\Imap$ (read-out) is~\eqref{eq:poisson_exact} applied to the same
-$\Gmap$, which is what the $|r|$ column of Table~\ref{tab:main} measures. Only $\Vmap$ is observed; $\Imap$, $\Gmap$ and $\Fmap$
-are inferred. Gradient and flow share one direction code, the hue of the wheel
-above the gradient column; magnitude is brightness for $\Gmap$ and saturation
-for $\Fmap$. The middle row is the \texttt{dynamic\_rotation} segment of
-Sec.~\ref{sec:protocol}, in which a person is present in the scene but seated.}
-\label{fig:maps}
-\end{figure*}
 
 \begin{table}[!t]
 \renewcommand{\arraystretch}{1.15}
@@ -1195,28 +1200,30 @@ sixty times better than the reference available on the real sequences. That lets
 them answer a question the real data cannot: how much of the residual error
 belongs to the model rather than to the reference. On the real sequences the
 anchored models sit at the floor, so the question is unanswerable there; here it
-is not, and the answer is that essentially all of it is the model's. The
-anchored variants reach $6.5$ and $7.1$--$7.3^\circ$/s with the rotation axis
+is not, and the answer is that essentially all of it is the model's.
+\texttt{thesis+IMU} and \texttt{CMax-anchor} reach $6.3$ and $7.1^\circ$/s with the rotation axis
 recovered to about $1$--$2^\circ$, and the remainder is almost entirely
 magnitude error, $\beta \approx 1.09$.
 
 The two sequences also agree with each other to within $0.2^\circ$/s and
-$0.02$ in $\beta$ on every anchored model, despite differing threefold in event
+$0.02$ in $\beta$ for \texttt{thesis+IMU} and \texttt{CMax-anchor}, despite differing fourfold in event
 density. Since they share a camera trajectory exactly, this is a direct
 statement that the residual error depends on the motion and the model, not on
 what the camera is looking at.
 
 The same clarity applies to the failure case. Where the real sequences show the
-pure-vision networks at $\beta \approx 1.0$--$1.4$ --- a plausible-looking scale
+pure-vision networks at $\beta \approx 0.9$--$1.5$ --- a plausible-looking scale
 attached to a meaningless direction --- on the synthetic pair \texttt{cook}
-settles at $\beta = 210$ and $436$, angular velocities more than two orders of
+settles at $\beta = 181$ and $338$, angular velocities more than two orders of
 magnitude too small, while still producing a self-consistent set of maps. That
 the same model reaches two such different scales on two sequences filmed along
 the \emph{same} trajectory is the $\beta$-ambiguity in its purest form: the
 constraint system is satisfied either way, and which scale it lands on is
 arbitrary.
 
-\subsection{What the Anchor Scores on Its Own}
+\subsection{Scale Ambiguity and the Anchor}
+
+\subsubsection{Anchor-only baseline}
 \label{sec:baseline}
 
 Every anchored result above depends on an external estimate of $\wvec$, so none
@@ -1276,7 +1283,7 @@ And the synthetic gyroscope column, at $0.11^\circ$/s, shows that anchoring
 entries of Table~\ref{tab:main} are reported for completeness but carry no
 evidential weight.
 
-\subsection{The Scale Ambiguity in Practice}
+\subsubsection{Effect of the anchor}
 \label{sec:beta_exp}
 
 The three constraints of Sec.~\ref{sec:model} determine $\wvec$ only up to the
@@ -1357,7 +1364,7 @@ $\|\wvec\|$ & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ \\
 \end{tabular}
 \end{table}
 
-\subsection{Replacing the Gyroscope with Contrast Maximization}
+\subsubsection{Contrast maximization as the anchor}
 \label{sec:cmax_exp}
 
 The anchor of~\eqref{eq:anchorcost} does not have to be a measurement. Replacing
@@ -1391,7 +1398,7 @@ to the difference between them; neither is systematically better on scale, and
 the appearance that one was is an artefact of where the kinematic weight
 happened to sit.
 
-\subsubsection{The two couplings differ in how they fix the magnitude}
+\subsubsection{Magnitude determination in the two couplings}
 \texttt{CMax-anchor} has the lower direction error on every segment
 ($19.4$, $12.5$, $12.2^\circ$ against $34.0$, $16.6$, $14.3^\circ$). The
 comparison of total error is less straightforward and illustrates why $\beta$ is
@@ -1405,7 +1412,7 @@ difference between the couplings is therefore almost entirely a difference in
 how $\|\wvec\|$ is determined, which is what Sec.~\ref{sec:coupling} predicts:
 only \texttt{CMax-anchor} leaves the kinematic constraint acting on $\wvec$.
 
-\subsubsection{Magnitude error is a property of the network, not of the anchor}
+\subsubsection{Speed dependence of the magnitude error}
 \label{sec:speed}
 Pooling every segment of both real sequences, which spans
 $\|\wvec\| = 0.42$ to $1.67$\,rad/s, makes the pattern unambiguous. For
@@ -1444,7 +1451,7 @@ contrast: a high-contrast scene drives $\Gmap$ up, so a correspondingly smaller
 $\Fmap$ satisfies $\Vmap = -\Fmap\cdot\Gmap$ equally well. The two synthetic
 sequences test exactly this and refute it. They were rendered along the
 \emph{same} camera trajectory over different scenes and differ by a factor of
-three in event density, yet at matched parameters they yield
+four in event density, yet at matched parameters they yield
 $\beta = 1.480$ and $1.483$ --- indistinguishable. Scene content, at least as
 event density varies it, does not set the magnitude error.
 
@@ -1509,6 +1516,280 @@ Table~\ref{tab:anchor}, with lens distortion in $\Cmat$; lines are
 least-squares fits.}
 \label{fig:beta_speed}
 \end{figure}
+
+\subsection{Sensitivity and Ablation}
+\label{sec:sensitivity}
+
+Every parameter of Table~\ref{tab:params} is swept, one at a time from the
+adopted configuration: the anchor weight and $\delta_{F\!R}$ here,
+$\delta_{V\!F\!G}$ in Sec.~\ref{sec:realvssynth}, the remaining three
+relaxation rates in Sec.~\ref{sec:other_deltas}, and the iteration count and
+accumulation window in Sec.~\ref{sec:window_sweep}. Table~\ref{tab:sweep}
+reports the first two on all five sequences; the rest are summarised in the
+text, since four of the six rates change the error by less than
+$0.4^\circ$/s and do not warrant a table of their own.
+
+The ablation of the anchor and the trend in $\delta_{F\!R}$ hold on all five
+sequences independently, which is what makes them worth reporting: the
+sequences differ in scene, in sensor (real against simulated), in rotation
+speed by a factor of $1.8$ and in event density by a factor of $14$. The
+remaining parameters do \emph{not} behave alike on both kinds of data, and
+Sec.~\ref{sec:realvssynth} reports where they diverge.
+
+\subsubsection{Anchor ablation}
+Setting $\delta_{\text{anchor}} = 0$ makes the anchoring
+cost~\eqref{eq:anchorcost} contribute nothing, leaving the network exactly as
+Cook and Martel specify it. This is the ablation of the fusion term, and because
+the removed cost is the only place either anchor enters, it is the same model
+for both. The error rises by a factor of $2.9$ to $6.4$ and the direction error
+from $6$--$13^\circ$ to $73$--$92^\circ$. Nothing else in the sweep comes close
+to this effect, which is the quantitative form of the argument in
+Sec.~\ref{sec:beta_exp}: the anchor is not a refinement of the method but the
+condition under which it works at all.
+
+Over the range in Table~\ref{tab:sweep} the anchor weight is monotone ---
+stronger is better, on every sequence, for \emph{both} anchors --- and $\beta$
+approaches unity as it increases. That trend does not continue indefinitely:
+raising $\delta_{\text{anchor}}$ to $0.7$ or $0.9$ is worse than $0.5$ on all
+five sequences, so this parameter, too, has an interior optimum. The two anchors
+also converge as the weight grows. At
+$\delta_{\text{anchor}} = 0.1$ they differ by up to $1.4^\circ$/s; at $0.5$ they
+agree to $0.5^\circ$/s or better on every sequence, and on the two synthetic
+ones to $0.2^\circ$/s. The better the anchor is trusted, the less it matters
+which one it is --- the clearest support we have for the claim that what the
+model requires is an absolute reference, not specifically an inertial one.
+
+\subsubsection{Kinematic weight}
+The step size $\delta_{F\!R}$ of the kinematic update tests the mechanism
+proposed in Sec.~\ref{sec:speed} directly. If the magnitude shrinkage is caused
+by that update out-weighting the anchor, then $\delta_{F\!R}$ should control it
+monotonically. It does, over essentially the whole admissible range: the update
+is a blend $\wvec \leftarrow \wvec - \delta_{F\!R}(\wvec - \wvec^\star)$, so
+$\delta_{F\!R} = 1$ would replace $\wvec$ by the flow-derived estimate outright,
+and across $0.1$ to $0.9$ the scale factor rises without exception ---
+$0.92 \rightarrow 1.07$ on \texttt{boxes}, $0.88 \rightarrow 1.06$ on
+\texttt{poster}, and $1.15 \rightarrow 1.65$ on the synthetic sequence. The
+error follows, most sharply where the shrinkage is largest: on the synthetic
+sequence it runs from $10.4$ to $31.0^\circ$/s and the direction error from
+$2.5$ to $8.1^\circ$. A parameter the constraint system treats as arbitrary
+turns out to control the dominant error.
+
+Extending the sweep below the smallest value in Table~\ref{tab:sweep} shows that
+$\delta_{F\!R}$ has an optimum, and that where it lies depends on the data. On
+the three real sequences $\delta_{F\!R} = 0.1$ is the best of every value tested:
+going down to $0.05$ and $0.02$ makes the error worse again ($9.05 \rightarrow
+9.34 \rightarrow 9.60^\circ$/s on \texttt{boxes}, and similarly on the other
+two). On the two synthetic sequences it keeps improving, and steeply --- $7.30
+\rightarrow 4.50 \rightarrow 2.83^\circ$/s on \texttt{bicycle}, with $\beta$
+falling to $1.03$ and the direction error to $1.5^\circ$.
+
+The split has a natural reading. Lowering $\delta_{F\!R}$ shifts authority over
+$\wvec$ from the flow field to the anchor, so the best value should depend on
+how good the anchor is. On the synthetic sequences the contrast estimate is very
+accurate and trusting it further continues to pay; on real data it is noisier,
+and past a point the flow field --- biased though it is --- carries information
+the anchor does not. The optimal balance between a model's internal constraint
+and its external reference is therefore a property of the data, not a constant
+of the method, which is worth knowing for anyone tuning it on a new sequence.
+
+\subsubsection{Real versus synthetic sequences}
+\label{sec:realvssynth}
+That split is not confined to $\delta_{F\!R}$. It appears, with the same sense,
+on every parameter that arbitrates between the flow field and the anchor, and
+it is large enough that no single configuration is best for both kinds of data.
+A coordinate sweep from Table~\ref{tab:params} over all six relaxation rates,
+at $1.0$\,s per sequence, gives on \texttt{poster\_rotation} against
+\texttt{bicycle}:
+$\delta_{V\!F\!G} = 0.03$ scores $13.16$ and $2.00^\circ$/s respectively, while
+$0.48$ scores $8.21$ and $10.83$; $\delta_{F\!R} = 0.5$ scores $8.28$ and
+$18.86$, while $0.02$ scores $12.64$ and $2.68$; $\delta_{\text{anchor}} = 0.1$
+scores $8.22$ and $18.85$, while $0.9$ scores $11.75$ and $4.52$. In every case
+the value that is best for the real sequence is close to the worst for the
+synthetic one.
+
+The direction is consistent: the synthetic sequences are best served by
+trusting contrast maximization and suppressing the network's own kinematic
+update ($\delta_{F\!R}$ small, $\delta_{\text{anchor}}$ large,
+$\delta_{V\!F\!G}$ small), and the real sequences by the reverse. Sec.~\ref{sec:baseline}
+explains why: on the synthetic sequences contrast maximization alone already
+attains $2.1^\circ$/s and the maps have almost nothing to add, whereas on the
+real ones it attains only $8.4$--$13.9^\circ$/s and the network improves on it
+by $17$--$35\%$. The configuration of Table~\ref{tab:params} is therefore a
+compromise, chosen to favour the real sequences, and the synthetic columns of
+Table~\ref{tab:main} should be read as showing what the method does when its
+anchor is already near-perfect rather than as a second independent validation.
+The regularisers of Sec.~\ref{sec:regularisers} divide along the same line:
+$\delta_{\text{curl}}$ helps the real sequences and harms the synthetic ones,
+$\delta_{\text{shrink}I}$ the reverse.
+
+\subsubsection{Remaining relaxation rates}
+\label{sec:other_deltas}
+A coordinate sweep from Table~\ref{tab:params} over the parameters not covered
+above --- $\delta_{I\!G}$, $\delta_{G\!I}$ and $\delta_{R\!F}$ --- is reported
+here for completeness, and because two of the three turn out not to matter.
+Values are the mean over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
+\texttt{bicycle} at $1.0$\,s, so they are not directly comparable with the
+$1.5$\,s figures of Table~\ref{tab:main}; only the trend within each sweep is
+read here.
+
+$\delta_{I\!G}$, the rate at which $\Gmap$ is blended towards $\nabla\Imap$,
+moves the error by $0.17^\circ$/s across a thirteen-fold change
+($9.04$ at $0.03$, $8.87$ at $0.40$). $\delta_{G\!I}$, the Poisson step,
+moves it by $0.08^\circ$/s across a ten-fold change ($8.99$ at $0.02$, $8.92$
+at $0.20$). Neither is worth tuning for the angular velocity, and the reason
+is the same in both cases: they govern the exchange between $\Imap$ and
+$\Gmap$, and $\wvec$ sees that exchange only at second hand, through the flow
+constraint. Their effect on the \emph{reconstruction} is not negligible ---
+raising $\delta_{G\!I}$ from $0.02$ to $0.20$ lowers the curl share of $\Gmap$
+from $0.46$ to $0.35$ --- which is the same dissociation as everywhere else in
+this report, seen from the parameter side.
+
+$\delta_{R\!F}$, the rate at which $\Fmap$ is pulled towards $\Cmat\wvec$, does
+matter, and it splits the two kinds of data exactly as
+Sec.~\ref{sec:realvssynth} describes. Weakening it to $0.01$ gives the best
+result we obtain on all three real sequences ($7.69$, $10.18$, $9.92$ against
+$8.10$, $10.81$, $10.32$ at the adopted value), while strengthening it to
+$0.20$ gives the best synthetic result ($4.11$ against $6.75$) and the worst
+real ones. The reading is the one already established: $\delta_{R\!F}$ controls
+how strongly the kinematic model overrides what the events say about the flow
+field, and whether that helps depends on whether the anchor driving it is
+better than the flow field it is overriding.
+
+\subsubsection{Iterations}
+Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
+$150$ the error varies by under $0.7^\circ$/s on the real sequences and by
+$0.04^\circ$/s on the synthetic one, and a later sweep from the adopted
+configuration reproduces this ($8.87$ at $25$ against $8.96$ at $150$, averaged
+over four sequences). The $50$--$75$ of~\cite{martel2019thesis} can therefore be
+reduced threefold at no cost.
+
+\subsubsection{Accumulation window}
+\label{sec:window_sweep}
+$\Delta t$ is the one parameter on which the two quantities this report
+measures want opposite things, and a sweep over
+$\{5, 10, 20, 40\}$\,ms from the adopted configuration shows it plainly. For
+the angular velocity, longer is better across the whole range tested: the mean
+error over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
+\texttt{bicycle} is $42.6^\circ$/s at $5$\,ms, $20.6$ at $10$, $9.0$ at $20$
+and $7.7$ at $40$. Short windows fail for two compounding reasons --- fewer
+events per frame make the contrast estimate that anchors $\wvec$ noisier, and
+$\wvec = \Rmap/\Delta t$ divides whatever error remains by a smaller number.
+The degradation is not an artefact of how we score: the synthetic sequences are
+scored against the exact twist over their own frame window, with no
+differencing bracket at all, and still run from $6.8$ to $38.7$ to
+$71.9^\circ$/s as the window shrinks.
+
+For the reconstruction the ordering reverses (Sec.~\ref{sec:reconstruction}),
+so a single window cannot serve both. This report keeps $20$\,ms, the better
+choice for the quantity it evaluates numerically; Sec.~\ref{sec:image_settings}
+gives the configuration a system built for the image should use instead.
+
+\begin{table*}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Sensitivity and Ablation, All Five Sequences. \textnormal{Each block
+varies one parameter with all others held fixed, starting from the values we
+began with (\textbf{bold}) rather than from the adopted configuration of
+Table~\ref{tab:params} --- this is the sweep that led to the change, so it is
+reported from its own starting point. Left number is the mean error in
+$^\circ$/s, right is the mean direction error in degrees.
+$\delta_{\text{anchor}}=0$ removes the anchoring cost entirely, so it is the
+same model for both anchors and is listed once.}}
+\label{tab:sweep}
+\centering
+\footnotesize
+\begin{tabular}{@{}llrrrrrrrrrr@{}}
+\toprule
+& & \multicolumn{2}{c}{\texttt{boxes}} & \multicolumn{2}{c}{\texttt{poster}}
+& \multicolumn{2}{c}{\texttt{dynamic}} & \multicolumn{2}{c}{\texttt{bicycle}}
+& \multicolumn{2}{c}{\texttt{street}} \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}\cmidrule(lr){11-12}
+& & err & dir & err & dir & err & dir & err & dir & err & dir \\
+\midrule
+\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, contrast anchor}\\
+& $0$ (abl.)     & 57.2 & 79.5 & 53.3 & 73.1 & 47.0 & 91.5 & 74.5 & 79.6 & 75.6 & 82.7 \\
+& $0.1$          & 13.0 & 13.1 & 14.2 & 12.7 & 11.2 & 11.5 & 34.7 & 10.0 & 34.7 & 10.0 \\
+& $\mathbf{0.3}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
+& $0.5$          &  9.7 & 10.5 & 10.2 & 12.5 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
+\midrule
+\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, gyroscope}\\
+& $0.1$          & 11.6 &  9.5 & 13.9 & 10.8 & 10.6 & 10.1 & 34.6 &  9.7 & 34.6 &  9.7 \\
+& $\mathbf{0.3}$ &  9.0 &  9.1 & 11.5 & 11.9 &  9.6 & 11.3 & 25.3 &  5.5 & 25.4 &  5.5 \\
+& $0.5$          &  7.9 &  9.1 & 10.3 & 12.2 &  9.0 & 11.7 & 20.1 &  4.0 & 20.1 &  4.0 \\
+\midrule
+\multicolumn{12}{@{}l}{\emph{kinematic weight} $\delta_{F\!R}$}\\
+& $0.1$          &  8.9 & 10.6 & 10.6 & 12.3 &  9.8 & 12.9 & 10.4 &  2.5 & 10.2 &  2.6 \\
+& $0.3$          &  9.7 & 10.5 & 10.2 & 12.4 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
+& $\mathbf{0.5}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
+& $0.7$          & 11.1 & 10.5 & 12.4 & 12.6 & 10.4 & 11.8 & 28.8 &  7.2 & 28.7 &  7.2 \\
+& $0.9$          & 11.6 & 11.1 & 13.0 & 12.6 & 10.7 & 11.6 & 31.0 &  8.1 & 30.9 &  8.1 \\
+\midrule
+\multicolumn{12}{@{}l}{\emph{iterations per frame}}\\
+& $25$           & 10.5 & 12.2 & 10.6 & 12.3 &  9.0 & 11.0 & 25.7 &  6.1 & 25.5 &  6.1 \\
+& $50$           & 10.3 & 10.7 & 11.1 & 12.5 &  9.6 & 11.5 & 25.6 &  6.0 & 25.5 &  6.0 \\
+& $\mathbf{75}$  & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
+& $150$          & 10.9 & 10.6 & 11.6 & 12.5 & 10.4 & 12.9 & 25.7 &  6.0 & 25.5 &  6.1 \\
+\midrule
+\multicolumn{12}{@{}l}{\emph{accumulation window} $\Delta t$}\\
+& $10$\,ms          & 16.8 & 18.1 & 16.8 & 14.4 & 13.9 & 16.2 & 32.5 & 26.1 & 26.8 & 21.0 \\
+& $\mathbf{20}$\,ms & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
+& $50$\,ms          & 18.4 &  9.2 & 18.3 & 11.8 & 15.6 & 11.0 & 34.6 &  3.5 & 34.4 &  3.5 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\section{Experiments on Intensity Reconstruction}
+\label{sec:recon_experiments}
+
+Besides $\wvec$, the network infers $\Imap$, $\Gmap$ and $\Fmap$, which the
+angular-velocity metrics do not capture. Figure~\ref{fig:maps} shows them for
+the \texttt{CMax-anchor} runs of Table~\ref{tab:main} on all five sequences. On the real sequences the intensity
+map is recovered well enough for the scene to be recognised although $\Imap$ is
+never observed, and the gradient map concentrates on scene edges. On the two
+synthetic sequences the scene is recognisable but overlaid by a diagonal
+ripple, the anchored reconstruction that Sec.~\ref{sec:anchor_image}
+examines. In every case the flow field varies smoothly across the image as a
+pure rotation requires. Appendix~\ref{app:maps} repeats the same frames for the
+other four models. This is also the evidence for the caveat attached to
+\texttt{dynamic\_rotation} in Sec.~\ref{sec:protocol}: the reconstruction there
+is no worse than on the static sequences even though the scene contains a
+person, which is why we report the sequence rather than exclude it.
+
+The reconstruction is not, however, uniform along a track, and the figure shows
+favourable moments. Every row is the last frame of its track except
+\texttt{poster}, whose last frames are the tail of an excursion of the kind
+described next (frames $50$--$72$); it is shown at frame $44$, the frame of highest $|r|$ on that
+track ($0.75$ against a track mean of $0.19$), for \texttt{CMax-anchor} and for
+the mean over all five models alike. Following $\Imap$ frame by frame on the
+anchored model, its
+standard deviation varies between $0.03$ and $1.59$ over the $1.5$\,s of
+\texttt{poster}, with the excursions concentrated at the peaks of the rotation;
+the same network without an anchor stays between $0.02$ and $0.05$ throughout.
+During those excursions the map loses its structure and the gradient map reaches
+the bound of Sec.~\ref{sec:implementation}. The angular velocity is unaffected
+--- the errors of Sec.~\ref{sec:experiments} are computed over the whole track, excursions
+included --- but the visual interpretation and the quantity we score are not
+equally reliable at all times, and only the latter has been measured
+systematically.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=\textwidth]{fig_maps}
+\caption{Jointly inferred quantities for all five sequences, from the
+\texttt{CMax-anchor} runs of Table~\ref{tab:main} (parameters of
+Table~\ref{tab:params}, lens distortion in $\Cmat$): the final maps after
+$75$ frames ($1.5$\,s), except \texttt{poster}, shown at frame $44$ from a run
+stopped there, which reproduces that frame of the Table~\ref{tab:main} run
+exactly.
+Two intensity columns are shown because they differ and only one of them
+is scored: $\Imap$ (in-loop) is the map the network carries, while
+$\Imap$ (read-out) is~\eqref{eq:poisson_exact} applied to the same
+$\Gmap$, which is what the $|r|$ column of Table~\ref{tab:main} measures. Only $\Vmap$ is observed; $\Imap$, $\Gmap$ and $\Fmap$
+are inferred. Gradient and flow share one direction code, the hue of the wheel
+above the gradient column; magnitude is brightness for $\Gmap$ and saturation
+for $\Fmap$. The middle row is the \texttt{dynamic\_rotation} segment of
+Sec.~\ref{sec:protocol}, in which a person is present in the scene but seated.}
+\label{fig:maps}
+\end{figure*}
 
 \subsection{Convergence Within a Frame}
 \label{sec:converge}
@@ -1580,7 +1861,7 @@ scheme instead diverges, is in Appendix~\ref{app:converge}.}
 \label{fig:converge}
 \end{figure*}
 
-\subsection{Reconstruction Quality}
+\subsection{Factors Affecting the Reconstruction}
 \label{sec:reconstruction}
 
 The intensity map is the one inferred quantity we have so far judged only by
@@ -1590,6 +1871,7 @@ $\Imap$ was closer to a relief map of the scene edges. This section identifies
 what that depends on. Three factors turn out to matter, and none of them is the
 angular velocity.
 
+\subsubsection{Reconstruction metric}
 We score $\Imap$ by the magnitude $|r|$ of the Pearson correlation between the
 reconstruction and the logarithm of the APS frame nearest the end of the track,
 over the interior $80\%$ of the image. The absolute correlation is used because
@@ -1611,7 +1893,7 @@ This is a comparison between reconstructions, not an absolute quality measure:
 the APS differs in exposure and is offset in time, so the attainable $|r|$ is
 well below unity even for a good map.
 
-\subsubsection{How much of $\Gmap$ is an image at all}
+\subsubsection{Integrability of the gradient map}
 \label{sec:curl}
 One quantity explains most of what follows, so we introduce it first. Recovering
 $\Imap$ from $\Gmap$ presupposes that $\Gmap$ \emph{is} the gradient of
@@ -1654,7 +1936,7 @@ out of the gradient subspace by the flow constraint relative to its own
 magnitude, and we use it below only to compare reconstructions at a fixed
 window, not across windows.
 
-\subsubsection{The accumulation window}
+\subsubsection{Accumulation window}
 $\Vmap$ is formed by binning events over $\Delta t$, during which the scene
 moves. At the $20$\,ms used everywhere else in this report, the image travels
 $3.4$\,px per window on the real sequences and $5.0$\,px on the synthetic ones
@@ -1686,7 +1968,7 @@ error to $42.6$ (Sec.~\ref{sec:sensitivity}). The two requirements are opposed
 here rather than merely uncorrelated, and Sec.~\ref{sec:sensitivity} returns to
 the choice this forces.
 
-\subsubsection{The intensity update}
+\subsubsection{Intensity update}
 Given the same $\Gmap$, solving the Poisson equation
 exactly~\eqref{eq:poisson_exact} instead of taking one gradient
 step~\eqref{eq:cook_poisson} recovers the low frequencies the step cannot reach
@@ -1727,16 +2009,6 @@ $\lvert k\rvert^{-2}$, and the periodic transform's wrap artefact happens to
 suppress part of it. The cosine transform integrates that error faithfully,
 which is correct and worse. We report the Fourier read-out.
 
-\subsubsection{The anchor}
-The third factor is the one already visible in Sec.~\ref{sec:mainresults}: the
-external anchor, which is what makes the angular velocity usable at all,
-degrades $\Imap$. With the anchor the standard deviation of $\Imap$ excurses
-between $0.03$ and $1.59$ across a track of \texttt{poster}; without it the same
-network stays between $0.02$ and $0.05$. The anchor makes the system
-inconsistent --- it forces $\wvec$, hence $\Fmap$, to a value the flow
-constraint would not have chosen --- and $\Imap$ absorbs the disagreement.
-
-\subsubsection{Why none of this shows up in $\wvec$}
 Across the three intensity updates, on the same $0.2$\,s of \texttt{poster},
 the angular-velocity error is $10.98$, $10.96$ and $10.98$\,$^\circ$/s. A
 change that raises the low-frequency share of the reconstruction by a factor
@@ -1749,8 +2021,18 @@ produce --- an angular velocity and a picture --- are not improved by the same
 choices, and a configuration tuned for one should not be assumed good for the
 other.
 
-Across models the dissociation is sharper still: the two quantities are not
-merely uncorrelated but opposed. Figure~\ref{fig:dissociation} shows the same
+\subsection{Anchoring and Image Quality}
+\label{sec:anchor_image}
+The third factor is the one already visible in Sec.~\ref{sec:mainresults}: the
+external anchor, which is what makes the angular velocity usable at all,
+degrades $\Imap$. With the anchor the standard deviation of $\Imap$ excurses
+between $0.03$ and $1.59$ across a track of \texttt{poster}; without it the same
+network stays between $0.02$ and $0.05$. The anchor makes the system
+inconsistent --- it forces $\wvec$, hence $\Fmap$, to a value the flow
+constraint would not have chosen --- and $\Imap$ absorbs the disagreement.
+
+Across models the picture and the angular velocity are not merely
+uncorrelated but opposed. Figure~\ref{fig:dissociation} shows the same
 final frame of \texttt{boxes}, \texttt{bicycle} and \texttt{street}
 reconstructed by the unanchored network and by the two anchored ones. Without
 an anchor $|r|$ is $0.63$, $0.60$ and $0.56$ --- the synthetic scenes legible
@@ -1763,7 +2045,7 @@ unanchored and anchored pictures are level ($0.36$ against $0.29$--$0.35$).
 
 The anchor is therefore what makes $\wvec$ usable, and it costs the picture. It
 forces $\wvec$, hence $\Fmap$, to a value the flow constraint would not have
-chosen, and $\Imap$ absorbs the disagreement (Sec.~\ref{sec:reconstruction}).
+chosen, and $\Imap$ absorbs the disagreement.
 The unanchored network gets the picture wrong only in a way the data cannot
 detect: its $\Imap$ inverts whenever its $\wvec$ points away from the true one
 (Appendix~\ref{app:maps}), which is the sign freedom $|r|$ is built to ignore.
@@ -1823,7 +2105,9 @@ image, at the frame shown.}
 \label{fig:recon}
 \end{figure}
 
-\subsubsection{Regularising the maps}
+\subsection{Regularisation and Image-Optimised Configuration}
+
+\subsubsection{Regularisation of the maps}
 \label{sec:regularisers}
 
 Neither source regularises $\Gmap$, and the inferred maps show the consequence:
@@ -2009,7 +2293,7 @@ Sequence & Model & none & curl & none & curl \\
 \end{tabular}
 \end{table}
 
-\subsubsection{Configuring for the image}
+\subsubsection{Image-optimised configuration}
 \label{sec:image_settings}
 Every number above was measured at the configuration of
 Table~\ref{tab:params}, which was chosen for $\wvec$ alone
@@ -2089,285 +2373,6 @@ angular-velocity error in $^\circ$/s.}
 \end{figure}
 
 
-\subsection{Handling Lens Distortion}
-\label{sec:distortion}
-
-The DAVIS240C lens is appreciably distorted ($k_1 = -0.37$), and
-Sec.~\ref{sec:implementation} described two ways of accounting for it. Both are
-correct as geometry; they differ in where the correction is applied, and that
-turns out to matter for a reason unrelated to the geometry.
-
-\subsubsection{The two routes describe the same lens}
-Before comparing accuracy we verified that the distortion-aware kinematic
-matrix~\eqref{eq:cdist}, which is our own derivation rather than something taken
-from either source, encodes the lens correctly. Because the network's scale
-ambiguity would confound any end-to-end comparison, the check is made with the
-network removed, using contrast maximization as an independent estimator: one
-path undistorts the events and warps them under a pinhole model, the other keeps
-the events raw and carries the lens through the warp, as $\Cmat$ does. Three
-checks agree. The forward distortion model matches \texttt{cv2.projectPoints} to
-$2.8\times10^{-14}$\,px; undistortion and distortion compose to the identity to
-$10^{-8}$\,px; and --- the decisive one --- at a fixed rotation, warping the
-distortion-aware way and then undistorting the result lands on the pinhole warp
-to $0.043$\,px, well below one pixel. The two routes are the same map.
-
-\subsubsection{Why one is nevertheless better}
-The difference is one of sampling, not geometry, and it is visible directly in
-the input. \texttt{cv2.undistortPoints} returns sub-pixel float coordinates,
-which the accumulation of~\eqref{eq:eventframe} must then bin onto the integer
-pixel grid. Rectification compresses the periphery, so neighbouring events are
-rounded onto the same pixel while others are left empty, and the resulting event
-frame carries a concentric moir\'e pattern that is not present in the data
-(Fig.~\ref{fig:distortion}). Over the same events, undistorting first reduces
-the number of occupied pixels from $43.2$k to $33.7$k: roughly a fifth of the
-spatial support of $\Vmap$ is lost to rounding. The spatial gradient $\Gmap$ is
-computed by differencing neighbouring pixels of $\Imap$, so an artefact at
-exactly that scale is the worst kind for this model.
-
-Carrying the lens in $\Cmat$ avoids the resampling entirely: the events stay on
-the pixels that produced them, and the distortion is applied to the
-\emph{prediction} instead, where it costs nothing. We therefore use the
-distortion-aware $\Cmat$ for every result in this report.
-
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\columnwidth]{fig_distortion}
-\caption{Event frames over the same $200$\,ms of \texttt{poster}. Left: raw
-events, with the lens carried by $\Cmat$~\eqref{eq:cdist}. Middle: the same
-events after \texttt{cv2.undistortPoints}, showing the concentric moir\'e left
-by re-quantising sub-pixel coordinates onto the pixel grid. Right: detail of the
-periphery, where rectification compresses hardest and the artefact is strongest.
-The pattern is a sampling artefact, not scene structure. The frames are the
-first $200$\,ms of the \texttt{poster} segment of Table~\ref{tab:datasets},
-binned directly from the events; no network is run.}
-\label{fig:distortion}
-\end{figure}
-
-\subsection{Sensitivity Analysis and Ablation}
-\label{sec:sensitivity}
-
-Every parameter of Table~\ref{tab:params} is swept, one at a time from the
-adopted configuration: the anchor weight and $\delta_{F\!R}$ here,
-$\delta_{V\!F\!G}$ in Sec.~\ref{sec:realvssynth}, the remaining three
-relaxation rates in Sec.~\ref{sec:other_deltas}, and the iteration count and
-accumulation window in Sec.~\ref{sec:window_sweep}. Table~\ref{tab:sweep}
-reports the first two on all five sequences; the rest are summarised in the
-text, since four of the six rates change the error by less than
-$0.4^\circ$/s and do not warrant a table of their own.
-
-The ablation of the anchor and the trend in $\delta_{F\!R}$ hold on all five
-sequences independently, which is what makes them worth reporting: the
-sequences differ in scene, in sensor (real against simulated), in rotation
-speed by a factor of three and in event density by a factor of eight. The
-remaining parameters do \emph{not} behave alike on both kinds of data, and
-Sec.~\ref{sec:realvssynth} reports where they diverge.
-
-\subsubsection{Removing the anchor}
-Setting $\delta_{\text{anchor}} = 0$ makes the anchoring
-cost~\eqref{eq:anchorcost} contribute nothing, leaving the network exactly as
-Cook and Martel specify it. This is the ablation of the fusion term, and because
-the removed cost is the only place either anchor enters, it is the same model
-for both. The error rises by a factor of $2.9$ to $6.4$ and the direction error
-from $6$--$13^\circ$ to $73$--$92^\circ$. Nothing else in the sweep comes close
-to this effect, which is the quantitative form of the argument in
-Sec.~\ref{sec:beta_exp}: the anchor is not a refinement of the method but the
-condition under which it works at all.
-
-Over the range in Table~\ref{tab:sweep} the anchor weight is monotone ---
-stronger is better, on every sequence, for \emph{both} anchors --- and $\beta$
-approaches unity as it increases. That trend does not continue indefinitely:
-raising $\delta_{\text{anchor}}$ to $0.7$ or $0.9$ is worse than $0.5$ on all
-five sequences, so this parameter, too, has an interior optimum. The two anchors
-also converge as the weight grows. At
-$\delta_{\text{anchor}} = 0.1$ they differ by up to $1.4^\circ$/s; at $0.5$ they
-agree to $0.5^\circ$/s or better on every sequence, and on the two synthetic
-ones to $0.2^\circ$/s. The better the anchor is trusted, the less it matters
-which one it is --- the clearest support we have for the claim that what the
-model requires is an absolute reference, not specifically an inertial one.
-
-\subsubsection{The kinematic weight}
-The step size $\delta_{F\!R}$ of the kinematic update tests the mechanism
-proposed in Sec.~\ref{sec:speed} directly. If the magnitude shrinkage is caused
-by that update out-weighting the anchor, then $\delta_{F\!R}$ should control it
-monotonically. It does, over essentially the whole admissible range: the update
-is a blend $\wvec \leftarrow \wvec - \delta_{F\!R}(\wvec - \wvec^\star)$, so
-$\delta_{F\!R} = 1$ would replace $\wvec$ by the flow-derived estimate outright,
-and across $0.1$ to $0.9$ the scale factor rises without exception ---
-$0.92 \rightarrow 1.07$ on \texttt{boxes}, $0.88 \rightarrow 1.06$ on
-\texttt{poster}, and $1.15 \rightarrow 1.65$ on the synthetic sequence. The
-error follows, most sharply where the shrinkage is largest: on the synthetic
-sequence it runs from $10.4$ to $31.0^\circ$/s and the direction error from
-$2.5$ to $8.1^\circ$. A parameter the constraint system treats as arbitrary
-turns out to control the dominant error.
-
-Extending the sweep below the smallest value in Table~\ref{tab:sweep} shows that
-$\delta_{F\!R}$ has an optimum, and that where it lies depends on the data. On
-the three real sequences $\delta_{F\!R} = 0.1$ is the best of every value tested:
-going down to $0.05$ and $0.02$ makes the error worse again ($9.05 \rightarrow
-9.34 \rightarrow 9.60^\circ$/s on \texttt{boxes}, and similarly on the other
-two). On the two synthetic sequences it keeps improving, and steeply --- $7.30
-\rightarrow 4.50 \rightarrow 2.83^\circ$/s on \texttt{bicycle}, with $\beta$
-falling to $1.03$ and the direction error to $1.5^\circ$.
-
-The split has a natural reading. Lowering $\delta_{F\!R}$ shifts authority over
-$\wvec$ from the flow field to the anchor, so the best value should depend on
-how good the anchor is. On the synthetic sequences the contrast estimate is very
-accurate and trusting it further continues to pay; on real data it is noisier,
-and past a point the flow field --- biased though it is --- carries information
-the anchor does not. The optimal balance between a model's internal constraint
-and its external reference is therefore a property of the data, not a constant
-of the method, which is worth knowing for anyone tuning it on a new sequence.
-
-\subsubsection{Real and synthetic sequences want opposite settings}
-\label{sec:realvssynth}
-That split is not confined to $\delta_{F\!R}$. It appears, with the same sense,
-on every parameter that arbitrates between the flow field and the anchor, and
-it is large enough that no single configuration is best for both kinds of data.
-A coordinate sweep from Table~\ref{tab:params} over all six relaxation rates,
-at $1.0$\,s per sequence, gives on \texttt{poster\_rotation} against
-\texttt{bicycle}:
-$\delta_{V\!F\!G} = 0.03$ scores $13.16$ and $2.00^\circ$/s respectively, while
-$0.48$ scores $8.21$ and $10.83$; $\delta_{F\!R} = 0.5$ scores $8.28$ and
-$18.86$, while $0.02$ scores $12.64$ and $2.68$; $\delta_{\text{anchor}} = 0.1$
-scores $8.22$ and $18.85$, while $0.9$ scores $11.75$ and $4.52$. In every case
-the value that is best for the real sequence is close to the worst for the
-synthetic one.
-
-The direction is consistent: the synthetic sequences are best served by
-trusting contrast maximization and suppressing the network's own kinematic
-update ($\delta_{F\!R}$ small, $\delta_{\text{anchor}}$ large,
-$\delta_{V\!F\!G}$ small), and the real sequences by the reverse. Sec.~\ref{sec:baseline}
-explains why: on the synthetic sequences contrast maximization alone already
-attains $2.1^\circ$/s and the maps have almost nothing to add, whereas on the
-real ones it attains only $8.4$--$13.9^\circ$/s and the network improves on it
-by $17$--$35\%$. The configuration of Table~\ref{tab:params} is therefore a
-compromise, chosen to favour the real sequences, and the synthetic columns of
-Table~\ref{tab:main} should be read as showing what the method does when its
-anchor is already near-perfect rather than as a second independent validation.
-The regularisers of Sec.~\ref{sec:regularisers} divide along the same line:
-$\delta_{\text{curl}}$ helps the real sequences and harms the synthetic ones,
-$\delta_{\text{shrink}I}$ the reverse.
-
-\subsubsection{The three remaining relaxation rates}
-\label{sec:other_deltas}
-A coordinate sweep from Table~\ref{tab:params} over the parameters not covered
-above --- $\delta_{I\!G}$, $\delta_{G\!I}$ and $\delta_{R\!F}$ --- is reported
-here for completeness, and because two of the three turn out not to matter.
-Values are the mean over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
-\texttt{bicycle} at $1.0$\,s, so they are not directly comparable with the
-$1.5$\,s figures of Table~\ref{tab:main}; only the trend within each sweep is
-read here.
-
-$\delta_{I\!G}$, the rate at which $\Gmap$ is blended towards $\nabla\Imap$,
-moves the error by $0.17^\circ$/s across a thirteen-fold change
-($9.04$ at $0.03$, $8.87$ at $0.40$). $\delta_{G\!I}$, the Poisson step,
-moves it by $0.08^\circ$/s across a ten-fold change ($8.99$ at $0.02$, $8.92$
-at $0.20$). Neither is worth tuning for the angular velocity, and the reason
-is the same in both cases: they govern the exchange between $\Imap$ and
-$\Gmap$, and $\wvec$ sees that exchange only at second hand, through the flow
-constraint. Their effect on the \emph{reconstruction} is not negligible ---
-raising $\delta_{G\!I}$ from $0.02$ to $0.20$ lowers the curl share of $\Gmap$
-from $0.46$ to $0.35$ --- which is the same dissociation as everywhere else in
-this report, seen from the parameter side.
-
-$\delta_{R\!F}$, the rate at which $\Fmap$ is pulled towards $\Cmat\wvec$, does
-matter, and it splits the two kinds of data exactly as
-Sec.~\ref{sec:realvssynth} describes. Weakening it to $0.01$ gives the best
-result we obtain on all three real sequences ($7.69$, $10.18$, $9.92$ against
-$8.10$, $10.81$, $10.32$ at the adopted value), while strengthening it to
-$0.20$ gives the best synthetic result ($4.11$ against $6.75$) and the worst
-real ones. The reading is the one already established: $\delta_{R\!F}$ controls
-how strongly the kinematic model overrides what the events say about the flow
-field, and whether that helps depends on whether the anchor driving it is
-better than the flow field it is overriding.
-
-\subsubsection{Iterations}
-Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
-$150$ the error varies by under $0.7^\circ$/s on the real sequences and by
-$0.04^\circ$/s on the synthetic one, and a later sweep from the adopted
-configuration reproduces this ($8.87$ at $25$ against $8.96$ at $150$, averaged
-over four sequences). The $50$--$75$ of~\cite{martel2019thesis} can therefore be
-reduced threefold at no cost.
-
-\subsubsection{The accumulation window}
-\label{sec:window_sweep}
-$\Delta t$ is the one parameter on which the two quantities this report
-measures want opposite things, and a sweep over
-$\{5, 10, 20, 40\}$\,ms from the adopted configuration shows it plainly. For
-the angular velocity, longer is better across the whole range tested: the mean
-error over \texttt{boxes}, \texttt{poster}, \texttt{dynamic} and
-\texttt{bicycle} is $42.6^\circ$/s at $5$\,ms, $20.6$ at $10$, $9.0$ at $20$
-and $7.7$ at $40$. Short windows fail for two compounding reasons --- fewer
-events per frame make the contrast estimate that anchors $\wvec$ noisier, and
-$\wvec = \Rmap/\Delta t$ divides whatever error remains by a smaller number.
-The degradation is not an artefact of how we score: the synthetic sequences are
-scored against the exact twist over their own frame window, with no
-differencing bracket at all, and still run from $6.8$ to $38.7$ to
-$71.9^\circ$/s as the window shrinks.
-
-For the reconstruction the ordering reverses, for the reason given in
-Sec.~\ref{sec:reconstruction}: at $20$\,ms the scene travels $3.4$\,px within
-one window on the real sequences and $5.0$\,px on the synthetic ones, which is
-wider than the structures $\Gmap$ must resolve. Halving the window improves the
-exact read-out on all $12$ runs. A single window cannot serve both, and
-this report keeps $20$\,ms --- the better choice for the quantity it evaluates
-numerically --- while noting that a system built for image quality rather than
-for $\wvec$ should not, at least on real data (Sec.~\ref{sec:image_settings}).
-
-\begin{table*}[!t]
-\renewcommand{\arraystretch}{1.15}
-\caption{Sensitivity and Ablation, All Five Sequences. \textnormal{Each block
-varies one parameter with all others held fixed, starting from the values we
-began with (\textbf{bold}) rather than from the adopted configuration of
-Table~\ref{tab:params} --- this is the sweep that led to the change, so it is
-reported from its own starting point. Left number is the mean error in
-$^\circ$/s, right is the mean direction error in degrees.
-$\delta_{\text{anchor}}=0$ removes the anchoring cost entirely, so it is the
-same model for both anchors and is listed once.}}
-\label{tab:sweep}
-\centering
-\footnotesize
-\begin{tabular}{@{}llrrrrrrrrrr@{}}
-\toprule
-& & \multicolumn{2}{c}{\texttt{boxes}} & \multicolumn{2}{c}{\texttt{poster}}
-& \multicolumn{2}{c}{\texttt{dynamic}} & \multicolumn{2}{c}{\texttt{bicycle}}
-& \multicolumn{2}{c}{\texttt{street}} \\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}\cmidrule(lr){11-12}
-& & err & dir & err & dir & err & dir & err & dir & err & dir \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, contrast anchor}\\
-& $0$ (abl.)     & 57.2 & 79.5 & 53.3 & 73.1 & 47.0 & 91.5 & 74.5 & 79.6 & 75.6 & 82.7 \\
-& $0.1$          & 13.0 & 13.1 & 14.2 & 12.7 & 11.2 & 11.5 & 34.7 & 10.0 & 34.7 & 10.0 \\
-& $\mathbf{0.3}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.5$          &  9.7 & 10.5 & 10.2 & 12.5 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, gyroscope}\\
-& $0.1$          & 11.6 &  9.5 & 13.9 & 10.8 & 10.6 & 10.1 & 34.6 &  9.7 & 34.6 &  9.7 \\
-& $\mathbf{0.3}$ &  9.0 &  9.1 & 11.5 & 11.9 &  9.6 & 11.3 & 25.3 &  5.5 & 25.4 &  5.5 \\
-& $0.5$          &  7.9 &  9.1 & 10.3 & 12.2 &  9.0 & 11.7 & 20.1 &  4.0 & 20.1 &  4.0 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{kinematic weight} $\delta_{F\!R}$}\\
-& $0.1$          &  8.9 & 10.6 & 10.6 & 12.3 &  9.8 & 12.9 & 10.4 &  2.5 & 10.2 &  2.6 \\
-& $0.3$          &  9.7 & 10.5 & 10.2 & 12.4 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
-& $\mathbf{0.5}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.7$          & 11.1 & 10.5 & 12.4 & 12.6 & 10.4 & 11.8 & 28.8 &  7.2 & 28.7 &  7.2 \\
-& $0.9$          & 11.6 & 11.1 & 13.0 & 12.6 & 10.7 & 11.6 & 31.0 &  8.1 & 30.9 &  8.1 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{iterations per frame}}\\
-& $25$           & 10.5 & 12.2 & 10.6 & 12.3 &  9.0 & 11.0 & 25.7 &  6.1 & 25.5 &  6.1 \\
-& $50$           & 10.3 & 10.7 & 11.1 & 12.5 &  9.6 & 11.5 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $\mathbf{75}$  & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $150$          & 10.9 & 10.6 & 11.6 & 12.5 & 10.4 & 12.9 & 25.7 &  6.0 & 25.5 &  6.1 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{accumulation window} $\Delta t$}\\
-& $10$\,ms          & 16.8 & 18.1 & 16.8 & 14.4 & 13.9 & 16.2 & 32.5 & 26.1 & 26.8 & 21.0 \\
-& $\mathbf{20}$\,ms & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $50$\,ms          & 18.4 &  9.2 & 18.3 & 11.8 & 15.6 & 11.0 & 34.6 &  3.5 & 34.4 &  3.5 \\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-
 \section{Conclusion}
 \label{sec:conclusion}
 
@@ -2410,7 +2415,7 @@ side systematically underestimates: it appears only when that cost updates
 $\wvec$, and its step size controls it monotonically across the whole admissible
 range. Two candidate explanations were tested and rejected --- value clipping,
 which fewer than $0.04\%$ of pixels reach, and scene content, which two
-synthetic sequences sharing a trajectory but differing threefold in event
+synthetic sequences sharing a trajectory but differing fourfold in event
 density leave unchanged. Why both synthetic sequences sit well above the trend
 fitted to the real ones remains open.
 
@@ -2555,7 +2560,7 @@ no scene is left, and the flow is a nearly uniform field in a direction none of
 the other models produces. The two unanchored models differ in two ways. On the synthetic
 sequences \texttt{thesis} gives the cleanest reconstruction of any model,
 without the ripple, which is the dissociation of
-Sec.~\ref{sec:reconstruction}, whereas \texttt{cook} has diverged there to an
+Sec.~\ref{sec:anchor_image}, whereas \texttt{cook} has diverged there to an
 almost flat field ($\beta = 181$ and $338$ in Table~\ref{tab:main}). On the
 real sequences both unanchored models produce recognisable images, but not
 always with the right polarity. Their signed correlation with the APS flips
