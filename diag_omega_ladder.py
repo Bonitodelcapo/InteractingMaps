@@ -23,12 +23,11 @@ import csv
 import glob
 import os
 import numpy as np
-import yaml as _yaml
 
 import config
 from config import get_dataset_paths
 from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_omega_gt, omega_gt_at
-from interacting_maps.data_loader import EventFrameSequence
+from interacting_maps.data_loader import EventFrameSequence, CameraCalibration
 from interacting_maps.network_dissertation import InteractingMapsThesis, Cost_OFCE, Quantity
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
 from interacting_maps.metrics import compute_metrics, curl_share, flow_epe
@@ -61,34 +60,17 @@ def cap_to_coverage(seg, om):
 
 
 def load_calibration(paths):
-    """Network intrinsics + distortion, preferring a ROS camera_info *.yaml in
-    the dataset dir (e.g. DAVIS240C-synthetic.yaml) over calib.txt.
+    """Network intrinsics + distortion from calib.txt — the converter writes it
+    from the bag's own CameraInfo, i.e. what the simulator rendered with. (The
+    ECRot DAVIS240C-synthetic.yaml has a wrong cy=120; the bag says 90.)
 
-    Returns {fx, fy, cx, cy, dist_coeffs, H, W, src}. dist_coeffs is None when
-    all coefficients are zero (clean pinhole C), else the [k1,k2,p1,p2,k3] array
-    in the same order calib.txt / build_kinematic_matrix use.
+    Returns {fx, fy, cx, cy, dist_coeffs, src}. dist_coeffs is None when all
+    coefficients are zero (clean pinhole C), else the [k1,k2,p1,p2,k3] array.
     """
-    yamls = sorted(glob.glob(os.path.join(paths['data_dir'], '*.yaml')))
-    if yamls:
-        with open(yamls[0]) as f:
-            y = _yaml.safe_load(f)
-        K = y['camera_matrix']['data']           # row-major 3x3
-        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
-        dist = np.asarray(
-            y.get('distortion_coefficients', {}).get('data', []),
-            dtype=np.float64)
-        H, W = int(y['image_height']), int(y['image_width'])
-        src = os.path.basename(yamls[0])
-    else:
-        from interacting_maps.data_loader import CameraCalibration
-        c = CameraCalibration(paths['calib'])
-        fx, fy, cx, cy = c.fx, c.fy, c.cx, c.cy
-        dist = np.asarray(getattr(c, 'dist', []), dtype=np.float64)
-        H = W = None
-        src = 'calib.txt'
-    dist_coeffs = None if dist.size == 0 or not np.any(dist) else dist
-    return {'fx': fx, 'fy': fy, 'cx': cx, 'cy': cy,
-            'dist_coeffs': dist_coeffs, 'H': H, 'W': W, 'src': src}
+    c = CameraCalibration(paths['calib'])
+    dist_coeffs = c.dist if np.any(c.dist) else None
+    return {'fx': c.fx, 'fy': c.fy, 'cx': c.cx, 'cy': c.cy,
+            'dist_coeffs': dist_coeffs, 'src': 'calib.txt'}
 
 
 def prep_segment_context(seg):
@@ -109,7 +91,7 @@ def prep_segment_context(seg):
     if n < 2:
         print(f"[skip] {seg['name']}: too few frames after coverage cap")
         return None
-    sensor = (calib['H'], calib['W']) if calib['H'] else seg['sensor_size']
+    sensor = seg['sensor_size']
     seq = EventFrameSequence(
         paths['events'], paths['calib'],
         frame_duration=seg['dt'], t_start=seg['t_start'],
