@@ -260,3 +260,12 @@ __marimo__/
 
 # run_all.sh logs
 report/logs/
+
+# Cluster outputs: generated on the cluster, downloaded as a zip, never committed
+report/experiments/
+report/figures/
+EcRot_*/
+/diag_*.png
+/diag_*.csv
+/diag_*.npz
+/diag_maps_*/
