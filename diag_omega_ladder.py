@@ -696,7 +696,7 @@ def plot_maps(seg_name):
 
 # %%
 # --mode ofce: is the striped I an OFCE step instability? One variant per call
-# (one SLURM array task); rows 1c_R (omega exact, isolates the OFCE step) and 0.
+# (one report/run_all.sh job); rows 1c_R (omega exact, isolates the OFCE step) and 0.
 OFCE_DIR = 'diag_ofce'
 OFCE_VARIANTS = {
     'E0_base':      {},
@@ -823,9 +823,9 @@ def make_all_plots():
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--mode', default='run',
-                    choices=['setup', 'run', 'maps', 'ofce', 'plots'])
+                    choices=['setup', 'run', 'maps', 'ofce', 'ofce_summary', 'plots'])
     ap.add_argument('--variant', default='all', choices=list(OFCE_VARIANTS) + ['all'],
-                    help='--mode ofce: one OFCE_VARIANTS entry (one SLURM array task)')
+                    help='--mode ofce: one OFCE_VARIANTS entry (one report/run_all.sh job)')
     ap.add_argument('--limit', type=int, default=None,
                     help='cap frames per segment (fast local smoke test)')
     ap.add_argument('--segment', default='city_short',
@@ -845,8 +845,10 @@ if __name__ == '__main__':
         matplotlib.use('Agg')
         for name in (OFCE_VARIANTS if args.variant == 'all' else [args.variant]):
             run_ofce_variant(name, args.segment)
-        if args.variant == 'all':            # array tasks: summary via --mode plots
+        if args.variant == 'all':            # per-variant jobs: --mode ofce_summary
             ofce_summary()
+    elif args.mode == 'ofce_summary':
+        ofce_summary()
     elif args.mode == 'plots':
         import matplotlib
         matplotlib.use('Agg')                # headless (cluster); notebooks stay inline
