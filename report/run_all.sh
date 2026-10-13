@@ -9,7 +9,8 @@
 # successful run gives the same numbers (the runs are deterministic), so it is
 # skipped. Its fingerprint = sha1(command + hash of the code it depends on +
 # data signature) is stored in report/.stamps/<job> after success; a job whose
-# --out file is gone reruns. Rerun one job: rm report/.stamps/<job>.
+# --out file (report/experiments/ or experiments/) is gone reruns. Rerun one
+# job: rm report/.stamps/<job>.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -97,7 +98,7 @@ run_one() {   # "name|group|command" -> $LOG/name.log; skips if the stamp matche
   fp=$(printf '%s\n%s\n%s\n' "$cmd" "${!hv}" "$HASH_DATA" | sha1sum | cut -c1-40)
   out=$(sed -n 's/.*--out \([^ ]*\).*/\1/p' <<< "$cmd")
   if [ -z "$FORCE" ] && [ "$(cat "$STAMPS/$name" 2>/dev/null)" = "$fp" ] \
-     && { [ -z "$out" ] || [ -n "$(find report/experiments -name "$out" -print -quit 2>/dev/null)" ]; }; then
+     && { [ -z "$out" ] || [ -n "$(find report/experiments experiments -name "$out" -print -quit 2>/dev/null)" ]; }; then
     printf '[skip]      -    %s  (unchanged)\n' "$name"
     return 0
   fi
