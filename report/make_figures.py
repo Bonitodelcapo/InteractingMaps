@@ -59,8 +59,8 @@ SEGMENTS = [
     ('boxes_rotation',    'seg_B', 7.322,  'boxes'),
     ('poster_rotation',   'seg_C', 8.816,  'poster'),
     ('dynamic_rotation',  'seg_D', 1.619,  'dynamic'),
-    ('bycicle_sinthetic', 'seg_A', 1.001,  'bicycle'),
-    ('street_sinthetic',  'seg_A', 1.001,  'street'),
+    ('ecrot_bicycle', 'seg_A', 1.001,  'bicycle'),
+    ('ecrot_street',  'seg_A', 1.001,  'street'),
 ]
 
 # every segment of the two real sequences — the beta-vs-speed population

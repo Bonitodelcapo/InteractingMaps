@@ -26,8 +26,8 @@ MODELS = [(rf'\texttt{{{MODEL_STYLE[k][0]}}}', k)
 SEQS = [('boxes_rotation', r'\texttt{boxes}', []),
         ('poster_rotation', r'\texttt{poster}', []),
         ('dynamic_rotation', r'\texttt{dynamic}', ['(person)']),
-        ('bycicle_sinthetic', r'\texttt{bicycle}', ['(synthetic)']),
-        ('street_sinthetic', r'\texttt{street}', ['(synthetic)'])]
+        ('ecrot_bicycle', r'\texttt{bicycle}', ['(synthetic)']),
+        ('ecrot_street', r'\texttt{street}', ['(synthetic)'])]
 
 
 def load(patterns):

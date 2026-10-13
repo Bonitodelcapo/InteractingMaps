@@ -151,7 +151,7 @@ DATASET_SEGMENTS = {
     # Synthetic (ECRot, ESIM) — pinhole, clean steady GT. From convert_ecrot.py.
     # dt=10ms: fast rotation (~100 deg/s) => ~1 deg/frame, avoids intra-frame
     # motion blur in the reconstruction (20ms gives ~2 deg/frame and blurs).
-    'bycicle_sinthetic': [
+    'ecrot_bicycle': [
         {'id': 'seg_A', 't_start': 0.001, 'frame_duration': 0.01,
          'n_frames': 499, 'initial_R': None, 'sensor_size': (180, 240)},
     ],

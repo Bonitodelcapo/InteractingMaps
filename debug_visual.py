@@ -10,7 +10,7 @@ Produces, for one dataset/segment:
 Plus a per-axis error table.
 
 Run:
-  python debug_visual.py --dataset bycicle_sinthetic --segment seg_A \
+  python debug_visual.py --dataset ecrot_bicycle --segment seg_A \
       --models thesis_cmax,thesis_cmax_v2 --cmax_lr 5e-6 --n_frames 40
 """
 
