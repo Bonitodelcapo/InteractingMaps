@@ -64,7 +64,7 @@ SEGMENTS = [
 MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
 #: names as the report writes them, for figure titles
 DISPLAY = {'cook': 'cook', 'thesis': 'thesis (no anchor)',
-           'thesis_imu': 'IMU-anchor', 'thesis_cmax': 'CMax-anchor',
+           'thesis_imu': 'thesis+IMU', 'thesis_cmax': 'CMax-anchor',
            'thesis_cmax_v2': 'CMax-inloop'}
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 os.makedirs(OUTDIR, exist_ok=True)

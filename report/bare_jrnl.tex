@@ -628,8 +628,8 @@ iterations, before the flow constraint has built any structure. Initialising
 $\Fmap = \Cmat\wvec$ removes the problem entirely. Second, the flow-constraint
 gradient in~\eqref{eq:cook_ofce} grows cubically when $|\Fmap|$ and $|\Gmap|$ are
 both large, so it is clipped per pixel, and each quantity is clipped to a fixed
-range after every iteration. These bounds are not inert: at high rotation speed
-$\Gmap$ reaches its limit on real data, for the reason given in
+range after every iteration. These bounds are not inert: on \texttt{poster}
+$\Gmap$ reaches its limit in a third of the frames, for the reason given in
 Sec.~\ref{sec:speed}. They do not, however, affect the angular velocity ---
 widening them by a factor of twenty changes the reported error by less than
 $0.05^\circ$/s --- so they bound the maps without shaping the result we measure.
@@ -1288,7 +1288,7 @@ against differenced Vicon --- close to what the network attains --- so the real
 sequences are measured near the floor of the reference itself, and differences
 below roughly $7^\circ$/s there should not be read as differences in method.
 And the synthetic gyroscope column, at $0.11^\circ$/s, shows that anchoring
-\texttt{IMU-anchor} on those sequences is close to circular; the corresponding
+\texttt{thesis+IMU} on those sequences is close to circular; the corresponding
 entries of Table~\ref{tab:main} are reported for completeness but carry no
 evidential weight.
 
@@ -1464,23 +1464,25 @@ $\Fmap$ satisfies $\Vmap = -\Fmap\cdot\Gmap$ equally well. The two synthetic
 sequences test exactly this and refute it. They were rendered along the
 \emph{same} camera trajectory over different scenes and differ by a factor of
 four in event density, yet at matched parameters they yield
-$\beta = 1.487$ on both (the $1.5$\,s grid of Sec.~\ref{sec:sensitivity}) ---
-indistinguishable. Scene content, at least as
+$\beta = 1.485$ and $1.482$ over the same three seconds as the real segments
+--- indistinguishable. Scene content, at least as
 event density varies it, does not set the magnitude error.
 
 That leaves a difference we cannot presently explain. At
-$\|\wvec\| = 1.32$\,rad/s both synthetic sequences give $\beta \approx 1.49$
+$\|\wvec\| = 1.32$\,rad/s both synthetic sequences give $\beta \approx 1.48$
 where the trend of~\eqref{eq:betacorr} fitted to the real ones predicts
 $\approx 1.10$. Whatever distinguishes them is shared by both synthetic
 sequences and is not their scene, their event density or their rotation speed.
 We report the discrepancy rather than resolve it.
 
 We can rule out one candidate explanation. The value clipping of
-Sec.~\ref{sec:implementation} is not responsible, although it is active: the
-gradient map does reach its bound on the real sequences whenever the anchor
-drives $\wvec$ to a large value. It is nonetheless not the cause, because
-widening all three bounds by a factor of twenty changes the error by less than
-$0.05^\circ$/s and $\beta$ by less than $0.002$ on every sequence. The saturation is
+Sec.~\ref{sec:implementation} is not responsible, although it is active. At the
+parameters of Table~\ref{tab:params} only the gradient map ever reaches its
+bound, and only on \texttt{poster}: in $25$ of its $75$ frames, on $0.6\%$ of
+the pixels on average and at most $7.8\%$; $\Imap$ and $\Fmap$ never do. It is
+nonetheless not the cause, because widening all three bounds by a factor of
+twenty changes the error by less than $0.05^\circ$/s and $\beta$ by less than
+$0.002$ on every sequence. The saturation is
 therefore a consequence of the same imbalance, not its origin, and the effect is
 a property of the constraint system rather than of the safeguards around it.
 
@@ -1584,10 +1586,10 @@ is a blend $\wvec \leftarrow \wvec - \delta_{F\!R}(\wvec - \wvec^\star)$, so
 $\delta_{F\!R} = 1$ would replace $\wvec$ by the flow-derived estimate outright,
 and across $0.1$ to $0.9$ the scale factor rises without exception ---
 $0.92 \rightarrow 1.07$ on \texttt{boxes}, $0.88 \rightarrow 1.06$ on
-\texttt{poster}, and $1.15 \rightarrow 1.65$ on the synthetic sequence. The
-error follows, most sharply where the shrinkage is largest: on the synthetic
-sequence it runs from $10.4$ to $31.0^\circ$/s and the direction error from
-$2.5$ to $8.1^\circ$. A parameter the constraint system treats as arbitrary
+\texttt{poster}, and $1.15 \rightarrow 1.65$ on \texttt{bicycle}. The
+error follows, most sharply where the shrinkage is largest: on \texttt{bicycle}
+it runs from $10.4$ to $31.1^\circ$/s and the direction error from
+$2.4$ to $8.1^\circ$. A parameter the constraint system treats as arbitrary
 turns out to control the dominant error.
 
 Extending the sweep below the smallest value in Table~\ref{tab:sweep} shows that
@@ -1676,7 +1678,7 @@ better than the flow field it is overriding.
 \subsubsection{Iterations}
 Iterations per frame are essentially irrelevant beyond $25$: across $25$ to
 $150$ the error varies by at most $1.4^\circ$/s on the real sequences and
-$0.2^\circ$/s on the synthetic ones (Table~\ref{tab:sweep}), and a later sweep
+$0.1^\circ$/s on the synthetic ones (Table~\ref{tab:sweep}), and a later sweep
 from the adopted
 configuration reproduces this ($8.87$ at $25$ against $8.96$ at $150$, averaged
 over four sequences). The $50$--$75$ of~\cite{martel2019thesis} can therefore be
@@ -1725,33 +1727,33 @@ same model for both anchors and is listed once.}}
 & & err & dir & err & dir & err & dir & err & dir & err & dir \\
 \midrule
 \multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, contrast anchor}\\
-& $0$ (abl.)     & 57.2 & 79.5 & 53.3 & 73.1 & 47.0 & 91.5 & 74.5 & 79.6 & 75.6 & 82.7 \\
-& $0.1$          & 13.0 & 13.1 & 14.2 & 12.7 & 11.2 & 11.5 & 34.7 & 10.0 & 34.7 & 10.0 \\
-& $\mathbf{0.3}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.5$          &  9.7 & 10.5 & 10.2 & 12.5 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
+& $0$ (abl.) & 57.2 & 79.5 & 53.3 & 73.1 & 47.0 & 91.5 & 74.6 & 79.7 & 75.7 & 82.7 \\
+& $0.1$ & 13.0 & 13.1 & 14.2 & 12.7 & 11.2 & 11.5 & 34.8 &  9.9 & 34.7 & 10.0 \\
+& $\mathbf{0.3}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.7 &  5.9 & 25.6 &  6.0 \\
+& $0.5$ & 9.7 & 10.5 & 10.2 & 12.5 & 9.5 & 12.5 & 20.5 &  4.4 & 20.4 &  4.5 \\
 \midrule
 \multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, gyroscope}\\
-& $0.1$          & 11.6 &  9.5 & 13.9 & 10.8 & 10.6 & 10.1 & 34.6 &  9.7 & 34.6 &  9.7 \\
-& $\mathbf{0.3}$ &  9.0 &  9.1 & 11.5 & 11.9 &  9.6 & 11.3 & 25.3 &  5.5 & 25.4 &  5.5 \\
-& $0.5$          &  7.9 &  9.1 & 10.3 & 12.2 &  9.0 & 11.7 & 20.1 &  4.0 & 20.1 &  4.0 \\
+& $0.1$ & 11.6 & 9.5 & 13.9 & 10.8 & 10.6 & 10.1 & 34.6 &  9.6 & 34.6 &  9.7 \\
+& $\mathbf{0.3}$ & 9.0 & 9.1 & 11.5 & 11.9 & 9.6 & 11.3 & 25.4 &  5.5 & 25.4 &  5.5 \\
+& $0.5$ & 7.9 & 9.1 & 10.3 & 12.2 & 9.0 & 11.7 & 20.1 &  3.9 & 20.1 &  3.9 \\
 \midrule
 \multicolumn{12}{@{}l}{\emph{kinematic weight} $\delta_{F\!R}$}\\
-& $0.1$          &  8.9 & 10.6 & 10.6 & 12.3 &  9.8 & 12.9 & 10.4 &  2.5 & 10.2 &  2.6 \\
-& $0.3$          &  9.7 & 10.5 & 10.2 & 12.4 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
-& $\mathbf{0.5}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.7$          & 11.1 & 10.5 & 12.4 & 12.6 & 10.4 & 11.8 & 28.8 &  7.2 & 28.7 &  7.2 \\
-& $0.9$          & 11.6 & 11.1 & 13.0 & 12.6 & 10.7 & 11.6 & 31.0 &  8.1 & 30.9 &  8.1 \\
+& $0.1$ & 8.9 & 10.6 & 10.6 & 12.3 & 9.8 & 12.9 & 10.4 &  2.4 & 10.2 &  2.6 \\
+& $0.3$ & 9.7 & 10.5 & 10.2 & 12.4 & 9.5 & 12.5 & 20.5 &  4.4 & 20.4 &  4.5 \\
+& $\mathbf{0.5}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.7 &  5.9 & 25.6 &  6.0 \\
+& $0.7$ & 11.1 & 10.5 & 12.4 & 12.6 & 10.4 & 11.8 & 28.9 &  7.1 & 28.8 &  7.2 \\
+& $0.9$ & 11.6 & 11.1 & 13.0 & 12.6 & 10.7 & 11.6 & 31.1 &  8.1 & 31.0 &  8.1 \\
 \midrule
 \multicolumn{12}{@{}l}{\emph{iterations per frame}}\\
-& $25$           & 10.5 & 12.2 & 10.6 & 12.3 &  9.0 & 11.0 & 25.7 &  6.1 & 25.5 &  6.1 \\
-& $50$           & 10.3 & 10.7 & 11.1 & 12.5 &  9.6 & 11.5 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $\mathbf{75}$  & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $150$          & 10.9 & 10.6 & 11.6 & 12.5 & 10.4 & 12.9 & 25.7 &  6.0 & 25.5 &  6.1 \\
+& $25$ & 10.5 & 12.2 & 10.5 & 12.3 & 9.0 & 11.0 & 25.8 &  6.0 & 25.6 &  6.1 \\
+& $50$ & 10.3 & 10.7 & 11.1 & 12.4 & 9.6 & 11.5 & 25.7 &  5.9 & 25.6 &  6.0 \\
+& $\mathbf{75}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.7 &  5.9 & 25.6 &  6.0 \\
+& $150$ & 10.9 & 10.6 & 11.6 & 12.5 & 10.4 & 12.9 & 25.7 &  5.9 & 25.6 &  6.0 \\
 \midrule
 \multicolumn{12}{@{}l}{\emph{accumulation window} $\Delta t$}\\
-& $10$\,ms          & 16.8 & 18.1 & 16.8 & 14.4 & 13.9 & 16.2 & 32.5 & 26.1 & 26.8 & 21.0 \\
-& $\mathbf{20}$\,ms & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $50$\,ms          & 18.4 &  9.2 & 18.3 & 11.8 & 15.6 & 11.0 & 34.6 &  3.5 & 34.4 &  3.5 \\
+& $10$\,ms & 16.8 & 18.1 & 16.8 & 14.4 & 13.9 & 16.2 & 31.9 & 25.6 & 26.9 & 21.1 \\
+& $\mathbf{20}$\,ms & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.7 &  5.9 & 25.6 &  6.0 \\
+& $50$\,ms & 18.4 & 9.2 & 18.3 & 11.8 & 15.6 & 11.0 & 34.6 &  3.4 & 34.5 &  3.4 \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -1852,7 +1854,7 @@ figure at frame $18$ of the same segment --- the fastest-rotating frame of the
 track, $\lVert\wvec\rVert = 1.21$ against $1.00$\,rad/s here --- leaves the two
 unanchored rows unchanged but visibly degrades the three anchored ones. The
 cause is measurable rather than aesthetic: at that frame the standard deviation
-of $\Imap$ is $2.6$ times its track median for \texttt{IMU-anchor} and $6.7$
+of $\Imap$ is $2.6$ times its track median for \texttt{thesis+IMU} and $6.7$
 times for \texttt{CMax-inloop}, against $1.0$ times for the unanchored network,
 which has no anchor to disagree with. It is the excursion described in
 Sec.~\ref{sec:mainresults}, and it concentrates where the anchor and the flow
@@ -2434,7 +2436,8 @@ produced by the kinematic cost fitting $\wvec$ to a flow field that the visual
 side systematically underestimates: it appears only when that cost updates
 $\wvec$, and its step size controls it monotonically across the whole admissible
 range. Two candidate explanations were tested and rejected --- value clipping,
-which fewer than $0.04\%$ of pixels reach, and scene content, which two
+which only the gradient map reaches and whose bounds can be widened twentyfold
+without changing the error by $0.05^\circ$/s, and scene content, which two
 synthetic sequences sharing a trajectory but differing fourfold in event
 density leave unchanged. Why both synthetic sequences sit well above the trend
 fitted to the real ones remains open.
