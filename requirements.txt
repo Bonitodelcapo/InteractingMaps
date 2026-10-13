@@ -6,3 +6,4 @@ rosbags              # ECRot ROSbag -> pipeline format (convert_ecrot.py)
 pyyaml               # ECRot calibration YAML
 imageio              # optional: IWE sequence GIFs (--save-iwe)
 mlflow               # run tracking / provenance mirror (provenance.py)
+rosbags
