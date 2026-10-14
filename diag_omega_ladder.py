@@ -901,6 +901,90 @@ def ofce_summary(out=os.path.join(OFCE_DIR, 'summary.csv')):
     for r in rows:
         print(' | '.join(str(r[k]) for k in keys))
     print(f"[ok] {out}")
+    plot_ofce_findings(out)
+
+
+VARIANT_COLORS = dict(zip(OFCE_VARIANTS, ('#000000', '#56B4E9', '#0072B2', '#D55E00',
+                                          '#009E73', '#E69F00', '#CC79A7')))  # Okabe-Ito
+
+
+def _xcenters():
+    """Plot position of each XBINS bin (the open last bin at 2.25)."""
+    return np.array([(lo + hi) / 2 if np.isfinite(hi) else 2.25
+                     for lo, hi in zip(XBINS[:-1], XBINS[1:])])
+
+
+def _num(row, cols):
+    """Floats of row[cols]; nan for empty cells."""
+    return np.array([float(row[c]) if row.get(c) not in ('', None) else np.nan for c in cols])
+
+
+def plot_ofce_findings(path=os.path.join(OFCE_DIR, 'summary.csv'), out_dir=OFCE_DIR):
+    """From the OFCE summary: (1) measured vs predicted contraction of G along F
+    (row 1b_free), (2) flip rate vs |F|/bound (rows 1b_free and 0), (3) rung-0
+    beta vs mean|F*|/bound across variants."""
+    import matplotlib.pyplot as plt
+    rows = list(csv.DictReader(open(path, newline='')))
+    if not rows or 'lamx_0_0.5' not in rows[0]:
+        print(f"[skip] {path}: no |F|/bound columns (rerun --mode ofce)")
+        return
+    use_style('screen')
+    xc = _xcenters()
+    dIG = config.THESIS_PARAMS['delta_IG']
+    x0 = flip_onset(dIG)
+
+    def by(rung):
+        return [r for r in rows if r['rung'] == rung]
+
+    def marks(ax):
+        ax.axvline(x0, color='black', lw=0.8, ls=':')
+        ax.axvline(1.0, color='black', lw=0.8, ls='--')
+
+    fig, ax = plt.subplots(figsize=(SCREEN_WIDTH * 0.6, 4.2))
+    xs = np.linspace(0, 2.3, 200)
+    ax.plot(xs, predicted_lambda(xs, dIG), color='#888888', lw=2.5, label='linear prediction')
+    for r in by('1b_free'):
+        ax.plot(xc, _num(r, [f'lamx_{s}' for s in _XB]), 'o-', lw=1.5,
+                color=VARIANT_COLORS.get(r['variant'], '#333333'), label=r['variant'])
+    ax.axhline(0, color='black', lw=0.8, ls=':')
+    ax.axhline(-1, color='black', lw=0.8, ls='--')
+    marks(ax)
+    ax.set_ylim(-3, 1.1)
+    ax.set_xlabel('|F| / stability bound')
+    ax.set_ylabel('change of G along F per iteration')
+    ax.set_title('Row 1b (F fixed): measured vs predicted G step')
+    ax.legend(frameon=False, fontsize=8, ncol=2)
+    save(fig, os.path.join(out_dir, 'ofce_lambda.png'))
+
+    fig, axs = plt.subplots(1, 2, figsize=(SCREEN_WIDTH, 3.8), sharex=True, sharey=True)
+    for ax, rung, title in ((axs[0], '1b_free', 'Row 1b (F fixed)'),
+                            (axs[1], '0', 'Row 0 (free)')):
+        for r in by(rung):
+            ax.plot(xc, _num(r, [f'flipx_{s}' for s in _XB]), 'o-', lw=1.5,
+                    color=VARIANT_COLORS.get(r['variant'], '#333333'), label=r['variant'])
+        marks(ax)
+        ax.set_xlabel('|F| / stability bound')
+        ax.set_title(title)
+    axs[0].set_ylabel('G sign flips per iteration')
+    axs[0].legend(frameon=False, fontsize=8)
+    save(fig, os.path.join(out_dir, 'ofce_flips.png'))
+
+    fig, ax = plt.subplots(figsize=(SCREEN_WIDTH * 0.5, 4.2))
+    pts = [(float(r['Fgt_over_b']), float(r['mean_beta']), r['variant'])
+           for r in by('0') if r.get('Fgt_over_b') not in ('', None)]
+    if pts:
+        hi = 1.1 * max(max(p[0] for p in pts), max(p[1] for p in pts))
+        xx = np.linspace(0, hi, 100)
+        ax.plot(xx, np.maximum(1.0, xx), color='#888888', lw=2.5, label='F capped at the bound')
+        for fx, beta, v in pts:
+            ax.plot(fx, beta, 'o', color=VARIANT_COLORS.get(v, '#333333'))
+            ax.annotate(v, (fx, beta), textcoords='offset points', xytext=(5, 4), fontsize=8)
+    ax.set_xlabel('mean |F*| / stability bound')
+    ax.set_ylabel(r'rung-0 scale $\beta$')
+    ax.set_title('Does the bound set the scale error?')
+    ax.legend(frameon=False, fontsize=8)
+    save(fig, os.path.join(out_dir, 'ofce_beta.png'))
+    print(f"[ok] {out_dir}/ofce_lambda.png, ofce_flips.png, ofce_beta.png")
 
 
 def make_all_plots():
@@ -941,6 +1025,8 @@ if __name__ == '__main__':
         if args.variant == 'all':            # per-variant jobs: --mode ofce_summary
             ofce_summary()
     elif args.mode == 'ofce_summary':
+        import matplotlib
+        matplotlib.use('Agg')
         ofce_summary()
     elif args.mode == 'plots':
         import matplotlib
