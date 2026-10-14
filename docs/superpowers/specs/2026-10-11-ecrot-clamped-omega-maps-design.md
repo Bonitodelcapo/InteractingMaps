@@ -136,3 +136,85 @@ Open check: count pixels with |F| > 2.9 px/frame on the report segments, to see
 whether reported results are affected.
 
 **Derivation of the bound.** Per pixel, along F (g = F̂·G): g_new = (1 − 2·δ_VFG·|F|² − δ_IG)·g + const (OFCE step + Cost_Spatial pull toward ∇I). Stable iff |λ| < 1 ⇒ |F| < √((2−δ_IG)/(2δ_VFG)) ≈ 2.8 px/frame; sign flips (λ < 0) from |F| > √((1−δ_IG)/(2δ_VFG)) ≈ 1.9 px/frame (δ_VFG=0.12, δ_IG=0.10). Ignoring δ_IG gives 1/√δ_VFG ≈ 2.9. Single-pixel, F-fixed, clip-free linearisation: indicative, not proven — the δ_VFG sweep (onset should scale as 1/√δ_VFG) is the test.
+
+## Findings: G flipping measured (2026-10-14)
+
+Cluster run of `python diag_omega_ladder.py --mode ofce` (all seven variants,
+`city_short`, 72 frames at 20 ms = 1.44 s; 145 / 290 frames at 10 / 5 ms) and
+`--mode ofce_summary`. Plan: `docs/superpowers/plans/2026-10-14-ofce-g-flip-investigation.md`.
+x = |F| / b with b = √((2−δ_IG)/(2δ_VFG)). Per row, at the middle frame K:
+λ̂ = median per-iteration ratio of successive changes of G along F over the
+first 12 iterations; flip rate = sign changes of G along F over the last 20
+iterations; occupancy = share of pixels per x bin. Figures: `diag_ofce/ofce_lambda.png`,
+`ofce_flips.png`, `ofce_beta.png`. Criteria were fixed in the plan before the run.
+
+**RQ1 (mechanism) — refuted below x ≈ 0.9, holds near and above the bound.**
+With F fixed at the truth (row 1b), λ̂ is −1.00 above x = 1 in every clipped
+variant (G pinned by the clip, flipping every iteration) and matches λ(x) in the
+last bin below the bound. Below that it is 0.77–0.88 whatever x is.
+
+| row 1b, x bin | 0–0.5 | 0.5–0.69 | 0.69–0.9 | 0.9–1.0 | > 1 |
+|---|---|---|---|---|---|
+| λ(x) over the bin | 0.90 … 0.43 | 0.43 … 0.00 | 0.00 … −0.64 | −0.64 … −1.00 | < −1 |
+| E4_dt05 λ̂ | 0.77 | 0.84 | 0.88 | – | – |
+| E4_dt10 λ̂ | – | – | −0.52 | −0.86 | −1.00 |
+| E0 / E1 λ̂ | – | – | – | – | −1.00 |
+
+Reading (hypothesis, not tested): λ̂ reports the slowest mode still moving. The
+one-pixel OFCE mode decays within a few iterations where |λ| is small, leaving a
+slower mode (G coupled to I through G = ∇I) at ≈ 0.8; the OFCE mode is only
+visible where |λ| ≳ 0.8. E4_dt10's −0.52 at 0.69–0.9 sits next to unstable
+pixels, E4_dt05's 0.88 next to stable ones. E2_noclip is also −1.00: removing
+`max_grad` leaves G bounded by `CLIP_G`, which it hits on > 99 % of pixels, so
+"below −1 without the clip" could not be tested.
+
+**RQ2 (scaling) — the curves collapse in x; sustained flips start at x ≈ 1, not at x₀ = 0.69.**
+Flip rate by x bin, all clipped variants:
+
+| x bin | < 0.9 | 0.9–1.0 | 1.0–1.1 | > 1.1 |
+|---|---|---|---|---|
+| row 1b (F fixed) | ≤ 0.002 | 0.12 (E4_dt10) | 1.00 (E4_dt10) | 0.91–1.00 |
+| row 0 (free) | ≤ 0.002 | 0.07–0.12 | 0.21–0.56 | – (no pixels) |
+
+The onset in px moves with b (≈ 2 px for δ_VFG = 0.24, ≈ 4 px for 0.06), so the
+refutation condition (same px onset) is not met. The pre-set "> 0.5 above x ≈ 0.8"
+is not met either. For −1 < λ < 0 the flips decay and are gone before the last 20
+iterations, so this measure only counts flips that are sustained, which the
+theory puts at x ≥ 1.
+
+**RQ3 (consequence) — supported, with F capped near 0.8·b rather than at b.**
+
+| variant | b px | mean\|F\*\|/b | row-0 occupancy at x 0.69–1.0 | above x = 1 | mean x | β | max(1, mean\|F\*\|/b) | mean\|F\*\|/(b·mean x) | dir ° |
+|---|---|---|---|---|---|---|---|---|---|
+| E1_dVFG006 | 3.98 | 1.54 | 84 % | 0.6 % | 0.78 | 2.01 | 1.54 | 1.97 | 12.5 |
+| E0_base | 2.81 | 2.18 | 98 % | 1.9 % | 0.82 | 2.83 | 2.18 | 2.66 | 13.5 |
+| E1_dVFG024 | 1.99 | 3.08 | 96 % | 3.9 % | 0.83 | 3.87 | 3.08 | 3.70 | 17.9 |
+| E4_dt10 | 2.81 | 1.09 | 99 % | 1.1 % | 0.81 | 1.46 | 1.09 | 1.34 | 15.7 |
+| E4_dt05 | 2.81 | 0.54 | 73 % | 0.3 % | 0.75 | 0.75 | 1.00 | 0.72 | 13.8 |
+| E3_normalize | (none) | 2.18 | – | – | > 2 | 0.72 | 1.00 | – | 14.5 |
+| E2_noclip | 2.81 | 2.18 | 0 % | 99.6 % | > 2 | 13.2 | 2.18 | – | 89.2 |
+
+(mean x uses bin centres, 0.795 for 0.69–0.9.) In every clipped variant the free
+network's |F| sits just below the bound: 0.3–3.9 % of pixels above x = 1, mean
+x 0.75–0.83, independent of the true flow (mean|F\*|/b from 0.54 to 3.08). The
+pre-set "β within ±25 % of max(1, mean|F\*|/b)" fails narrowly (+26 to +34 %),
+because the cap sits at ≈ 0.8·b, not b. Using the measured mean x instead,
+β ≈ mean|F\*|/(b·mean x) to within 2–9 % in the four capped variants. E3_normalize
+and E4_dt05 give β < 1.3 as required.
+
+**Not explained by the bound (open):**
+- Where nothing caps F (E4_dt05, E3_normalize), β ≈ 0.73: |F| and ω are
+  overestimated by ≈ 1.37×. In E4_dt05 the free |F| still sits at mean x 0.75,
+  above the true 0.54.
+- The direction error is 12.5–17.9° in every converged variant, whatever b is.
+- E2_noclip: G hits `CLIP_G` on > 99 % of pixels, F runs above 2·b, β 13 and
+  dir 89°. That is close to the real-data failure (dir ≈ 85°); not tested further.
+
+**What follows.** The rung-0 scale error β ≈ 3 at dt = 20 ms comes from the
+explicit OFCE step on G: the free network cannot hold |F| above ≈ 0.8·b, so
+ω is underestimated by mean|F\*|/(0.8·b). It is a numerical property of the
+update, not of the data or the kinematics. The remedies (normalised step,
+shorter dt, smaller δ_VFG) remove that cap, but in the two runs where the cap is
+gone, ω is overestimated by ≈ 1.37× instead, and the ≈ 14° direction error stays.
+Neither fixes ω on its own. The earlier reading "β shrinks F into the stable
+range" has the cause reversed: the instability holds F down, and β follows.
