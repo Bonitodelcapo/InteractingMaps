@@ -51,7 +51,7 @@ From `docs/superpowers/specs/2026-10-11-ecrot-clamped-omega-maps-design.md`, "Fi
 
 The existing summary has, per variant × row (`1c_R`, `0`): `bound_px`, `frac_Fgt_above`, `F_epe_rel`, `stripe_I`, `G_at_clip`, `finite`, `mean_err`, `mean_dir`, `mean_beta`, and flip rates in px bins `flip_0_1 … flip_6_inf`.
 
-- [ ] **Step 1: Check every variant ran**
+- [x] **Step 1: Check every variant ran**
 
 On the cluster:
 ```bash
@@ -66,7 +66,7 @@ python diag_omega_ladder.py --mode ofce --variant E4_dt05
 ```
 then re-run `--mode ofce_summary`. Copy `diag_ofce/summary.csv` and `diag_ofce/E*.png` to the local `diag_ofce/`.
 
-- [ ] **Step 2: RQ3 first look — does rung-0 β follow the bound?**
+- [x] **Step 2: RQ3 first look — does rung-0 β follow the bound?**
 
 ```bash
 python - <<'PY'
@@ -80,7 +80,7 @@ PY
 ```
 Read it against these predictions. If the bound sets β: E1_dVFG024 (b ≈ 2.0) has the largest β, E1_dVFG006 (b ≈ 4.0) a smaller β than E0_base (b ≈ 2.8), and E3_normalize and E4_dt05 have β ≈ 1.
 
-- [ ] **Step 3: RQ2 first look — does the flip onset move with the bound?**
+- [x] **Step 3: RQ2 first look — does the flip onset move with the bound?**
 
 ```bash
 python - <<'PY'
@@ -95,12 +95,30 @@ PY
 ```
 If the theory holds, flips start near 0.69·bound: about 1.4 px for E1_dVFG024, 1.9 px for E0_base, 2.7 px for E1_dVFG006.
 
-- [ ] **Step 4: Decide (gate)**
+- [x] **Step 4: Decide (gate)**
 
 - **RQ1–RQ3 all clearly answered** (β tracks the bound, onsets move as predicted, the stable variants give β ≈ 1): skip Tasks 2–5 and go to Task 6 with these numbers.
 - **Otherwise** (px bins too coarse to see the onset, rows with F unfixed blur the contraction, or β does not follow): do Tasks 2–6.
 
 Record the decision and the printed tables in the session before continuing.
+
+**Result (2026-10-14, cluster runs of all 7 variants, `city_short`, 72 frames at 20 ms).** Predicted β assumes the free network's |F| is capped at b, with F\* = C·R_gt from `omega_gt` (no events needed): `mean|F*| / mean(min(|F*|, b))`, and a least-squares-weighted form `Σ|F*|² / Σ|F*|·min(|F*|, b)`. mean|F\*| is 6.17 / 3.08 / 1.54 px/frame at dt 20 / 10 / 5 ms.
+
+| variant | b px | mean\|F\*\|/b | β pred (LS) | β measured | dir ° |
+|---|---|---|---|---|---|
+| E1_dVFG006 | 3.98 | 1.55 | 1.61 | 2.01 | 12.5 |
+| E0_base | 2.81 | 2.19 | 2.27 | 2.83 | 13.5 |
+| E1_dVFG024 | 1.99 | 3.10 | 3.22 | 3.87 | 17.9 |
+| E4_dt10 | 2.81 | 1.10 | 1.17 | 1.46 | 15.7 |
+| E4_dt05 | 2.81 | 0.55 | 1.00 | 0.75 | 13.8 |
+| E3_normalize | — | — | 1.00 | 0.72 | 14.5 |
+| E2_noclip | 2.81 | 2.19 | — | 13.22 | 89.2 |
+
+- RQ3 trend supported: β·b ≈ 8 across the δ_VFG sweep; every capped variant is 1.20–1.25× above the hard-cap prediction, i.e. F looks capped near **0.8·b** (between x₀ = 0.69 and 1), not at b.
+- Not predicted: the uncapped variants give β ≈ 0.73 (ω overestimated ~1.37×), not 1; dir ≈ 14° in every clipped variant, independent of b. E2_noclip (dir 89°) matches the real-data failure signature (≈ 85°).
+- RQ1/RQ2 open: px bins are too coarse, and flips are counted in the last 20 iterations only, where |λ| < 1 oscillations have already died out (E4_dt05 row 1c: no flips at |F| 2–2.8 px although λ < 0 there).
+
+**Decision:** do Tasks 2–6. In Task 6 also report where row-0 occupancy peaks in x (expected 0.7–1.0 if the cap sits at ~0.8·b). The β ≈ 0.73 bias and the flat 14° direction error are out of scope here; record them as follow-ups.
 
 ---
 
@@ -346,6 +364,12 @@ The last-frame maps figure keeps `rungs = ['1c_R', '0']` (unchanged).
 
 - [ ] **Step 3: Run a local smoke test on an unstable and a stable variant**
 
+First move the cluster results out of the repo; the smoke runs overwrite `diag_ofce/E0_base.*` and `diag_ofce/E4_dt05.*`, and Task 4 deletes the directory:
+```bash
+mv diag_ofce "$SCRATCH/diag_ofce_cluster"
+```
+(`$SCRATCH` = any directory outside the repo, e.g. the session scratchpad.)
+
 ```bash
 python diag_omega_ladder.py --mode ofce --variant E0_base --limit 6
 ```
@@ -508,9 +532,9 @@ Open each. Check: the grey prediction curve crosses 0 at x ≈ 0.69 and −1 at 
 
 - [ ] **Step 4: Delete the local smoke outputs**
 
-These come from `--limit` runs and must not be mistaken for results:
+These come from `--limit` runs and must not be mistaken for results. Delete them and restore the cluster results:
 ```bash
-rm -rf diag_ofce
+rm -rf diag_ofce && mv "$SCRATCH/diag_ofce_cluster" diag_ofce
 ```
 
 - [ ] **Step 5: Commit**
@@ -639,7 +663,7 @@ Read the answers against these criteria, chosen before seeing the results:
 |---|---|---|
 | 1 mechanism | row 1b λ̂ within ±0.15 of λ(x) for x < 1, in every variant except E3_normalize; near −1 above x = 1 with the clip, below −1 for E2_noclip | λ̂ off the curve below x = 1 |
 | 2 scaling | flip rate < 0.1 below x ≈ 0.6 and > 0.5 above x ≈ 0.8, in all clipped variants (one curve) | onset at the same px across δ_VFG |
-| 3 consequence | row-0 occupancy above x = 1 under 10 % while mean\|F\*\|/b > 1; β within ±25 % of max(1, mean\|F\*\|/b); E3_normalize and E4_dt05 β < 1.3 | β unchanged across variants |
+| 3 consequence | row-0 occupancy above x = 1 under 10 % while mean\|F\*\|/b > 1, peaking at x ≈ 0.7–1.0; β within ±25 % of max(1, mean\|F\*\|/b); E3_normalize and E4_dt05 β < 1.3 | β unchanged across variants |
 
 - [ ] **Step 3: Write the findings**
 
