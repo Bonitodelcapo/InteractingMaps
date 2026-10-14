@@ -885,7 +885,7 @@ def cmd_readout(E, args):
     ramp, yet on real runs fft has so far looked better. This decides it on
     data instead of on the argument.
 
-    Scoring: Pearson correlation between the reconstruction and log APS.
+    Scoring: |Pearson r| between the reconstruction and log(1+APS), APS in [0,1] (near-linear).
     Correlation is invariant to scale and offset, which is exactly the freedom
     the reconstruction has -- the beta ambiguity fixes neither the contrast of
     I nor its constant of integration, so any metric that is not invariant to
