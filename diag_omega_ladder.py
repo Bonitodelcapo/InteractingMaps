@@ -973,12 +973,17 @@ def plot_ofce_findings(path=os.path.join(OFCE_DIR, 'summary.csv'), out_dir=OFCE_
     pts = [(float(r['Fgt_over_b']), float(r['mean_beta']), r['variant'])
            for r in by('0') if r.get('Fgt_over_b') not in ('', None)]
     if pts:
-        hi = 1.1 * max(max(p[0] for p in pts), max(p[1] for p in pts))
+        hi = 1.25 * max(1.0, max(p[0] for p in pts))
+        top = 1.25 * max(p[1] for p in pts if p[1] <= 2 * max(1.0, p[0]))   # off-scale: diverged
         xx = np.linspace(0, hi, 100)
         ax.plot(xx, np.maximum(1.0, xx), color='#888888', lw=2.5, label='F capped at the bound')
         for fx, beta, v in pts:
-            ax.plot(fx, beta, 'o', color=VARIANT_COLORS.get(v, '#333333'))
-            ax.annotate(v, (fx, beta), textcoords='offset points', xytext=(5, 4), fontsize=8)
+            y = min(beta, top)
+            ax.plot(fx, y, '^' if beta > top else 'o', color=VARIANT_COLORS.get(v, '#333333'))
+            ax.annotate(v if beta <= top else f'{v} ({beta:.1f}, off scale)', (fx, y),
+                        textcoords='offset points', xytext=(5, 4 if beta <= top else -12), fontsize=8)
+        ax.set_xlim(0, hi)
+        ax.set_ylim(0, top * 1.02)
     ax.set_xlabel('mean |F*| / stability bound')
     ax.set_ylabel(r'rung-0 scale $\beta$')
     ax.set_title('Does the bound set the scale error?')
