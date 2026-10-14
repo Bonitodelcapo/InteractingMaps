@@ -5,6 +5,7 @@ Run from the repository root:
     python report/make_figures.py              # all figures
     python report/make_figures.py --only maps  # one of: beta_speed tracking
                                                #         maps appendix distortion
+                                           #         cmax_baseline
 
 Outputs PDFs (used by the LaTeX) and PNGs (for quick inspection) into
 report/figures/ via style.save.
@@ -194,6 +195,39 @@ def fig_tracking(E):
     print('  wrote fig_tracking.pdf / .png')
 
 
+# ------------------------------------------------------- CMax alone vs reference
+def fig_cmax_baseline(E, labels=('boxes', 'bicycle')):
+    """CMax and gyro on their own (no network) vs the reference, plus the CMax
+    IWE at the first / middle / last frame. Reads run_experiments --what baseline."""
+    with use_style('paper'):
+        fig = plt.figure(figsize=(PAPER_WIDE, 5.2))
+        for sub, lab in zip(fig.subfigures(1, len(labels)), labels):
+            path = os.path.join(ROOT, 'report', 'experiments', f'baseline_dt{int(DT*1000)}ms_{lab}.npz')
+            if not os.path.exists(path):
+                print(f'    (missing {path})')
+                continue
+            d = np.load(path)
+            t = frame_times(DT, len(d['ref']))
+            gs = sub.add_gridspec(4, 3, height_ratios=(1, 1, 1, 1.3))
+            for i in range(3):
+                ax = sub.add_subplot(gs[i, :])
+                draw_omega(ax, t, d['cmax'][:, i], ref=d['ref'][:, i], imu=d['gyro'][:, i],
+                           axis=i, model='thesis_cmax', ref_src=str(d['ref_src']),
+                           label='CMax alone')
+                for k in d['frames']:
+                    ax.axvline(t[k], color=NEUTRAL_COLOR, lw=0.6, ls='--')
+                if i < 2:
+                    ax.tick_params(labelbottom=False)
+                    ax.set_xlabel('')
+            for j, k in enumerate(d['frames']):
+                draw_map(sub.add_subplot(gs[3, j]), 'IWE', d['iwe'][j],
+                         title=f'IWE  t = {t[k]:.2f} s')
+            sub.suptitle(lab)
+            sub.legend(*sub.axes[0].get_legend_handles_labels(), loc='outside lower center', ncol=3)
+        save(fig, os.path.join(FIG, 'fig_cmax_baseline.png'))
+    print('  wrote fig_cmax_baseline.pdf / .png')
+
+
 # ------------------------------------------------------------------- map panels
 def compute_maps(E):
     """Run the network N_MAPS frames per sequence; cache the final maps."""
@@ -283,7 +317,7 @@ def fig_distortion(E):
 
 
 FIGURES = {'beta_speed': fig_beta_speed, 'tracking': fig_tracking,
-           'maps': fig_maps, 'appendix': fig_appendix,
+           'maps': fig_maps, 'appendix': fig_appendix, 'cmax_baseline': fig_cmax_baseline,
            'distortion': fig_distortion}
 
 

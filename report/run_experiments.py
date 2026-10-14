@@ -873,18 +873,28 @@ def cmd_baseline(E, args):
                                   calib.cx, calib.cy, use_polarity=True)
         acc = {'cmax': [], 'gyro': []}
         w_prev = np.zeros(3)
+        keep = (0, nf // 2, nf - 1)                     # frames whose IWE is saved
+        series = {'cmax': [], 'gyro': [], 'ref': []}
+        iwes = []
         t = time.time()
         for k in range(nf):
             t_lo, t_hi = t0 + k * args.dt, t0 + (k + 1) * args.dt
-            w_ref, _ = E.get_reference_omega(gt, imu, t_lo, t_hi, om)
+            w_ref, ref_src = E.get_reference_omega(gt, imu, t_lo, t_hi, om)
             win = ev[(ev[:, 0] >= t_lo) & (ev[:, 0] < t_hi)]
             if len(win) > 10:
                 w_prev = est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
                                       omega_init=w_prev)
+            w_gyro = E.get_gyro_for_frame(imu, t_lo, t_hi)
             acc['cmax'].append(E.compute_metrics(w_prev, w_ref))
-            acc['gyro'].append(E.compute_metrics(
-                E.get_gyro_for_frame(imu, t_lo, t_hi), w_ref))
+            acc['gyro'].append(E.compute_metrics(w_gyro, w_ref))
+            for src, w in (('cmax', w_prev), ('gyro', w_gyro), ('ref', w_ref)):
+                series[src].append(w)
+            if k in keep:
+                iwes.append(est.last_iwe if len(win) > 10 else np.zeros((180, 240)))
         secs = time.time() - t
+        np.savez_compressed(path.replace('.csv', f'_{lab}.npz'), frames=keep,
+                            iwe=np.array(iwes), ref_src=ref_src,
+                            **{s: np.array(v) for s, v in series.items()})
         for src in ('cmax', 'gyro'):
             a = np.array(acc[src])                      # (n, 3): err, dir, beta
             wr.writerow([ds, sid, src, int(args.dt * 1000), nf,

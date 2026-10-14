@@ -48,16 +48,47 @@ runs() {   # one line per independent run: "name|group|command"
       echo "main_${s}_${m}|REPORT|$R --what main --sequences $s --models $m --out main_base_${s}_${m}.csv"
     done
   done
-  for s in boxes bicycle street; do
-    for m in thesis thesis_cmax thesis_imu; do
+  # 1.5 s, every model: the "network" column of tab:baseline and the
+  # without-curl half of tab:curl; the with-curl half next to it.
+  for s in boxes poster dynamic bicycle street; do
+    for m in cook thesis thesis_imu thesis_cmax thesis_cmax_v2; do
       echo "dissoc_${s}_${m}|REPORT|$R --what main --duration 1.5 --sequences $s --models $m --out dissoc_1p5s_${s}_${m}.csv"
+      echo "curl_${s}_${m}|REPORT|$R --what main --duration 1.5 --vary delta_curl=0.6 --sequences $s --models $m --out main_curl_${s}_${m}.csv"
     done
   done
+  # tab:sweep: one point per job, around the starting values (dFR 0.5, anchor 0.3).
+  # The base point is run once, as delta_FR=0.5; every block shares it.
+  for s in boxes poster dynamic bicycle street; do
+    for v in delta_FR=0.5 delta_IMU=0 delta_IMU=0.1 delta_IMU=0.5 \
+             delta_FR=0.1 delta_FR=0.3 delta_FR=0.7 delta_FR=0.9 \
+             n_iters=25 n_iters=50 n_iters=150 dt=0.01 dt=0.05; do
+      echo "sweep_${s}_cmax_${v}|REPORT|$R --what sweep --name sweep --mode coord --model thesis_cmax --base delta_FR=0.5,delta_IMU=0.3 --sequences $s --vary $v --out sweep_${s}_cmax_${v}.csv"
+    done
+    for v in delta_IMU=0.1 delta_IMU=0.3 delta_IMU=0.5; do
+      echo "sweep_${s}_imu_${v}|REPORT|$R --what sweep --name sweep --mode coord --model thesis_imu --base delta_FR=0.5,delta_IMU=0.3 --sequences $s --vary $v --out sweep_${s}_imu_${v}.csv"
+    done
+  done
+  # tab:params: the (delta_FR, anchor) grid, 1.5 s, one delta_FR row per job
+  for s in boxes poster dynamic bicycle street; do
+    for fr in 0.02 0.05 0.10 0.30 0.50; do
+      echo "grid_${s}_FR${fr}|REPORT|$R --what sweep --name grid --mode grid --model thesis_cmax --duration 1.5 --sequences $s --vary 'delta_FR=$fr;delta_IMU=0.1,0.3,0.5,0.7,0.9' --out grid_${s}_FR${fr}.csv"
+    done
+  done
+  # tab:anchor: poster seg_A and seg_D (seg_C is the main table; thesis_cmax on
+  # A and D is a beta run, so it is not repeated here)
+  for g in seg_A seg_D; do
+    for m in cook thesis thesis_imu thesis_cmax_v2; do
+      echo "anchor_${g}_${m}|REPORT|python evaluation.py --exp 2 --dataset poster_rotation --segment $g --model $m --no-frames"
+    done
+  done
+  echo "window|REPORT|$R --what window"
   for s in boxes poster dynamic bicycle; do
     for v in delta_shrinkI=0 delta_shrinkI=1 delta_map=0.03 delta_curl=0.6; do
       echo "ablation_${s}_${v}|REPORT|$R --what sweep --name ablation --mode coord --duration 1.5 --sequences $s --vary $v --out sweep_${s}_${v}.csv"
     done
   done
+  # CMax and gyro alone, no network: Table tab:baseline and fig_cmax_baseline
+  echo "baseline|REPORT|$R --what baseline --duration 1.5"
   # beta entries 4 and 16 (boxes seg_B, poster seg_C at dFR 0.1 / anchor 0.5) are
   # the Table III thesis_cmax runs above; running them twice would write one
   # run directory from two processes at once.
