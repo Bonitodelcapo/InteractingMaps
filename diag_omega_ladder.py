@@ -730,7 +730,7 @@ def plot_maps(seg_name):
 
 # %%
 # --mode ofce: is the striped I an OFCE step instability? One variant per call
-# (one report/run_all.sh job); rows 1c_R (omega exact, isolates the OFCE step) and 0.
+# (one report/run_all.sh job); rows 1b_free (F exact: the clean linear test), 1c_R (omega exact) and 0.
 OFCE_DIR = 'diag_ofce'
 OFCE_VARIANTS = {
     'E0_base':      {},
@@ -742,11 +742,30 @@ OFCE_VARIANTS = {
     'E4_dt05':      {'dt': 0.005},
 }
 FLIP_BINS = (0, 1, 2, 3, 4, 6, np.inf)          # |F| px/frame
+XBINS = (0, 0.5, 0.69, 0.9, 1.0, 1.1, 1.3, 1.6, 2.0, np.inf)   # x = |F| / bound
+_XB = [f'{lo}_{hi}' for lo, hi in zip(XBINS[:-1], XBINS[1:])]
+HEAD_ITERS = 12      # first iterations of frame K, for contraction()
 OFCE_HEADER = (['variant', 'rung', 'dt_ms', 'n_frames', 'delta_VFG', 'max_grad',
                 'normalize', 'bound_px', 'frac_Fgt_above', 'F_epe', 'F_epe_rel',
                 'stripe_I', 'G_at_clip', 'finite', 'mean_err', 'mean_dir', 'mean_beta']
                + [f'flip_{lo}_{hi}' for lo, hi in zip(FLIP_BINS[:-1], FLIP_BINS[1:])]
-               + ['secs'])
+               + ['Fgt_over_b'] + [f'flipx_{s}' for s in _XB]
+               + [f'lamx_{s}' for s in _XB] + [f'occx_{s}' for s in _XB] + ['secs'])
+
+
+def _xbin_stats(v, x, stat, min_px=50):
+    """stat(v) over the finite pixels in each XBINS bin of x ('' if < min_px)."""
+    out = []
+    for lo, hi in zip(XBINS[:-1], XBINS[1:]):
+        sel = (x >= lo) & (x < hi) & np.isfinite(v)
+        out.append(round(float(stat(v[sel])), 3) if sel.sum() >= min_px else '')
+    return out
+
+
+def _xbin_occ(x):
+    """Share of pixels in each XBINS bin of x."""
+    return [round(float(((x >= lo) & (x < hi)).mean()), 3)
+            for lo, hi in zip(XBINS[:-1], XBINS[1:])]
 
 
 def stability_bound(delta_VFG, delta_IG):
@@ -797,7 +816,7 @@ def stripe_index(I):
 
 
 def run_ofce_variant(name, seg_name='city_short'):
-    """Run one OFCE_VARIANTS entry on rows 1c_R and 0 over the segment's span;
+    """Run one OFCE_VARIANTS entry on rows 1b_free, 1c_R and 0 over the segment's span;
     write diag_ofce/<name>.csv and diag_ofce/<name>.png (last-frame maps)."""
     import time
     from collections import deque
@@ -818,13 +837,21 @@ def run_ofce_variant(name, seg_name='city_short'):
     F_gt = [gt_flow(net, ref_omega(ctx['om'], *w) * dt) for w in ctx['wins']]
     mag_gt = [np.linalg.norm(f, axis=-1) for f in F_gt]
     rows, last = [], {}
-    for rung in ('1c_R', '0'):
-        tail, t0 = deque(maxlen=20), time.time()
+    for rung in ('1b_free', '1c_R', '0'):
+        tail, head, t0 = deque(maxlen=20), [], time.time()
+
+        def on_iter(nt, tail=tail, head=head):
+            tail.append((nt.G.copy(), nt.F.copy()))
+            if len(head) < HEAD_ITERS:
+                head.append(tail[-1])
+
         s = _map_run(ctx, rung,
                      on_frame=lambda k, nt: last.update({rung: _snap(nt, H, W)}),
-                     on_iter=lambda nt: tail.append((nt.G.copy(), nt.F.copy())),
-                     iter_frame=K)
+                     on_iter=on_iter, iter_frame=K)
         flips, mag = flip_rate(tail)
+        lam = contraction(head)
+        x_tail = mag / bound
+        x_head = np.linalg.norm(head[-1][1], axis=-1) / bound
         m = last[rung]
         bins = []
         for lo, hi in zip(FLIP_BINS[:-1], FLIP_BINS[1:]):
@@ -839,7 +866,12 @@ def run_ofce_variant(name, seg_name='city_short'):
                      round(float((np.abs(m['G']) >= CLIP_G - 1e-6).any(-1).mean()), 4),
                      bool(all(np.all(np.isfinite(a)) for a in m.values())),
                      round(s['mean_err'], 3), round(s['mean_dir'], 3), round(s['mean_beta'], 3)]
-                    + bins + [round(time.time() - t0)])
+                    + bins
+                    + [round(float(np.mean([g.mean() for g in mag_gt])) / bound, 3)]
+                    + _xbin_stats(flips, x_tail, np.mean)
+                    + _xbin_stats(lam, x_head, np.median)
+                    + _xbin_occ(x_tail)
+                    + [round(time.time() - t0)])
     os.makedirs(OFCE_DIR, exist_ok=True)
     with open(os.path.join(OFCE_DIR, f'{name}.csv'), 'w', newline='') as f:
         w = csv.writer(f); w.writerow(OFCE_HEADER); w.writerows(rows)
