@@ -4,6 +4,9 @@
 #   bash report/run_all.sh                         # from the repo root
 #   PARALLEL=90 THREADS=4 bash report/run_all.sh   # PARALLEL*THREADS <= cores
 #   FORCE=1 bash report/run_all.sh                 # ignore stamps, rerun all
+#   ADOPT=1 bash report/run_all.sh                 # run nothing: stamp the jobs
+#     earlier logs (report/logs/*/runs.txt, figures.txt) show as [ok] and whose
+#     --out exists, i.e. declare those results current for the present code
 #
 # Skipping: a job whose code, data and command are unchanged since its last
 # successful run gives the same numbers (the runs are deterministic), so it is
@@ -23,7 +26,7 @@ export PYTHONPATH="$PWD" IM_MLFLOW=0 MPLBACKEND=Agg PYTHONIOENCODING=utf-8
 export OMP_NUM_THREADS=$THREADS OPENBLAS_NUM_THREADS=$THREADS MKL_NUM_THREADS=$THREADS
 
 export LOG="report/logs/$(date +%Y%m%d_%H%M%S)"
-export STAMPS="report/.stamps" FORCE=${FORCE:-}
+export STAMPS="report/.stamps" FORCE=${FORCE:-} ADOPT=${ADOPT:-}
 mkdir -p "$LOG" "$STAMPS"
 R="python report/run_experiments.py --no-frames"
 
@@ -102,6 +105,17 @@ run_one() {   # "name|group|command" -> $LOG/name.log; skips if the stamp matche
     printf '[skip]      -    %s  (unchanged)\n' "$name"
     return 0
   fi
+  if [ -n "$ADOPT" ]; then   # stamp jobs that earlier logs show succeeded; run nothing
+    if cat report/logs/*/runs.txt report/logs/*/figures.txt 2>/dev/null \
+         | awk -v n="$name" '$1 == "[ok]" && $NF == n {f = 1} END {exit !f}' \
+       && { [ -z "$out" ] || [ -n "$(find report/experiments experiments -name "$out" -print -quit 2>/dev/null)" ]; }; then
+      echo "$fp" > "$STAMPS/$name"
+      printf '[adopt]     -    %s\n' "$name"
+    else
+      printf '[none]      -    %s  (no earlier success or output missing: will run)\n' "$name"
+    fi
+    return 0
+  fi
   rm -f "$STAMPS/$name"
   if eval "$cmd" > "$LOG/$name.log" 2>&1; then
     echo "$fp" > "$STAMPS/$name"
@@ -129,7 +143,7 @@ stage runs runs
 # Figures depend on every script and on what the runs produced: any rerun run
 # (new stamp) or any code change reruns them.
 HASH_FIGURES=$( { code_hash '*.py' ':!tests/*'; runs | cut -d'|' -f1 \
-                  | sed "s|^|$STAMPS/|" | xargs cat 2>/dev/null; } | sha1sum | cut -c1-40)
+                  | sed "s|^|$STAMPS/|" | xargs cat 2>/dev/null || true; } | sha1sum | cut -c1-40)
 stage figures figures
 echo
 echo "slowest runs:"; sort -k2 -n -r "$LOG/runs.txt" | head -5
