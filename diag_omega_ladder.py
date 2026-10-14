@@ -22,6 +22,7 @@ import argparse
 import csv
 import glob
 import os
+import warnings
 import numpy as np
 
 import config
@@ -204,9 +205,10 @@ def _selfcheck_maps_io():
     print(f"  [{'ok' if ok else 'FAIL'}] npz round trip gives finite colour scales {sc}")
 
 
-def _ofce_g_only(F_mag, normalize, n_iters=200, V=1.0):
+def _ofce_g_only(F_mag, normalize, n_iters=200, V=1.0, on_iter=None):
     """One pixel, F fixed along x, only the OFCE step on G (q.update(1.0) as in
-    the network). Returns |V + F.G| after n_iters: ~0 iff the step converged."""
+    the network). Returns |V + F.G| after n_iters: ~0 iff the step converged.
+    on_iter(G, F), if given, gets copies after every iteration."""
     q = {k: Quantity(s, k) for k, s in (('V', (1, 1)), ('F', (1, 1, 2)), ('G', (1, 1, 2)))}
     q['V'].value[:] = V
     q['F'].value[..., 0] = F_mag
@@ -215,6 +217,8 @@ def _ofce_g_only(F_mag, normalize, n_iters=200, V=1.0):
         q['G'].reset_gradient()
         cost.compute_and_send_gradients()
         q['G'].update(1.0)
+        if on_iter is not None:
+            on_iter(q['G'].value.copy(), q['F'].value.copy())
     return float(abs(V + np.sum(q['F'].value * q['G'].value)))
 
 
@@ -230,9 +234,39 @@ def _selfcheck_ofce_step():
               f"normalize={norm}: residual {res:.2e} (expect {'converged' if want else 'not converged'})")
 
 
+def _selfcheck_contraction():
+    """contraction() recovers lam from a linear sequence and from the real
+    one-pixel OFCE step (no spatial term there: lam = 1 - 2 delta_VFG |F|^2);
+    predicted_lambda is 0 at flip_onset and -1 at the bound."""
+    F = np.zeros((1, 1, 2)); F[..., 0] = 2.0
+    for lam in (0.5, -0.8):
+        tail = []
+        for t in range(12):
+            G = np.zeros((1, 1, 2)); G[..., 0] = 0.3 + 0.7 * lam ** t
+            tail.append((G, F))
+        got = float(contraction(tail)[0, 0])
+        print(f"  [{'ok' if abs(got - lam) < 1e-9 else 'FAIL'}] contraction recovers "
+              f"lam={lam} (got {got:.6f})")
+    d = config.THESIS_PARAMS['delta_VFG']
+    b = 1.0 / np.sqrt(d)
+    for F_mag in (0.5 * b, 0.8 * b):
+        tail = []
+        _ofce_g_only(F_mag, False, n_iters=12, on_iter=lambda G, F: tail.append((G, F)))
+        want = 1.0 - 2.0 * d * F_mag ** 2
+        got = float(contraction(tail)[0, 0])
+        print(f"  [{'ok' if abs(got - want) < 1e-6 else 'FAIL'}] one-pixel OFCE step "
+              f"|F|={F_mag:.2f}: contraction {got:.4f} vs 1-2*delta_VFG*|F|^2 = {want:.4f}")
+    dIG = config.THESIS_PARAMS['delta_IG']
+    ok = (abs(predicted_lambda(1.0, dIG) + 1.0) < 1e-12
+          and abs(predicted_lambda(flip_onset(dIG), dIG)) < 1e-12)
+    print(f"  [{'ok' if ok else 'FAIL'}] predicted_lambda: -1 at the bound, "
+          f"0 at flip_onset = {flip_onset(dIG):.3f}")
+
+
 def _selfcheck():
     _selfcheck_maps_io()
     _selfcheck_ofce_step()
+    _selfcheck_contraction()
     for seg in SEGMENTS:
         ctx = prep_segment_context(seg)
         if ctx is None:
@@ -721,12 +755,39 @@ def stability_bound(delta_VFG, delta_IG):
     return float(np.sqrt((2.0 - delta_IG) / (2.0 * delta_VFG)))
 
 
+def _g_par(tail):
+    """G along F at each recorded iteration, (T, H, W)."""
+    return np.stack([np.sum(G * F, -1) / np.maximum(np.linalg.norm(F, axis=-1), 1e-9)
+                     for G, F in tail])
+
+
 def flip_rate(tail):
     """Per-pixel rate of sign changes of G along F over the recorded
     iterations, and |F| at the last one."""
-    par = np.stack([np.sum(G * F, -1) / np.maximum(np.linalg.norm(F, axis=-1), 1e-9)
-                    for G, F in tail])
+    par = _g_par(tail)
     return (np.sign(par[1:]) != np.sign(par[:-1])).mean(0), np.linalg.norm(tail[-1][1], axis=-1)
+
+
+def contraction(tail, eps=1e-12):
+    """Per-pixel factor by which G along F changes per iteration: the median
+    over t of (g[t+2]-g[t+1]) / (g[t+1]-g[t]). For a linear step g <- lam*g + c
+    it is exactly lam; nan where g no longer moves."""
+    d = np.diff(_g_par(tail), axis=0)
+    with np.errstate(divide='ignore', invalid='ignore'), warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        r = np.where(np.abs(d[:-1]) > eps, d[1:] / d[:-1], np.nan)
+        return np.nanmedian(r, axis=0)
+
+
+def predicted_lambda(x, delta_IG):
+    """Linearised contraction of G along F at |F| = x * stability_bound:
+    1 - delta_IG - (2 - delta_IG) x^2 (0 at the flip onset, -1 at the bound)."""
+    return 1.0 - delta_IG - (2.0 - delta_IG) * np.asarray(x, dtype=np.float64) ** 2
+
+
+def flip_onset(delta_IG):
+    """x = |F| / bound above which the linear G step flips sign (lambda < 0)."""
+    return float(np.sqrt((1.0 - delta_IG) / (2.0 - delta_IG)))
 
 
 def stripe_index(I):
