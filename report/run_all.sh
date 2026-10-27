@@ -162,7 +162,8 @@ stage() {   # stage NAME LISTFN: run every line of LISTFN in parallel, timed
   local t0=$SECONDS n
   n=$($2 | wc -l)
   echo "== $1: $n jobs, up to $PARALLEL at a time, $THREADS threads each"
-  if ! $2 | xargs -P "$PARALLEL" -I{} bash -c 'run_one "$1"' _ {} | tee "$LOG/$1.txt"; then
+  # -d '\n': one job per line, quotes kept for eval (grid --vary carries a ';')
+  if ! $2 | xargs -d '\n' -P "$PARALLEL" -I{} bash -c 'run_one "$1"' _ {} | tee "$LOG/$1.txt"; then
     echo "== $1 had failures after $((SECONDS - t0)) s; stopping. Logs: $LOG"
     exit 1
   fi
