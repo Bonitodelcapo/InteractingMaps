@@ -1,0 +1,6 @@
+sequence,segment,model,dt_ms,n_frames,n_iters,poisson,delta_VFG,delta_IG,delta_GI,delta_RF,delta_FR,delta_IMU,delta_curl,delta_map,delta_shrinkI,err,median,dir,beta,low_freq,contrast,curl,recon_mean,recon_min,recon_inloop,recon_inloop_min,blowup,secs
+boxes_rotation,seg_B,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.1,0.0,0.0,0.0,7.14,5.95,6.98,1.092,0.0771,0.061,0.0559,0.4741,0.0027,0.2411,0.0174,0.0,51
+boxes_rotation,seg_B,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.3,0.0,0.0,0.0,5.85,5.43,6.88,1.04,0.0771,0.061,0.0559,0.4493,0.0038,0.2339,0.0024,0.04,55
+boxes_rotation,seg_B,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.5,0.0,0.0,0.0,5.84,5.64,6.9,1.026,0.0765,0.061,0.0558,0.4469,0.0042,0.232,0.0011,0.04,54
+boxes_rotation,seg_B,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.7,0.0,0.0,0.0,5.89,5.59,6.91,1.02,0.0764,0.0611,0.0557,0.4465,0.0008,0.2297,0.0012,0.04,51
+boxes_rotation,seg_B,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.9,0.0,0.0,0.0,5.94,5.77,6.91,1.016,0.0793,0.0617,0.0557,0.4429,0.0037,0.2291,0.0006,0.04,50

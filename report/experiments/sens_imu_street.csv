@@ -1,0 +1,6 @@
+sequence,segment,model,dt_ms,n_frames,n_iters,poisson,delta_VFG,delta_IG,delta_GI,delta_RF,delta_FR,delta_IMU,delta_curl,delta_map,delta_shrinkI,err,median,dir,beta,low_freq,contrast,curl,recon_mean,recon_min,recon_inloop,recon_inloop_min,blowup,secs
+street_sinthetic,seg_A,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.1,0.0,0.0,0.0,20.02,19.17,3.77,1.345,0.0418,0.1767,0.1688,0.4636,0.1816,0.2035,0.0086,0.0,1588
+street_sinthetic,seg_A,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.3,0.0,0.0,0.0,9.62,9.41,1.52,1.141,0.041,0.2497,0.1767,0.3624,0.1095,0.108,0.0002,0.0,68
+street_sinthetic,seg_A,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.5,0.0,0.0,0.0,6.29,6.08,0.99,1.088,0.0396,0.2964,0.169,0.3252,0.0941,0.0839,0.0019,0.0,63
+street_sinthetic,seg_A,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.7,0.0,0.0,0.0,4.69,4.55,0.75,1.064,0.0384,0.3082,0.1712,0.3053,0.082,0.0738,0.0015,0.0,62
+street_sinthetic,seg_A,thesis_imu,20.0,75,75,iterative,0.12,0.1,0.05,0.05,0.1,0.9,0.0,0.0,0.0,3.76,3.58,0.63,1.05,0.0399,0.3264,0.1677,0.2934,0.0867,0.0681,0.0011,0.0,77
