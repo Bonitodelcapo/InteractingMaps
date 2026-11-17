@@ -513,9 +513,8 @@ def cmd_poisson(E, args):
             rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
                       out_root=root, poisson=mode, deltas=dict(base))
             npz = os.path.join(rc.output_dir, 'maps_final.npz')
-            if not os.path.exists(npz):
-                print(f"  running {lab}/{mode} ...", flush=True)
-                _run(E, rc, not args.no_frames, args.frame_stride)
+            print(f"  running {lab}/{mode} ...", flush=True)
+            _run(E, rc, not args.no_frames, args.frame_stride)
             maps[mode] = np.load(npz)
 
         panels = [('APS reference', _aps(E, ds, t0 + nf * args.dt), 'aps')]
@@ -588,9 +587,8 @@ def cmd_recon(E, args):
                 rc = _cfg(E, ds, sid, t0, args.model, dt, nf, out_root=root,
                           poisson='iterative', deltas=dict(base))
                 npz = os.path.join(rc.output_dir, 'maps_final.npz')
-                if not os.path.exists(npz):
-                    print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
-                    _run(E, rc, not args.no_frames, args.frame_stride)
+                print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
+                _run(E, rc, not args.no_frames, args.frame_stride)
                 got[dt] = np.load(npz)
             aps = _aps(E, ds, t0 + dur)
             ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
@@ -637,15 +635,6 @@ def cmd_dissoc(E, args):
     seqs = [s for s in SEGMENTS
             if not args.sequences or s[3] in args.sequences.split(',')]
     models = (args.models or 'thesis,thesis_cmax,thesis_imu').split(',')
-    # The table may have been produced in pieces (street alone, say), so read
-    # every main csv rather than only the default-named one.
-    stats = {}
-    for path in sorted(glob.glob(os.path.join(OUTDIR, 'main_*.csv'))):
-        if 'curl' in os.path.basename(path):
-            continue
-        for row in csv.DictReader(open(path)):
-            stats[(row['sequence'], row['model'])] = row
-
     cols = len(models) + 1
     with use_style('paper'):
         fig, axes = plt.subplots(len(seqs), cols, figsize=(PAPER_WIDE, 1.65 * len(seqs)))
@@ -659,12 +648,14 @@ def cmd_dissoc(E, args):
                 # not distinguish, and the oldest of them predate maps_final.npz.
                 rc = _cfg(E, ds, sid, t0, m, args.dt, nf)
                 npz = os.path.join(rc.output_dir, 'maps_final.npz')
-                img = None
+                img = st = None
                 if os.path.exists(npz):
                     img = solve_poisson_exact(np.load(npz)['G'], 'fft')
+                    # numbers from this same run, not from a table of another length
+                    st = experiment_tracking.read_summary(rc.output_dir)
                 else:
                     print(f'    missing: {npz}', flush=True)
-                panels.append((MODEL_STYLE[m][0], img, stats.get((ds, m)), 'I'))
+                panels.append((MODEL_STYLE[m][0], img, st, 'I'))
             for c_i, (title, img, st, kind) in enumerate(panels):
                 a = axes[r_i, c_i]
                 if img is None:
@@ -674,8 +665,8 @@ def cmd_dissoc(E, args):
                 if c_i == 0:
                     a.set_ylabel(lab)
                 if st is not None:
-                    a.set_xlabel(f"$r={float(st['recon']):.2f}$,  "
-                                 f"$\\omega$ err $={float(st['err']):.1f}$ °/s")
+                    a.set_xlabel(f"$r={st.get('recon_r_mean', float('nan')):.2f}$,  "
+                                 f"$\\omega$ err $={st['mean_err_deg_s']:.1f}$ °/s")
             print(f'  {lab}: done', flush=True)
         save(fig, os.path.join(FIGDIR, 'fig_dissociation.png'))
     print('-> fig_dissociation.pdf / .png')
@@ -702,11 +693,11 @@ def cmd_regfig(E, args):
     root = os.path.join('experiments', args.name or 'ablation')
     seqs = [s for s in SEGMENTS
             if not args.sequences or s[3] in args.sequences.split(',')]
-    # (column label, directory suffix)
-    cols = [('APS', None), ('none', ''),
-            (r'$\delta_{\mathrm{shrink}I}{=}1$', '_shrinkI1'),
-            (r'$\delta_{\mathrm{map}}{=}0.03$', '_map0.03'),
-            (r'$\delta_{\mathrm{curl}}{=}0.6$', '_curl0.6')]
+    # (column label, the regulariser that ablation job set)
+    cols = [('APS', None), ('none', {}),
+            (r'$\delta_{\mathrm{shrink}I}{=}1$', {'delta_shrinkI': 1.0}),
+            (r'$\delta_{\mathrm{map}}{=}0.03$', {'delta_map': 0.03}),
+            (r'$\delta_{\mathrm{curl}}{=}0.6$', {'delta_curl': 0.6})]
     nf = int(round(args.duration / args.dt))
 
     with use_style('paper'):
@@ -717,18 +708,18 @@ def cmd_regfig(E, args):
             aps = _aps(E, ds, t0 + nf * args.dt)
             if aps is not None:
                 ref = np.log(aps.astype(np.float64) + 1.0)
-            for col, (title, suffix) in enumerate(cols):
+            for col, (title, deltas) in enumerate(cols):
                 a = axes[row, col]
                 kind, img = 'aps', aps
                 if col > 0:
                     kind, img = 'I', None
-                    pat = (f'{root}/{ds}/{args.model}/{sid}_t{t0:.3f}_'
-                           f'dt{int(args.dt*1000)}ms_n{nf}_*C_full{suffix}')
-                    hits = [d for d in sorted(glob.glob(pat))
-                            if os.path.basename(d).endswith('C_full' + suffix)]
-                    if hits:
-                        img = solve_poisson_exact(
-                            np.load(os.path.join(hits[0], 'maps_final.npz'))['G'], 'fft')
+                    # exact folder of the ablation run: a glob would also match
+                    # older runs at other dFR / anchor values and pick the first
+                    rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf, out_root=root,
+                              deltas=dict(deltas))
+                    npz = os.path.join(rc.output_dir, 'maps_final.npz')
+                    if os.path.exists(npz):
+                        img = solve_poisson_exact(np.load(npz)['G'], 'fft')
                 if img is None:
                     a.set_axis_off()
                     continue
@@ -787,8 +778,7 @@ def cmd_readout(E, args):
             rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
                       out_root=root, poisson='iterative', deltas=dict(base))
             npz = os.path.join(rc.output_dir, 'maps_final.npz')
-            if not os.path.exists(npz):
-                _run(E, rc, not args.no_frames, args.frame_stride)
+            _run(E, rc, not args.no_frames, args.frame_stride)
             m = np.load(npz)
             aps = _aps(E, ds, t0 + nf * args.dt)
             if aps is None:

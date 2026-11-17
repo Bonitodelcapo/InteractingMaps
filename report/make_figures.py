@@ -15,8 +15,9 @@ Where the data comes from
 beta_speed, tracking   read results/ directly (summary.json / tracking.csv), so
                        they need the corresponding runs to exist.
 maps, appendix         re-run the network for 40 frames per sequence, because
-                       the map state is not persisted by the harness. Cached in
-                       report/figures/.maps_cache.npz -- delete it to recompute.
+                       the map state is not persisted by the harness. Computed
+                       once per invocation, never cached on disk: a disk cache
+                       is keyed by nothing and outlives code changes.
 distortion             needs only the raw events.
 
 Configuration
@@ -33,6 +34,7 @@ import csv
 import json
 import glob
 import argparse
+import functools
 
 import numpy as np
 import matplotlib
@@ -229,14 +231,10 @@ def fig_cmax_baseline(E, labels=('boxes', 'bicycle')):
 
 
 # ------------------------------------------------------------------- map panels
+@functools.lru_cache(maxsize=1)
 def compute_maps(E):
-    """Run the network N_MAPS frames per sequence; cache the final maps."""
+    """Run the network N_MAPS frames per sequence; the final maps."""
     from interacting_maps.data_loader import EventFrameSequence, CameraCalibration, load_events_fast
-    cache = os.path.join(FIG, '.maps_cache.npz')
-    if os.path.exists(cache):
-        z = np.load(cache)
-        return [(z[f'V{i}'], z[f'I{i}'], z[f'G{i}'], z[f'F{i}'])
-                for i in range(len(SEGMENTS))]
     maps = []
     for ds, sid, t0, label in SEGMENTS:
         p = E.get_dataset_paths(ds)
@@ -260,8 +258,6 @@ def compute_maps(E):
         m = net_maps(net, H, W)
         maps.append((V.copy(), m['I'].copy(), m['G'].copy(), m['F'].copy()))
         print(f'    {label} done')
-    np.savez_compressed(cache, **{f'{n}{i}': m for i, tup in enumerate(maps)
-                                  for n, m in zip('VIGF', tup)})
     return maps
 
 
