@@ -125,6 +125,18 @@ if [ -n "$stray" ]; then
   exit 1
 fi
 
+out_ok() {   # out_ok FILE: no --out, or FILE where its job writes it, with a data row.
+  # Only report/experiments/ and experiments/<name>/: a recursive search also
+  # found copies moved to _old/ and skipped jobs whose real output was gone.
+  [ -z "$1" ] && return 0
+  local f
+  for f in report/experiments/"$1" experiments/*/"$1"; do
+    [ -f "$f" ] && [ "$(wc -l < "$f")" -gt 1 ] && return 0
+  done
+  return 1
+}
+export -f out_ok
+
 run_one() {   # "name|group|command" -> $LOG/name.log; skips if the stamp matches
   local name group cmd hv fp out t0=$SECONDS
   IFS='|' read -r name group cmd <<< "$1"
@@ -132,14 +144,14 @@ run_one() {   # "name|group|command" -> $LOG/name.log; skips if the stamp matche
   fp=$(printf '%s\n%s\n%s\n' "$cmd" "${!hv}" "$HASH_DATA" | sha1sum | cut -c1-40)
   out=$(sed -n 's/.*--out \([^ ]*\).*/\1/p' <<< "$cmd")
   if [ -z "$FORCE" ] && [ "$(cat "$STAMPS/$name" 2>/dev/null)" = "$fp" ] \
-     && { [ -z "$out" ] || [ -n "$(find report/experiments experiments -name "$out" -print -quit 2>/dev/null)" ]; }; then
+     && out_ok "$out"; then
     printf '[skip]      -    %s  (unchanged)\n' "$name"
     return 0
   fi
   if [ -n "$ADOPT" ]; then   # stamp jobs that earlier logs show succeeded; run nothing
     if cat report/logs/*/runs.txt report/logs/*/figures.txt 2>/dev/null \
          | awk -v n="$name" '$1 == "[ok]" && $NF == n {f = 1} END {exit !f}' \
-       && { [ -z "$out" ] || [ -n "$(find report/experiments experiments -name "$out" -print -quit 2>/dev/null)" ]; }; then
+       && out_ok "$out"; then
       echo "$fp" > "$STAMPS/$name"
       printf '[adopt]     -    %s\n' "$name"
     else

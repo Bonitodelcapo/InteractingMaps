@@ -26,7 +26,9 @@ The fingerprint is a hash of:
 3. the data files (names, sizes, times).
 
 On the next run, a job whose fingerprint is unchanged, and whose `--out` file
-still exists, is skipped (`[skip]`). The runs are deterministic, so an unchanged
+still exists with at least one data row, is skipped (`[skip]`). The file is
+looked up only where the job writes it: `report/experiments/` or
+`experiments/<name>/`. Copies moved to a subfolder such as `_old/` do not count. The runs are deterministic, so an unchanged
 fingerprint means unchanged numbers.
 
 "The code the job depends on" is coarse. It is one hash over whole file groups:
