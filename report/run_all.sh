@@ -110,18 +110,18 @@ figures() {
   echo "dissoc|FIGURES|$F --what dissoc --sequences boxes,bicycle,street --duration 1.5"
   echo "regfig|FIGURES|$F --what regfig --sequences boxes,poster,dynamic,bicycle --duration 1.5"
   echo "make_figures|FIGURES|python report/make_figures.py"
-  echo "make_tables|FIGURES|python report/make_tables.py > report/experiments/table_main.tex"
+  echo "make_tables|FIGURES|python report/make_tables.py"
   echo "ofce_summary|FIGURES|python diag_omega_ladder.py --mode ofce_summary"
 }
 
-# make_tables merges main_dt20ms.csv and every main_base_*.csv; a piece no
+# make_tables reads every dissoc_1p5s_*.csv and main_curl_*_*.csv; a file no
 # current run writes (renamed or dropped run) would override the new rows.
-expected=$(runs | sed -n 's/.*--out \(main_base_[^ ]*\.csv\).*/report\/experiments\/\1/p' | sort)
-stray=$(comm -23 <(ls report/experiments/main_dt20ms.csv report/experiments/main_base_*.csv 2>/dev/null | sort) \
+expected=$(runs | sed -n 's/.*--out \(\(dissoc_1p5s\|main_curl\)_[^ ]*\.csv\).*/report\/experiments\/\1/p' | sort)
+stray=$(comm -23 <(ls report/experiments/dissoc_1p5s_*.csv report/experiments/main_curl_*_*.csv 2>/dev/null | sort) \
                  <(echo "$expected"))
 if [ -n "$stray" ]; then
-  echo "Table III pieces no current run writes would be merged into the table. Move them aside first:"
-  echo "  git rm $(echo $stray)"
+  echo "Table pieces no current run writes would be merged into the tables. Move them aside first:"
+  echo "  mkdir -p report/experiments/_old && mv $(echo $stray) report/experiments/_old/"
   exit 1
 fi
 

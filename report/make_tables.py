@@ -1,127 +1,332 @@
-"""make_tables.py -- emit the LaTeX body of the main results table from csv.
+"""make_tables.py -- write every results table of the report from the runs.
 
-    python report/make_tables.py                  # baseline configuration
-    python report/make_tables.py --tag _curl0.6   # a second configuration
+    python report/make_tables.py                # all tables
+    python report/make_tables.py --only main    # one of: main baseline curl
+                                                #   anchor sweep params grid
 
-Reads the csv files written by `run_experiments.py --what main`, merging the
-per-sequence pieces it may have been run in, and prints rows ready to paste
-into tab:main. Generated rather than typed so the table cannot drift from the
-runs behind it, which it had done once already.
+Each table is written as a complete tabular environment to
+report/experiments/table_<name>.tex; bare_jrnl.tex pulls it in with \\input, so
+no number in the report is typed by hand. Generated rather than typed so a
+table cannot drift from the runs behind it, which it had done several times.
+
+Sources (all written by report/run_all.sh):
+    main, curl      report/experiments/dissoc_1p5s_*.csv, main_curl_*.csv (1.5 s)
+    baseline        report/experiments/baseline_dt20ms.csv (+ dissoc for the network)
+    anchor          results/poster_rotation/*/*/run.json (3 s), matched on the
+                    config stored in run.json, not on the folder name
+    sweep           experiments/sweep/*.csv (3 s)
+    grid            experiments/grid/*.csv (1.5 s)
+    params          config.py
 """
 import argparse
 import csv
 import glob
+import json
 import os
 import sys
+
+import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 sys.path.insert(0, ROOT)
-from interacting_maps.style import MODELS as MODEL_STYLE
+os.chdir(ROOT)
+from config import THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME
 
-# display name, csv model key
-MODELS = [(rf'\texttt{{{MODEL_STYLE[k][0]}}}', k)
-          for k in ('cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2')]
-# csv sequence key, display label, extra lines under the label
-SEQS = [('boxes_rotation', r'\texttt{boxes}', []),
-        ('poster_rotation', r'\texttt{poster}', []),
-        ('dynamic_rotation', r'\texttt{dynamic}', ['(person)']),
-        ('ecrot_bicycle', r'\texttt{bicycle}', ['(synthetic)']),
-        ('ecrot_street', r'\texttt{street}', ['(synthetic)'])]
+# display name in the report, model key
+MODELS = [(r'\texttt{cook}', 'cook'), (r'\texttt{thesis}', 'thesis'),
+          (r'\texttt{thesis+IMU}', 'thesis_imu'),
+          (r'\texttt{CMax-anchor}', 'thesis_cmax'),
+          (r'\texttt{CMax-inloop}', 'thesis_cmax_v2')]
+# dataset key, display label, label in baseline npz, extra lines under the label
+SEQS = [('boxes_rotation', r'\texttt{boxes}', 'boxes', []),
+        ('poster_rotation', r'\texttt{poster}', 'poster', []),
+        ('dynamic_rotation', r'\texttt{dynamic}', 'dynamic', ['(person)']),
+        ('ecrot_bicycle', r'\texttt{bicycle}', 'bicycle', ['(synthetic)']),
+        ('ecrot_street', r'\texttt{street}', 'street', ['(synthetic)'])]
+SYNTHETIC = {'ecrot_bicycle', 'ecrot_street'}
+# poster segments of tab:anchor, slowest last (3 s each)
+ANCHOR_SEGMENTS = ['seg_A', 'seg_C', 'seg_D']
+# starting point of the sensitivity sweep, highlighted in tab:sweep
+SWEEP_BASE = dict(delta_FR=0.5, delta_IMU=0.3, n_iters=75, dt_ms=20.0)
+# configuration the report adopts (tab:params), marked in tab:grid
+ADOPTED = (THESIS_PARAMS['delta_FR'], THESIS_PARAMS['delta_IMU'])
 
 
-def load(patterns):
-    """All rows from every csv matching the patterns; later files win."""
+# ------------------------------------------------------------------ helpers
+def load(patterns, root=OUTDIR):
+    """All rows from every csv matching the patterns, keyed (sequence, model)."""
     rows = {}
     for pat in patterns:
-        for path in sorted(glob.glob(os.path.join(OUTDIR, pat))):
+        for path in sorted(glob.glob(os.path.join(root, pat))):
             for r in csv.DictReader(open(path)):
                 rows[(r['sequence'], r['model'])] = r
     return rows
 
 
+def load_list(pattern):
+    """Every row of every csv matching the pattern, unkeyed."""
+    return [r for path in sorted(glob.glob(pattern)) for r in csv.DictReader(open(path))]
+
+
 def fmt(v, nd=1):
     try:
-        return f'{float(v):.{nd}f}'
+        v = float(v)
     except (TypeError, ValueError):
         return '---'
+    return '---' if np.isnan(v) else f'{v:.{nd}f}'
 
 
-def compare(base, other, label):
-    """Two configurations side by side, one row per sequence and model.
+def floor_label(ds):
+    return r'\emph{gyro vs $\omega_{gt}$}' if ds in SYNTHETIC else r'\emph{gyro vs Vicon}'
 
-    Printed as a difference table rather than two separate ones: the question
-    is what the term changes, and that is easier to read when the pair sits in
-    the same row than when it is split across pages.
+
+def speed(lab):
+    """Mean |omega| of the reference over the 1.5 s segment, rad/s (baseline npz)."""
+    path = os.path.join(OUTDIR, f'baseline_dt20ms_{lab}.npz')
+    if not os.path.exists(path):
+        return None
+    return float(np.linalg.norm(np.load(path)['ref'], axis=1).mean())
+
+
+def tabular(spec, head, body):
+    return '\n'.join([rf'\begin{{tabular}}{{{spec}}}', r'\toprule', *head,
+                      *body, r'\bottomrule', r'\end{tabular}', ''])
+
+
+def write(name, text):
+    path = os.path.join(OUTDIR, f'table_{name}.tex')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(f'% generated by report/make_tables.py -- do not edit\n{text}')
+    print(f'  wrote {os.path.relpath(path, ROOT)}')
+
+
+def expected_params(model):
+    p = dict(COOK_PARAMS if model == 'cook' else THESIS_PARAMS)
+    if model == 'cook':
+        p.pop('delta_IMU', None)
+    return p
+
+
+def same_params(a, b):
+    keys = set(a) | set(b)
+    return all(abs(float(a.get(k, 0.0)) - float(b.get(k, 0.0))) < 1e-9 for k in keys)
+
+
+def find_run(ds, model, segment_id, n_frames):
+    """The run folder in results/ whose stored config is the adopted one.
+
+    Matched on run.json content, not on a folder-name glob: results/ also holds
+    runs of the same segment at other step sizes, which a pattern would match.
     """
-    print(r'\midrule')
-    for ds, disp, _extra in SEQS:
-        first = True
+    want = expected_params(model)
+    for path in sorted(glob.glob(os.path.join('results', ds, model, '*', 'run.json'))):
+        c = json.load(open(path))['config']
+        if (c.get('segment_id') == segment_id and c.get('n_frames') == n_frames
+                and c.get('n_iters') == ITERS_PER_FRAME and c.get('distortion_mode') == 'C_full'
+                and c.get('poisson') == 'iterative' and abs(c.get('frame_duration', 0) - 0.02) < 1e-9
+                and same_params(c.get('params', {}), want)):
+            return os.path.dirname(path)
+    return None
+
+
+# ------------------------------------------------------------------- tables
+def table_main():
+    """tab:main: every model on every sequence, 1.5 s, adopted parameters."""
+    rows = load(['dissoc_1p5s_*.csv'])
+    body = []
+    for ds, disp, lab, extra in SEQS:
+        sp = speed(lab)
+        head = [disp] + ([f'${sp:.2f}$\\,rad/s'] if sp else []) + extra
+        body += [r'\midrule',
+                 r'\multirow{6}{*}{\shortstack[l]{' + r'\\'.join(head) + '}}']
+        floor = None
         for mdisp, key in MODELS:
-            b, o = base.get((ds, key)), other.get((ds, key))
-            if b is None and o is None:
+            r = rows.get((ds, key))
+            if r is None:
+                body.append(f' & {mdisp:<22}& --- & --- & --- & --- \\\\')
                 continue
-            seqcell = disp if first else ''
-            first = False
-            def cell(r, k, nd=1):
-                return fmt(r[k], nd) if r else '---'
-            print(f'{seqcell:<22}& {mdisp:<22}& '
-                  f'{cell(b, "err")} & {cell(o, "err")} & '
-                  f'{cell(b, "recon", 2)} & {cell(o, "recon", 2)} \\\\')
-        print(r'\midrule')
+            floor = (r['floor'], r['floor_dir'])
+            body.append(f' & {mdisp:<22}& {fmt(r["err"])} & {fmt(r["dir"])} & '
+                        f'{fmt(r["beta"], 2)} & {fmt(r["recon"], 2)} \\\\')
+        if floor:
+            body.append(f' & {floor_label(ds):<22}& \\emph{{{fmt(floor[0])}}} & '
+                        f'\\emph{{{fmt(floor[1])}}} & --- & --- \\\\')
+    head = [r'Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $r$ \\']
+    return tabular('@{}llrrrr@{}', head, body)
+
+
+def table_baseline():
+    """tab:baseline: CMax and gyro alone vs the CMax-anchored network, 1.5 s."""
+    base = {}
+    for r in csv.DictReader(open(os.path.join(OUTDIR, 'baseline_dt20ms.csv'))):
+        base[(r['sequence'], r['source'])] = float(r['err'])
+    net = load(['dissoc_1p5s_*.csv'])
+    body = []
+    for i, (ds, disp, _lab, _extra) in enumerate(SEQS):
+        if i and ds in SYNTHETIC and SEQS[i - 1][0] not in SYNTHETIC:
+            body.append(r'\midrule')
+        cm, gy = base.get((ds, 'cmax')), base.get((ds, 'gyro'))
+        nw = net.get((ds, 'thesis_cmax'))
+        nw = float(nw['err']) if nw else None
+        best = min(v for v in (cm, nw) if v is not None) if (cm or nw) else None
+        cell = lambda v: (rf'\textbf{{{fmt(v, 2)}}}' if v is not None and v == best
+                          else fmt(v, 2))
+        body.append(f'{disp:<18}& {cell(cm)} & {fmt(gy, 2)} & {cell(nw)} \\\\')
+    head = [r'sequence & CMax alone & gyro alone & network \\',
+            r' & [$^\circ$/s] & [$^\circ$/s] & [$^\circ$/s] \\', r'\midrule']
+    return tabular('@{}lccc@{}', head, body)
+
+
+def table_curl():
+    """tab:curl: every model, 1.5 s, without and with delta_curl = 0.6."""
+    none, curl = load(['dissoc_1p5s_*.csv']), load(['main_curl_*_*.csv'])
+    body = []
+    for ds, disp, _lab, _extra in SEQS:
+        body.append(r'\midrule')
+        for j, (mdisp, key) in enumerate(MODELS):
+            a, b = none.get((ds, key)), curl.get((ds, key))
+            g = lambda r, k, nd: fmt(r[k], nd) if r else '---'
+            body.append(f'{disp if j == 0 else "":<22}& {mdisp:<22}& '
+                        f'{g(a, "err", 1)} & {g(b, "err", 1)} & '
+                        f'{g(a, "recon", 2)} & {g(b, "recon", 2)} \\\\')
+    head = [r' & & \multicolumn{2}{c}{$\wvec$ err [$^\circ$/s]} & \multicolumn{2}{c}{$r$} \\',
+            r'\cmidrule(lr){3-4}\cmidrule(lr){5-6}',
+            r'Sequence & Model & none & curl & none & curl \\']
+    return tabular('@{}llrrrr@{}', head, body)
+
+
+def gyro_floor(run_dir):
+    """Mean error and direction error of the gyro against the reference, plus |omega|."""
+    rows = list(csv.DictReader(open(os.path.join(run_dir, 'tracking.csv'))))
+    g = np.array([[float(r[f'imu_w{a}']) for a in 'xyz'] for r in rows])
+    t = np.array([[float(r[f'gt_w{a}']) for a in 'xyz'] for r in rows])
+    cos = (g * t).sum(1) / (np.linalg.norm(g, axis=1) * np.linalg.norm(t, axis=1))
+    return (np.degrees(np.linalg.norm(g - t, axis=1)).mean(),
+            np.degrees(np.arccos(np.clip(cos, -1, 1))).mean(),
+            np.linalg.norm(t, axis=1).mean())
+
+
+def table_anchor():
+    """tab:anchor: poster, three segments of 3 s, every model plus the gyro floor."""
+    body = []
+    for sid in ANCHOR_SEGMENTS:
+        runs = {k: find_run('poster_rotation', k, sid, 150) for _, k in MODELS}
+        ref = runs.get('thesis_imu')
+        fl = gyro_floor(ref) if ref else None
+        body += [r'\midrule',
+                 rf'\multirow{{6}}{{*}}{{${fl[2]:.2f}$}}' if fl else r'\multirow{6}{*}{---}']
+        for mdisp, key in MODELS:
+            d = runs[key]
+            if d is None:
+                print(f'    missing: poster {sid} {key}', file=sys.stderr)
+                body.append(f' & {mdisp:<22}& --- & --- & --- \\\\')
+                continue
+            s = json.load(open(os.path.join(d, 'run.json')))['summary']
+            body.append(f' & {mdisp:<22}& {fmt(s["mean_err_deg_s"])} & '
+                        f'{fmt(s["mean_dir_err_deg"])} & {fmt(s["mean_beta"], 2)} \\\\')
+        if fl:
+            body.append(rf' & \emph{{gyro vs Vicon}}  & \emph{{{fmt(fl[0])}}} & '
+                        rf'\emph{{{fmt(fl[1])}}} & --- \\')
+    head = [r'$\|\wvec\|$ & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ \\']
+    return tabular('@{}llrrr@{}', head, body)
+
+
+def table_sweep():
+    """tab:sweep: one parameter at a time around SWEEP_BASE, 3 s, all sequences."""
+    rows = load_list(os.path.join('experiments', 'sweep', '*.csv'))
+    cell = {}
+    for r in rows:
+        k = (r['model'], float(r['delta_FR']), float(r['delta_IMU']),
+             int(r['n_iters']), float(r['dt_ms']))
+        cell.setdefault(k, {})[r['sequence']] = r
+    b = SWEEP_BASE
+
+    def line(label, key, bold):
+        rs = cell.get(key, {})
+        lab = rf'$\mathbf{{{label}}}$' if bold else f'${label}$'
+        vals = ' & '.join(f'{fmt(rs[ds]["err"])} & {fmt(rs[ds]["dir"])}' if ds in rs
+                          else '--- & ---' for ds, *_ in SEQS)
+        return f'& {lab:<20}& {vals} \\\\'
+
+    def block(title, model, name, values, fmt_label):
+        out = [r'\midrule', rf'\multicolumn{{12}}{{@{{}}l}}{{\emph{{{title}}}}}\\']
+        for v in values:
+            p = dict(b, **{name: v})
+            key = (model, p['delta_FR'], p['delta_IMU'], p['n_iters'], p['dt_ms'])
+            out.append(line(fmt_label(v), key, v == b[name]))
+        return out
+
+    g = lambda v: f'{v:g}'
+    body = (block(r'anchor weight $\delta_{\text{anchor}}$, contrast anchor', 'thesis_cmax',
+                  'delta_IMU', [0.0, 0.1, 0.3, 0.5], g)
+            + block(r'anchor weight $\delta_{\text{anchor}}$, gyroscope', 'thesis_imu',
+                    'delta_IMU', [0.1, 0.3, 0.5], g)
+            + block(r'kinematic weight $\delta_{F\!R}$', 'thesis_cmax',
+                    'delta_FR', [0.1, 0.3, 0.5, 0.7, 0.9], g)
+            + block('iterations per frame', 'thesis_cmax', 'n_iters', [25, 50, 75, 150], g)
+            + block(r'accumulation window $\Delta t$', 'thesis_cmax', 'dt_ms',
+                    [10.0, 20.0, 50.0], lambda v: rf'{v:g}\,\text{{ms}}'))
+    head = ['& & ' + ' & '.join(rf'\multicolumn{{2}}{{c}}{{{d}}}' for _, d, *_ in SEQS) + r' \\',
+            ''.join(rf'\cmidrule(lr){{{3 + 2*i}-{4 + 2*i}}}' for i in range(len(SEQS))),
+            '& & ' + ' & '.join(['err & dir'] * len(SEQS)) + r' \\']
+    return tabular('@{}ll' + 'rr' * len(SEQS) + '@{}', head, body)
+
+
+def table_params():
+    """tab:params: the step sizes in config.py, so the table cannot disagree with the code."""
+    rows = [(r'$\delta_{\Vmap\!\Fmap\!\Gmap}$', r'flow constraint~\eqref{eq:ofce}', 'delta_VFG'),
+            (r'$\delta_{I\!G}$', r'$\Gmap$ from $\Imap$', 'delta_IG'),
+            (r'$\delta_{G\!I}$', r'$\Imap$ from $\Gmap$', 'delta_GI'),
+            (r'$\delta_{R\!F}$', r'$\Fmap$ from $\wvec$', 'delta_RF'),
+            (r'$\delta_{F\!R}$', r'$\wvec$ from $\Fmap$', 'delta_FR'),
+            (r'$\delta_{\text{anchor}}$', r'external $\wvec$ anchor~\eqref{eq:anchorcost}', 'delta_IMU')]
+    p = lambda d, k: f'{d[k]:.2f}' if k in d else '---'
+    body = [f'{s} & {rel} & {p(COOK_PARAMS, k)} & {p(THESIS_PARAMS, k)} \\\\' for s, rel, k in rows]
+    body += [r'\midrule',
+             rf'\multicolumn{{2}}{{@{{}}l}}{{iterations per frame}} & \multicolumn{{2}}{{c}}{{{ITERS_PER_FRAME}}} \\',
+             r'\multicolumn{2}{@{}l}{window $\Delta t$} & \multicolumn{2}{c}{20\,ms} \\']
+    return tabular('@{}llcc@{}', [r'Symbol & Relation & Cook & Martel \\', r'\midrule'], body)
+
+
+def table_grid():
+    """tab:grid: the (delta_FR, anchor) grid reduced to its optimum per sequence.
+
+    The error depends on the two only through kappa = delta_FR / delta_anchor
+    (equal kappa, equal error), so each sequence is summarised by the best cell
+    and the adopted one.
+    """
+    rows = load_list(os.path.join('experiments', 'grid', '*.csv'))
+    by = {}
+    for r in rows:
+        by.setdefault(r['sequence'], {})[(float(r['delta_FR']), float(r['delta_IMU']))] = float(r['err'])
+    body = []
+    for ds, disp, *_ in SEQS:
+        g = by.get(ds)
+        if not g:
+            continue
+        (fr, an), e = min(g.items(), key=lambda kv: kv[1])
+        ad = g.get(ADOPTED)
+        body.append(f'{disp:<18}& {fmt(ad, 2)} & {fmt(ADOPTED[0] / ADOPTED[1], 2)} & '
+                    f'{fmt(e, 2)} & {fr:g} & {an:g} & {fmt(fr / an, 2)} \\\\')
+    head = [r' & \multicolumn{2}{c}{adopted} & \multicolumn{4}{c}{grid optimum} \\',
+            r'\cmidrule(lr){2-3}\cmidrule(lr){4-7}',
+            r'sequence & err & $\kappa$ & err & $\delta_{F\!R}$ & $\delta_{\text{anchor}}$ & $\kappa$ \\',
+            r'\midrule']
+    return tabular('@{}lrrrrrr@{}', head, body)
+
+
+TABLES = {'main': table_main, 'baseline': table_baseline, 'curl': table_curl,
+          'anchor': table_anchor, 'sweep': table_sweep, 'params': table_params,
+          'grid': table_grid}
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--compare', action='store_true',
-                    help='emit the baseline-vs-tag comparison table')
-    ap.add_argument('--tag', default='', help="e.g. '_curl0.6'")
-    ap.add_argument('--speeds', default='',
-                    help='optional "seq=0.88,seq=0.91" rad/s labels')
+    ap = argparse.ArgumentParser(description='write the report tables')
+    ap.add_argument('--only', choices=sorted(TABLES), help='one table only')
     args = ap.parse_args()
-
-    base_pats = ['main_dt20ms.csv', 'main_base_*.csv']
-    if args.compare:
-        base = load(base_pats)
-        other = load(['main_curl_*.csv'])
-        if not base or not other:
-            sys.exit('need both configurations; run --what main twice')
-        compare(base, other, args.tag)
-        miss = [f'{d}/{k}' for d, _, _ in SEQS for _, k in MODELS
-                if (d, k) not in other]
-        if miss:
-            print('% MISSING in second config: ' + ', '.join(miss), file=sys.stderr)
-        return
-
-    pats = [f'main_dt20ms{args.tag}.csv', f'main_*{args.tag.strip("_") or "base"}*.csv']
-    if not args.tag:
-        pats = base_pats
-    rows = load(pats)
-    if not rows:
-        sys.exit(f'no csv found for tag {args.tag!r} in {OUTDIR}')
-
-    speeds = dict(p.split('=') for p in args.speeds.split(',') if '=' in p)
-    missing = []
-    for ds, label, extra in SEQS:
-        head = [label] + ([f'${speeds[ds]}$\\,rad/s'] if ds in speeds else []) + extra
-        print(r'\midrule')
-        print(r'\multirow{6}{*}{\shortstack[l]{' + r'\\'.join(head) + '}}')
-        floor = None
-        for disp, key in MODELS:
-            r = rows.get((ds, key))
-            if r is None:
-                missing.append(f'{ds}/{key}')
-                print(f' & {disp:<22}& --- & --- & --- & --- \\\\')
-                continue
-            floor = (r.get('floor'), r.get('floor_dir'))
-            print(f' & {disp:<22}& {fmt(r["err"])} & {fmt(r["dir"])} & '
-                  f'{fmt(r["beta"], 2)} & {fmt(r.get("recon"), 2)} \\\\')
-        if floor and floor[0] is not None:
-            print(f' & \\emph{{gyro vs Vicon}}  & \\emph{{{fmt(floor[0])}}} & '
-                  f'\\emph{{{fmt(floor[1])}}} & --- & --- \\\\')
-    if missing:
-        print('\n% MISSING RUNS: ' + ', '.join(missing), file=sys.stderr)
-        print(f'% {len(missing)} cell(s) incomplete', file=sys.stderr)
+    for name in ([args.only] if args.only else TABLES):
+        write(name, TABLES[name]())
 
 
 if __name__ == '__main__':

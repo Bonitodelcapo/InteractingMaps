@@ -732,21 +732,7 @@ original values, so its highlighted row is not this configuration.}}
 \label{tab:params}
 \centering
 \footnotesize
-\begin{tabular}{@{}llcc@{}}
-\toprule
-Symbol & Relation & Cook & Martel \\
-\midrule
-$\delta_{\Vmap\!\Fmap\!\Gmap}$ & flow constraint~\eqref{eq:ofce} & 0.08 & 0.12 \\
-$\delta_{I\!G}$ & $\Gmap$ from $\Imap$ & 0.12 & 0.10 \\
-$\delta_{G\!I}$ & $\Imap$ from $\Gmap$ & 0.08 & 0.05 \\
-$\delta_{R\!F}$ & $\Fmap$ from $\wvec$ & 0.03 & 0.05 \\
-$\delta_{F\!R}$ & $\wvec$ from $\Fmap$ & 0.10 & 0.10 \\
-$\delta_{\text{anchor}}$ & external $\wvec$ anchor~\eqref{eq:anchorcost} & --- & 0.50 \\
-\midrule
-\multicolumn{2}{@{}l}{iterations per frame} & \multicolumn{2}{c}{75} \\
-\multicolumn{2}{@{}l}{window $\Delta t$} & \multicolumn{2}{c}{20\,ms} \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_params}
 \end{table}
 
 \subsection{Evaluation Harness}
@@ -1110,58 +1096,13 @@ is not a model: it is the gyroscope reading scored against the same reference as
 everything above it, and it bounds what any estimate could demonstrate here. The
 same bracket is applied to the exact twist of the synthetic sequences, which is
 why their floor is $0.68$ rather than the $0.11^\circ$/s an instantaneous
-reference would give. \texttt{CMax-inloop} on \texttt{street} did not complete:
-a single run exceeds forty minutes at that event rate. Its behaviour there is
-the divergence already visible on \texttt{bicycle}, which shares the
-trajectory.}}
+reference would give. \texttt{CMax-inloop} diverges on \texttt{street}, as on
+\texttt{bicycle}, which shares the trajectory. \texttt{street} has no APS frames,
+so $r$ is not defined there.}}
 \label{tab:main}
 \centering
 \footnotesize
-\begin{tabular}{@{}llrrrr@{}}
-\toprule
-Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $r$ \\
-\midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{boxes}\\$0.88$\,rad/s}}
- & \texttt{cook}         & 53.8 & 84.3 & 0.89 & 0.00 \\
- & \texttt{thesis}       & 49.0 & 84.1 & 1.13 & -0.00 \\
- & \texttt{thesis+IMU}   & 5.8 & 6.9 & 1.03 & 0.42 \\
- & \texttt{CMax-anchor}  & 7.3 & 8.2 & 0.95 & 0.36 \\
- & \texttt{CMax-inloop}  & 8.3 & 10.2 & 0.86 & 0.33 \\
- & \emph{gyro vs Vicon}  & \emph{6.2} & \emph{6.9} & --- & --- \\
-\midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{poster}\\$0.91$\,rad/s}}
- & \texttt{cook}         & 57.0 & 75.9 & 1.16 & 0.09 \\
- & \texttt{thesis}       & 54.2 & 75.7 & 1.45 & 0.09 \\
- & \texttt{thesis+IMU}   & 8.7 & 6.0 & 1.02 & 0.23 \\
- & \texttt{CMax-anchor}  & 11.1 & 6.9 & 0.88 & 0.16 \\
- & \texttt{CMax-inloop}  & 14.5 & 9.2 & 0.88 & 0.13 \\
- & \emph{gyro vs Vicon}  & \emph{8.8} & \emph{6.0} & --- & --- \\
-\midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{dynamic}\\$0.74$\,rad/s\\(person)}}
- & \texttt{cook}         & 46.5 & 84.3 & 1.03 & -0.01 \\
- & \texttt{thesis}       & 43.3 & 84.8 & 1.24 & -0.01 \\
- & \texttt{thesis+IMU}   & 7.0 & 9.7 & 0.99 & 0.35 \\
- & \texttt{CMax-anchor}  & 9.6 & 12.5 & 0.86 & 0.29 \\
- & \texttt{CMax-inloop}  & 11.3 & 14.7 & 0.93 & 0.25 \\
- & \emph{gyro vs Vicon}  & \emph{7.2} & \emph{9.7} & --- & --- \\
-\midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{bicycle}\\$1.32$\,rad/s\\(synthetic)}}
- & \texttt{cook}         & 74.0 & 74.4 & 181.06 & 0.02 \\
- & \texttt{thesis}       & 52.4 & 28.6 & 2.62 & 0.60 \\
- & \texttt{thesis+IMU}   & 6.3 & 1.0 & 1.09 & 0.10 \\
- & \texttt{CMax-anchor}  & 7.1 & 1.9 & 1.09 & 0.10 \\
- & \texttt{CMax-inloop}  & 45.4 & 27.9 & 1.14 & 0.15 \\
- & \emph{gyro vs Vicon}  & \emph{0.7} & \emph{0.3} & --- & --- \\
-\midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{street}\\$1.32$\,rad/s\\(synthetic)}}
- & \texttt{cook}         & 73.8 & 75.2 & 338.34 & 0.02 \\
- & \texttt{thesis}       & 51.2 & 27.5 & 2.50 & 0.56 \\
- & \texttt{thesis+IMU}   & 6.3 & 1.0 & 1.09 & 0.31 \\
- & \texttt{CMax-anchor}  & 7.1 & 2.2 & 1.09 & 0.31 \\
- & \texttt{CMax-inloop}  & --- & --- & --- & --- \\
- & \emph{gyro vs Vicon}  & \emph{0.7} & \emph{0.3} & --- & --- \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_main}
 \end{table}
 
 The synthetic sequences deserve separate comment, because their reference is not
@@ -1210,24 +1151,12 @@ error, $1.5$\,s per sequence, scored identically to Table~\ref{tab:main}.
 ``CMax'' and ``gyro'' use no network: they are the raw front-end estimates.
 ``network'' is \texttt{CMax-anchor} at the configuration of
 Table~\ref{tab:params}. The gyroscope column is meaningless on the synthetic
-sequences, whose simulated IMU sits $0.11^\circ$/s from the exact twist and so
+sequences, whose simulated IMU sits $0.7^\circ$/s from the reference and so
 amounts to handing the model its own answer.}}
 \label{tab:baseline}
 \centering
 \footnotesize
-\begin{tabular}{@{}lccc@{}}
-\toprule
-sequence & CMax alone & gyro alone & network \\
- & [$^\circ$/s] & [$^\circ$/s] & [$^\circ$/s] \\
-\midrule
-\texttt{boxes}   &  8.41 & 6.25 & \textbf{7.28} \\
-\texttt{poster}  & 13.86 & 8.78 & \textbf{11.06} \\
-\texttt{dynamic} & 10.96 & 7.23 & \textbf{9.56} \\
-\midrule
-\texttt{bicycle} & \textbf{2.10} & 0.11 & 7.14 \\
-\texttt{street}  & \textbf{1.97} & 0.11 & 7.09 \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_baseline}
 \end{table}
 
 On the three real sequences the network improves on its own anchor, by $13\%$,
@@ -1237,7 +1166,7 @@ estimate through, they are correcting it, and they correct it most on
 \texttt{poster\_rotation}, where the anchor alone is weakest.
 
 On the synthetic sequences the relation inverts, and by a large margin: the
-anchor alone attains $2.1^\circ$/s and the network degrades it to $7.1$. With a
+anchor alone attains $2.4^\circ$/s and the network degrades it to $7.1$. With a
 clean pinhole rendering, no distortion and an exact reference, contrast
 maximization is already close to the ceiling, and the joint inference can only
 add its own error. This is the origin of the parameter split of
@@ -1248,7 +1177,7 @@ Two further readings follow. The gyroscope scores $6.25$--$8.78^\circ$/s
 against differenced Vicon --- close to what the network attains --- so the real
 sequences are measured near the floor of the reference itself, and differences
 below roughly $7^\circ$/s there should not be read as differences in method.
-And the synthetic gyroscope column, at $0.11^\circ$/s, shows that anchoring
+And the synthetic gyroscope column, at $0.7^\circ$/s, shows that anchoring
 \texttt{IMU-anchor} on those sequences is close to circular; the corresponding
 entries of Table~\ref{tab:main} are reported for completeness but carry no
 evidential weight.
@@ -1303,35 +1232,7 @@ $1.5$.}}
 \label{tab:anchor}
 \centering
 \footnotesize
-\begin{tabular}{@{}llrrr@{}}
-\toprule
-$\|\wvec\|$ & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ \\
-\midrule
-\multirow{6}{*}{$1.67$}
- & \texttt{cook}          &  94.3 &  82.6 & 148.1 \\
- & \texttt{thesis}        & 107.0 &  71.8 &  1.62 \\
- & \texttt{thesis+IMU}    &  11.8 &  14.6 &  1.07 \\
- & \texttt{CMax-anchor}   &  16.5 &  19.3 &  0.89 \\
- & \texttt{CMax-inloop}   &  24.0 &  34.0 &  0.77 \\
- & \emph{gyro vs Vicon}    & \emph{11.6} & \emph{14.8} & --- \\
-\midrule
-\multirow{6}{*}{$0.91$}
- & \texttt{cook}          &  56.8 &  72.9 &  1.07 \\
- & \texttt{thesis}        &  53.2 &  73.1 &  1.35 \\
- & \texttt{thesis+IMU}    &   8.9 &  12.5 &  1.05 \\
- & \texttt{CMax-anchor}   &  11.3 &  12.3 &  0.86 \\
- & \texttt{CMax-inloop}   &  13.4 &  16.6 &  1.00 \\
- & \emph{gyro vs Vicon}    & \emph{9.0} & \emph{12.5} & --- \\
-\midrule
-\multirow{6}{*}{$0.42$}
- & \texttt{cook}          &  44.7 & 100.2 &  0.55 \\
- & \texttt{thesis}        &  38.7 &  99.1 &  0.65 \\
- & \texttt{thesis+IMU}    &   5.4 &  13.5 &  1.00 \\
- & \texttt{CMax-anchor}   &   8.5 &  13.5 &  0.79 \\
- & \texttt{CMax-inloop}   &   8.9 &  14.3 &  0.80 \\
- & \emph{gyro vs Vicon}    & \emph{5.5} & \emph{13.6} & --- \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_anchor}
 \end{table}
 
 \subsection{Replacing the Gyroscope with Contrast Maximization}
@@ -1902,48 +1803,12 @@ configuration of Table~\ref{tab:params}. $1.5$\,s per run. $r$ is the
 track-mean correlation of the reconstruction against the log APS. The term
 improves the reconstruction in every cell where the reconstruction means
 anything, and the angular velocity on the contrast-anchored models of the real
-sequences, while costing a little on the synthetic ones. Cells marked --- did
-not complete: a single \texttt{street} run exceeds forty minutes at that event
-rate.}}
+sequences, while costing a little on the synthetic ones. Cells marked --- have
+no reference image: \texttt{street} carries no APS frames.}}
 \label{tab:curl}
 \centering
 \footnotesize
-\begin{tabular}{@{}llrrrr@{}}
-\toprule
- & & \multicolumn{2}{c}{$\wvec$ err [$^\circ$/s]} & \multicolumn{2}{c}{$r$} \\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}
-Sequence & Model & none & curl & none & curl \\
-\midrule
-\texttt{boxes}        & \texttt{cook}         & 53.8 & 54.1 & 0.00 & 0.02 \\
-                      & \texttt{thesis}       & 49.0 & 47.5 & -0.00 & 0.01 \\
-                      & \texttt{thesis+IMU}   & 5.8 & 5.9 & 0.42 & 0.53 \\
-                      & \texttt{CMax-anchor}  & 7.3 & 7.1 & 0.36 & 0.50 \\
-                      & \texttt{CMax-inloop}  & 8.3 & 8.3 & 0.33 & 0.46 \\
-\midrule
-\texttt{poster}       & \texttt{cook}         & 57.0 & 57.3 & 0.09 & 0.11 \\
-                      & \texttt{thesis}       & 54.2 & 54.2 & 0.09 & 0.11 \\
-                      & \texttt{thesis+IMU}   & 8.7 & 8.8 & 0.23 & 0.31 \\
-                      & \texttt{CMax-anchor}  & 11.1 & 10.2 & 0.16 & 0.26 \\
-                      & \texttt{CMax-inloop}  & 14.5 & 14.5 & 0.13 & 0.19 \\
-\midrule
-\texttt{dynamic}      & \texttt{cook}         & 46.5 & 46.9 & -0.01 & 0.06 \\
-                      & \texttt{thesis}       & 43.3 & 42.7 & -0.01 & 0.04 \\
-                      & \texttt{thesis+IMU}   & 7.0 & 7.1 & 0.35 & 0.48 \\
-                      & \texttt{CMax-anchor}  & 9.6 & 9.0 & 0.29 & 0.41 \\
-                      & \texttt{CMax-inloop}  & 11.3 & 11.3 & 0.25 & 0.35 \\
-\midrule
-\texttt{bicycle}      & \texttt{cook}         & 74.0 & 75.4 & 0.02 & -0.00 \\
-                      & \texttt{thesis}       & 52.4 & 54.4 & 0.60 & 0.64 \\
-                      & \texttt{thesis+IMU}   & 6.3 & 6.9 & 0.10 & 0.20 \\
-                      & \texttt{CMax-anchor}  & 7.1 & 7.7 & 0.10 & 0.21 \\
-                      & \texttt{CMax-inloop}  & 45.4 & 45.4 & 0.15 & 0.08 \\
-\midrule
-\texttt{street}       & \texttt{cook}         & 73.8 & 75.5 & 0.02 & -0.00 \\
-                      & \texttt{thesis}       & 51.2 & 50.9 & 0.56 & 0.66 \\
-                      & \texttt{thesis+IMU}   & 6.3 & 7.2 & 0.31 & 0.40 \\
-                      & \texttt{CMax-anchor}  & 7.1 & --- & 0.31 & --- \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_curl}
 \end{table}
 
 
@@ -2180,44 +2045,7 @@ same model for both anchors and is listed once.}}
 \label{tab:sweep}
 \centering
 \footnotesize
-\begin{tabular}{@{}llrrrrrrrrrr@{}}
-\toprule
-& & \multicolumn{2}{c}{\texttt{boxes}} & \multicolumn{2}{c}{\texttt{poster}}
-& \multicolumn{2}{c}{\texttt{dynamic}} & \multicolumn{2}{c}{\texttt{bicycle}}
-& \multicolumn{2}{c}{\texttt{street}} \\
-\cmidrule(lr){3-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}\cmidrule(lr){11-12}
-& & err & dir & err & dir & err & dir & err & dir & err & dir \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, contrast anchor}\\
-& $0$ (abl.)     & 57.2 & 79.5 & 53.3 & 73.1 & 47.0 & 91.5 & 74.5 & 79.6 & 75.6 & 82.7 \\
-& $0.1$          & 13.0 & 13.1 & 14.2 & 12.7 & 11.2 & 11.5 & 34.7 & 10.0 & 34.7 & 10.0 \\
-& $\mathbf{0.3}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.5$          &  9.7 & 10.5 & 10.2 & 12.5 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{anchor weight} $\delta_{\text{anchor}}$, gyroscope}\\
-& $0.1$          & 11.6 &  9.5 & 13.9 & 10.8 & 10.6 & 10.1 & 34.6 &  9.7 & 34.6 &  9.7 \\
-& $\mathbf{0.3}$ &  9.0 &  9.1 & 11.5 & 11.9 &  9.6 & 11.3 & 25.3 &  5.5 & 25.4 &  5.5 \\
-& $0.5$          &  7.9 &  9.1 & 10.3 & 12.2 &  9.0 & 11.7 & 20.1 &  4.0 & 20.1 &  4.0 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{kinematic weight} $\delta_{F\!R}$}\\
-& $0.1$          &  8.9 & 10.6 & 10.6 & 12.3 &  9.8 & 12.9 & 10.4 &  2.5 & 10.2 &  2.6 \\
-& $0.3$          &  9.7 & 10.5 & 10.2 & 12.4 &  9.5 & 12.5 & 20.5 &  4.5 & 20.3 &  4.6 \\
-& $\mathbf{0.5}$ & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $0.7$          & 11.1 & 10.5 & 12.4 & 12.6 & 10.4 & 11.8 & 28.8 &  7.2 & 28.7 &  7.2 \\
-& $0.9$          & 11.6 & 11.1 & 13.0 & 12.6 & 10.7 & 11.6 & 31.0 &  8.1 & 30.9 &  8.1 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{iterations per frame}}\\
-& $25$           & 10.5 & 12.2 & 10.6 & 12.3 &  9.0 & 11.0 & 25.7 &  6.1 & 25.5 &  6.1 \\
-& $50$           & 10.3 & 10.7 & 11.1 & 12.5 &  9.6 & 11.5 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $\mathbf{75}$  & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $150$          & 10.9 & 10.6 & 11.6 & 12.5 & 10.4 & 12.9 & 25.7 &  6.0 & 25.5 &  6.1 \\
-\midrule
-\multicolumn{12}{@{}l}{\emph{accumulation window} $\Delta t$}\\
-& $10$\,ms          & 16.8 & 18.1 & 16.8 & 14.4 & 13.9 & 16.2 & 32.5 & 26.1 & 26.8 & 21.0 \\
-& $\mathbf{20}$\,ms & 10.5 & 10.4 & 11.4 & 12.5 & 10.0 & 12.1 & 25.6 &  6.0 & 25.5 &  6.0 \\
-& $50$\,ms          & 18.4 &  9.2 & 18.3 & 11.8 & 15.6 & 11.0 & 34.6 &  3.5 & 34.4 &  3.5 \\
-\bottomrule
-\end{tabular}
+\input{experiments/table_sweep}
 \end{table*}
 
 
