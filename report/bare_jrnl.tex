@@ -35,6 +35,9 @@
 % *** URLS ***
 \usepackage{url}
 
+% *** STRIKEOUT ***
+\usepackage{soul}
+
 % Convenience macros for the recurring quantities.
 \newcommand{\Imap}{I}
 \newcommand{\Vmap}{V}
@@ -50,9 +53,9 @@
 \title{Interacting Maps for Event Cameras:\\
 An Implementation and Evaluation of Two Formulations}
 
-\author{Diana Leo, Gianluca Bonifazi% <-this % stops a space
+\author{Diana Leo, Gianluca Bonifazi% 
 \thanks{Project report for the course \emph{Event-based Machine Vision -- Project},
-Technische Universit\"at Berlin, supervised by Prof.\ Guillermo Gallego.}}
+Technische Universit\"at Berlin, supervised by Prof. Dr. Guillermo Gallego.}}
 
 \markboth{Event-based Machine Vision -- Project Report, TU Berlin}%
 {Interacting Maps for Event Cameras}
@@ -64,9 +67,8 @@ Interacting Maps infers a scene interpretation from an event camera not by a
 processing pipeline but by a set of retinotopic maps --- intensity, spatial
 gradient, optical flow and angular velocity --- coupled by weak geometric
 constraints and refined until mutually consistent. Two formulations exist, by
-Cook \emph{et al.} and in Martel's dissertation, and neither, to our knowledge,
-has a public implementation. We implement both on a shared camera model and
-evaluation harness and evaluate them on five rotation sequences, three real and
+Cook \emph{et al.}~\cite{cook2011,martel2015relational} and in Martel's dissertation~\cite{martel2019thesis}, and neither, to our knowledge,
+has a public implementation. We implement both on a shared camera model and evaluate them on five rotation sequences, three real and
 two synthetic. As published, neither formulation tracks the angular velocity:
 the scale ambiguity inherent to the constraints resolves itself arbitrarily,
 leaving direction errors of $76$--$85^\circ$ on the real sequences, and on real
@@ -91,106 +93,28 @@ Event camera, dynamic vision sensor, joint inference, optical flow, angular velo
 
 \section{Introduction}
 
-\IEEEPARstart{E}{vent} cameras are bio-inspired vision sensors whose pixels
-operate independently and asynchronously: instead of sampling a full frame at a
-fixed rate, every pixel emits an \emph{event} as soon as the logarithmic
-brightness it observes has changed by more than a fixed contrast
-threshold~\cite{lichtsteiner2008}. The resulting output is a sparse stream of
-timestamped, signed brightness changes rather than a sequence of images. This
-buys microsecond temporal resolution, a high dynamic range of about $120$~dB, low
-power consumption and an absence of motion blur, which makes such sensors
-attractive for high-speed and high-dynamic-range robotics~\cite{gallego2022survey}.
-It also means that essentially none of the frame-based computer-vision toolbox
-transfers directly: because a single event carries almost no information on its
-own, algorithms have to be redesigned around the data they actually receive.
+\IEEEPARstart{E}{vent} cameras are bio-inspired vision sensors whose pixels operate independently and asynchronously: instead of sampling a full frame at a fixed rate, every pixel emits an \emph{event} as soon as the logarithmic brightness it observes has changed by more than a fixed contrast threshold~\cite{lichtsteiner2008}. The resulting output is a sparse stream of timestamped, signed brightness changes rather than a sequence of images. This buys microsecond temporal resolution, a high dynamic range of about $140$~dB, low power consumption and little motion blur, which makes such sensors attractive for high-speed and high-dynamic-range robotics~\cite{gallego2022survey}. It also means that essentially none of the frame-based computer-vision toolbox transfers directly: because a single event carries almost no information on its own, algorithms have to be redesigned around the data they actually receive.
 
-Most event-based methods answer this by keeping the familiar
-\emph{processor-centric} structure of a pipeline: events are aggregated into some
-intermediate representation, which is then transformed step by step into the
-quantity of interest. A markedly different answer was given by Cook \emph{et al.}
-with \emph{Interacting Maps}~\cite{cook2011}. There, the visual interpretation is
-not computed by a chain of processing stages but is \emph{represented} by several
-retinotopic maps --- light intensity $\Imap$, its spatial gradient $\Gmap$, the
-optical flow $\Fmap$, and the camera's angular velocity $\wvec$ --- that are
-recurrently coupled by a small number of constraints taken from geometry and from
-the physics of image formation. The event data enters only through the temporal
-intensity derivative map $\Vmap$; every other quantity is inferred. Each
-constraint repeatedly nudges the maps it touches towards mutual consistency, and
-the interpretation emerges from this relaxation rather than from a feed-forward
-computation. Martel later generalised the idea in his
-dissertation~\cite{martel2019thesis,martel2015relational} into a
-\emph{quantity-centric} framework: a bipartite graph whose nodes are visual
-quantities and whose factors are explicit energy functions, with inference
-performed by message passing. The same rotational model is one of the instances
-he derives, alongside variants that add temporal persistence, stereo, or fusion
-with an inertial measurement unit (IMU).
+Most event-based methods answer this by keeping the familiar \emph{processor-centric} structure of a pipeline: events are aggregated into some intermediate representation, which is then transformed step by step into the quantity of interest. A markedly different answer was given by Cook \emph{et al.} with \emph{Interacting Maps}~\cite{cook2011}, later formalised as a relational network~\cite{martel2015relational}. There, the visual interpretation is not computed by a chain of processing stages but is \emph{represented} by several retinotopic maps (light intensity $\Imap$, its spatial gradient $\Gmap$ and the optical flow $\Fmap$) and the camera's angular velocity $\wvec$, for a purely rotating camera, all recurrently coupled by a small number of constraints taken from geometry and from the physics of image formation. The events are the only input and every other quantity is inferred; in~\cite{cook2011} they enter directly as the temporal intensity derivative map $\Vmap$.The maps are updated iteratively, each update reducing the disagreement between the maps a constraint links, so the estimate is obtained as the fixed point of this process rather than from a single forward pass. Martel later generalised the idea in his dissertation~\cite{martel2019thesis} into a \emph{quantity-centric} framework: a bipartite graph whose nodes are visual quantities and whose factors are explicit energy functions, with inference performed by message passing. Cook's model, which covers only a purely rotating camera, becomes one case of this framework, and Martel derives further cases that add temporal persistence, 6-DoF motion with depth, a binocular setup, or fusion with an inertial measurement unit (IMU).
 
-Given only $\Vmap$, none of $\Imap$, $\Gmap$, $\Fmap$, $\wvec$ can be computed on
-its own, and only jointly do the weak constraints determine a solution
-(Sec.~\ref{sec:model}) --- the joint-estimation philosophy that later
-event-based work reached from a different direction, e.g.\ the simultaneous
-mosaicing and tracking of Kim \emph{et al.}~\cite{kim2014} or the
-contrast-maximization framework of Gallego \emph{et al.}~\cite{gallego2018cmax}.
+Each constraint links two or more unknown maps, so from $\Vmap$ alone none of $\Imap$, $\Gmap$, $\Fmap$, $\wvec$ can be computed on its own; a solution is determined only when all constraints are enforced together, and even then only up to a global scale (Secs.~\ref{sec:model} and~\ref{sec:beta}). Later event-based methods also estimate several quantities jointly, although they start from different premises: Kim \emph{et al.}~\cite{kim2014} track the camera rotation while building an intensity mosaic of the scene, and the contrast-maximization framework of Gallego \emph{et al.}~\cite{gallego2018cmax} searches for the motion that makes the motion-compensated events sharpest.
 
-Despite being regularly cited as an early example of joint inference from events,
-neither formulation appears to have a publicly available implementation, and to
-our knowledge no independent evaluation of either has been published. Both
-descriptions also leave decisions open that turn out to matter a great deal in
-practice: the order in which the maps are updated, the relaxation step sizes,
-how the maps are initialised, how lens distortion is accounted for, and --- most
-importantly --- whether and how an absolute reference for the angular velocity is
-supplied. Reproducing the method therefore means making these choices explicitly
-and reporting what they cost.
+Despite being regularly cited as an early example of joint inference from events, neither formulation appears to have a publicly available implementation, and to our knowledge no independent evaluation of either has been published. Both descriptions also leave out details that turn out to matter a great deal in practice: the relaxation step sizes, how the camera is calibrated, including for lens distortion, how the maps are initialised beyond ``random data'', and, in Cook's sequential scheme, the order in which the maps are updated. Most importantly, both note the scale ambiguity shared by all inferred maps, but treat the absolute reference only briefly: Cook resolves the ambiguity arbitrarily in the first frame, and Martel lists ways to fix it (a gyroscope, absolute intensities, or a persistent intensity map with an additional flow estimate) but shows only qualitative results and does not say, for the gyroscope, whether the clamp holds through every iteration or how the readings are synchronised with the event frames. Reproducing the method therefore means making these choices explicitly and reporting what they cost. 
 
-This report describes such a re-implementation and its evaluation. Our
-contributions are:
-
-\begin{itemize}
-\item An implementation of \emph{both} formulations sharing one data path,
-      camera model and evaluation harness: Cook's sequential (Gauss--Seidel)
-      relaxation and Martel's two-phase (Jacobi) message passing, which lets the
-      two be compared on identical input.
-\item An evaluation on the rotation sequences of the Event-Camera
-      Dataset~\cite{mueggler2017} against motion-capture ground truth, and on two
-      synthetic sequences of the ECRot dataset~\cite{guo2024cmaxslam}, reporting
-      angular-velocity tracking error over time rather than single-frame results.
-\item An empirical account of the scale ambiguity that both papers mention but
-      neither quantifies (Sec.~\ref{sec:beta}): without an absolute reference the
-      direction of $\wvec$ becomes uninformative, and the reference must enter
-      the update at \emph{every} iteration --- once at initialisation is not
-      enough.
-\item A sensor-free replacement for that reference. Contrast
-      maximization~\cite{gallego2018cmax} estimates $\wvec$ from the events with
-      an objective that is \emph{not} invariant under the rescaling above, so it
-      can take the gyroscope's place in the same cost without any other change to
-      the model. We report two couplings: as a per-frame anchor, and as the
-      in-loop update rule for $\wvec$.
-\item Two ways of accounting for lens distortion --- undistorting the event
-      coordinates before accumulation, or absorbing the distortion and its
-      Jacobian into the kinematic matrix $\Cmat$ --- together with a
-      network-free geometric check that the two describe the same lens. The
-      second performed better and is used for the networks in all reported
-      results.
-\item A sensitivity analysis over the relaxation step sizes, the number of
-      iterations per frame and the event-window duration.
+This report describes such a re-implementation and its evaluation. Our contributions are:
+    \begin{itemize}
+\item An implementation of both formulations, Cook's sequential relaxation and Martel's two-phase message passing, on one shared data path and camera model, extended to include lens distortion, evaluated on the rotation sequences of the Event-Camera Dataset~\cite{mueggler2017} and on synthetic ECRot sequences~\cite{guo2024cmaxslam}, including a sensitivity analysis of the main parameters.
+\item An empirical account of the scale ambiguity that Cook~\cite{cook2011} and Martel~\cite{martel2019thesis} mention but neither quantifies (Sec.~\ref{sec:beta_exp}): without an absolute reference the direction of $\wvec$ becomes uninformative, and the reference must enter at every iteration, not only at initialisation.
+\item A sensor-free reference for $\wvec$: contrast maximization~\cite{gallego2018cmax}, whose objective is not scale-invariant, replaces the gyroscope in two ways: as the target of the anchor cost, solved once per frame, or as the update rule for $\wvec$, one contrast gradient step per iteration.
 \end{itemize}
 
-The remainder of the report is organised as follows. Section~\ref{sec:background}
-introduces the model and its two variants. Section~\ref{sec:implementation}
-describes the implementation and how it was developed.
-Section~\ref{sec:experiments} reports the experiments on the angular
-velocity, Section~\ref{sec:recon_experiments} those on the reconstructed
-intensity, and Section~\ref{sec:conclusion} concludes.
+The remainder of the report is organised as follows. Section~\ref{sec:background} introduces the model and its two variants. Section~\ref{sec:implementation} describes how we implement the two variants, how we address the scale ambiguity, how the system was developed, and how we evaluate it. Section~\ref{sec:experiments} reports the experiments on the angular velocity, Section~\ref{sec:recon_experiments} those on the reconstructed intensity, and Section~\ref{sec:conclusion} concludes.
 
 
 \section{Background}
 \label{sec:background}
 
-Both formulations share the same picture of the problem and differ only in how
-inference is carried out. We therefore first state the common model
-(Sec.~\ref{sec:model}, Fig.~\ref{fig:model}), then the two inference schemes
-(Secs.~\ref{sec:cook} and~\ref{sec:martel}), and finally the ambiguity that both
-inherit and the estimator we use to remove it (Sec.~\ref{sec:scale}).
+Both formulations share the same picture of the problem and differ mainly in how inference is carried out. We therefore first state the common model (Sec.~\ref{sec:model}, Fig.~\ref{fig:model}) and the scale ambiguity it leaves open (Sec.~\ref{sec:beta}), then the two inference schemes (Secs.~\ref{sec:cook} and~\ref{sec:martel}).
 
 \begin{figure}[!t]
 \centering
@@ -213,7 +137,7 @@ inherit and the estimator we use to remove it (Sec.~\ref{sec:scale}).
 \node[q]   (F)  at (3.0,0)    {$\Fmap$};
 \node[con] (C)  at (0,-1.1)   {$\Cmat$};
 \node[q]   (W)  at (5.4,-1.1) {$\wvec$};
-\node[ext] (X)  at (8.0,-1.1) {$\wvec_{\text{ext}}$};
+\node[ext] (X)  at (8.0,-1.1) {$\wvec_{\text{gyro}}$};
 
 % --- costs ------------------------------------------------------------
 \node[c] (c3) at (1.5,2.2)  {$\mathcal{C}_3$};
@@ -236,63 +160,49 @@ inherit and the estimator we use to remove it (Sec.~\ref{sec:scale}).
 \node[font=\scriptsize, anchor=south] at (6.7,1.45) {$\Gmap\!=\!\nabla\Imap$};
 \node[font=\scriptsize, anchor=north] at (3.0,-1.45) {$\Fmap\!=\!\Cmat\wvec$};
 \node[font=\scriptsize, anchor=north] at (6.7,-1.45)
-      {$\wvec\!=\!\wvec_{\text{ext}}$};
+      {$\wvec\!=\!\wvec_{\text{gyro}}$};
 \end{tikzpicture}}
-\caption{The model as an energy-based graphical model: quantities (rounded) are
-related by costs (orange). Only the event map $E$ is observed (shaded) and
-$\Cmat$ is a constant of the camera; $\Imap$, $\Gmap$, $\Fmap$ and $\wvec$ are
-all inferred. $\mathcal{C}_1$--$\mathcal{C}_4$ are the relations of
-Sec.~\ref{sec:model}. The anchoring cost $\mathcal{C}_a$ (dashed) is absent from
-the model as published; Sec.~\ref{sec:scale} shows it is the condition under
-which the rest works, and that $\wvec_{\text{ext}}$ can come either from a
-gyroscope or from the events themselves.}
+\caption{The common model as a factor graph: quantities (rounded) are related by costs
+(orange). $\mathcal{C}_1$, $\mathcal{C}_2$ and $\mathcal{C}_4$ are the three
+relations of Sec.~\ref{sec:model}, shared by both formulations; $\mathcal{C}_3$
+links $\Vmap$ to the observed event map $E$ (shaded) and is absent in Cook
+\emph{et al.}~\cite{cook2011}, which  takes $\Vmap$ as the input directly. $\Cmat$ is a constant
+of the camera; $\Imap$, $\Gmap$, $\Fmap$ and $\wvec$ are inferred. The dashed part is the gyroscope clamp $\mathcal{C}_a$ of Martel's IMU extension~\cite{martel2019thesis}; Sec.~\ref{sec:scale} describes the references we use instead for the Martel network.}
 \label{fig:model}
 \end{figure}
 
-\subsection{Quantities and constraints}
+\subsection{The Common Model: Quantities and Constraints}
 \label{sec:model}
+Both formulations describe a camera rotating in a static scene with the same quantities, tied together by three constraints. This subsection introduces the input, the quantities and the constraints, and shows why no constraint can be inverted on its own.
 
 \subsubsection{Input}
-An event camera pixel fires an event $e_k=(x_k,y_k,t_k,p_k)$ as soon as the
-logarithmic intensity it observes has changed by a contrast threshold $\theta$
-since the last event at that pixel~\cite{lichtsteiner2008}:
+An event camera pixel fires an event $e_k=(x_k,y_k,t_k,p_k)$ as soon as the logarithmic intensity it observes has changed by a contrast threshold $\theta$ since the last event at that pixel~\cite{lichtsteiner2008}:
 \begin{equation}
 p_k = \begin{cases}
 +1 & \text{if } \Delta \log \Imap(x_k,y_k,t_k) > \theta,\\
 -1 & \text{if } \Delta \log \Imap(x_k,y_k,t_k) < -\theta .
 \end{cases}
 \end{equation}
-Events are accumulated over a short window of duration $\Delta t$ into an
-\emph{event frame}, the per-pixel signed event count
+Events are accumulated over a short window of duration $\Delta t$ into an \emph{event frame}, the per-pixel signed event count
 \begin{equation}
 E(x,y) \;=\; \sum_{t_k \in [t, t+\Delta t)} p_k \, \delta(x-x_k)\,\delta(y-y_k),
 \label{eq:eventframe}
 \end{equation}
 which is a direct correlate of the temporal derivative of the (log) intensity.
-Both formulations use a scalar map $\Vmap \approx \partial \Imap/\partial t$
-derived from~\eqref{eq:eventframe} as the \emph{only} input to the network. In
-what follows $\Imap$ always denotes log-intensity, as is standard for event
-cameras.
+Cook \emph{et al.}~\cite{cook2011} use a scalar map $\Vmap \approx \partial \Imap/\partial t$ derived from~\eqref{eq:eventframe} as the \emph{only} input to the network;
+Martel~\cite{martel2015relational,martel2019thesis} keeps $E$ as the observation and infers $\Vmap$ from it. In what follows $\Imap$ always denotes log-intensity, as is standard for event cameras.
 
 \subsubsection{Quantities}
-The world is modelled as a static scene observed by a camera that is fixed in
-position but free to rotate. Besides $\Vmap$, the model carries the
-log-intensity map $\Imap$, its spatial gradient $\Gmap$, the optical flow
-$\Fmap$, and the camera's angular velocity $\wvec\in\mathbb{R}^3$ --- the only
-non-retinotopic quantity in the network. A constant map $\Cmat$ encodes the
-camera geometry.
+The world is modelled as a static scene observed by a camera that is fixed in position but free to rotate. Besides $\Vmap$, the model carries the log-intensity map $\Imap$, its spatial gradient $\Gmap$, the optical flow $\Fmap$, and the camera's angular velocity $\wvec\in\mathbb{R}^3$, the only non-retinotopic quantity in the network. A constant map $\Cmat$ encodes the camera geometry.
 
 \subsubsection{Constraints}
-Three relations tie these quantities together. The first is the optical-flow
-constraint equation~\cite{horn1981}, which follows from assuming that intensity
-is only transported in the image and not created or destroyed,
+Three relations tie these quantities together. The first is the optical-flow constraint equation, which follows from the brightness-constancy assumption~\cite{horn1981}. It states that the brightness of each point of the image pattern stays constant as it moves, so its total derivative vanishes
 $\mathrm{d}\Imap/\mathrm{d}t = 0$:
 \begin{equation}
 \Vmap_{x,y} + \Fmap_{x,y}\cdot\Gmap_{x,y} \;=\; 0 .
 \label{eq:ofce}
 \end{equation}
-The second is the definition of the gradient, discretised with forward
-differences,
+The second is the definition of the gradient, discretised with forward differences,
 \begin{equation}
 \Gmap_{x,y} \;=\; \nabla \Imap_{x,y}
  \;=\; \big(\Imap_{x+1,y}-\Imap_{x,y},\; \Imap_{x,y+1}-\Imap_{x,y}\big)^{\!\top}.
@@ -304,8 +214,7 @@ linear function of $\wvec$,
 \Fmap_{x,y} \;=\; \Cmat_{x,y}\,\wvec ,
 \label{eq:kin}
 \end{equation}
-with the $2\times3$ kinematic matrix obtained by differentiating the projection
-of a rotating 3-D point~\cite{martel2019thesis}
+with the $2\times3$ kinematic matrix obtained by differentiating the projection of a rotating 3-D point~\cite{martel2019thesis}
 \begin{equation}
 \Cmat_{x,y} =
 \begin{pmatrix}
@@ -314,53 +223,31 @@ of a rotating 3-D point~\cite{martel2019thesis}
 \end{pmatrix},
 \label{eq:cmat}
 \end{equation}
-where $(x',y')$ are the normalised image coordinates of pixel $(x,y)$; the
-flow in pixels is this matrix premultiplied by $\operatorname{diag}(f_x,f_y)$,
-as in~\eqref{eq:cdist}. Notably
-$\Cmat_{x,y}$ does not depend on scene depth: rotational flow carries no
-structure information, which is what makes the purely rotational model
-self-contained.
+where $(x',y')$ are the normalised image coordinates of pixel $(x,y)$; the flow in pixels is this matrix premultiplied by $\operatorname{diag}(f_x,f_y)$, as in~\eqref{eq:cdist}. Notably $\Cmat_{x,y}$ does not depend on scene depth: rotational flow carries no structure information, which is what makes the purely rotational model self-contained.
 
 \subsubsection{Underdetermination of the individual constraints}
-Each constraint on its own is too weak to invert.
-Equation~\eqref{eq:ofce} is one scalar equation in the four unknowns
-$(\Fmap_{x,y},\Gmap_{x,y})$: given $\Vmap$ and $\Gmap$, the admissible $\Fmap$
-form a line perpendicular to $\Gmap$ --- the aperture problem.
-Equation~\eqref{eq:spatial} does not constrain $\Imap$ at all in the direction
-of a constant offset, and $\Cmat_{x,y}$ in~\eqref{eq:kin} has rank~2 with kernel
-spanned by $(x',y',1)^{\!\top}$, so a single flow vector leaves a whole line of
-admissible $\wvec$. Only when all three are imposed simultaneously, over all
-pixels, does a solution become determined. There is no feed-forward order in
-which $\Imap$, $\Gmap$, $\Fmap$ and $\wvec$ can be computed from $\Vmap$; the
-interpretation has to be found by iterating the constraints against each other.
+Each constraint on its own is too weak to invert. Equation~\eqref{eq:ofce} is one scalar equation in the four unknowns $(\Fmap_{x,y},\Gmap_{x,y})$: given $\Vmap$ and $\Gmap$, the admissible $\Fmap$ form a line perpendicular to $\Gmap$ causing the aperture problem.
+Equation~\eqref{eq:spatial} does not constrain $\Imap$ at all in the direction of a constant offset, and $\Cmat_{x,y}$ in~\eqref{eq:kin} has rank~2 with kernel spanned by $(x',y',1)^{\!\top}$~\cite{martel2019thesis}, so a single flow vector leaves a whole line of admissible $\wvec$. Only when all three are imposed simultaneously, over all pixels, does a solution become determined (up to the scale ambiguity below). There is no feed-forward order in which $\Imap$, $\Gmap$, $\Fmap$ and $\wvec$ can be computed from $\Vmap$; the interpretation has to be found by iterating the constraints against each other.
 
-\subsubsection{Scale ambiguity}
+\subsection{Scale Ambiguity}
 \label{sec:beta}
-One degeneracy survives even the joint problem. For any $\beta\neq 0$ the
-substitution
+One degeneracy survives even the joint problem. For any $\beta\neq 0$ the substitution
 \begin{equation}
 (\Imap,\Gmap,\Fmap,\wvec) \;\longmapsto\;
  (\beta\Imap,\;\beta\Gmap,\;\Fmap/\beta,\;\wvec/\beta)
 \label{eq:beta}
 \end{equation}
-leaves \eqref{eq:ofce}--\eqref{eq:kin} satisfied identically. From a single
-input frame it is therefore impossible to tell a slowly moving high-contrast
-scene from a quickly moving low-contrast one, and since $\beta$ may be negative,
-not even the sign of $\wvec$ is determined. Cook \emph{et al.} note that in
-practice the ambiguity is resolved arbitrarily on the first frame by the random
-initialisation and then held roughly constant by warm-starting each frame from
-the previous converged state~\cite{cook2011}. As Sec.~\ref{sec:experiments}
-shows, this is exactly where the method is fragile in a tracking setting.
+leaves \eqref{eq:ofce}--\eqref{eq:kin} satisfied identically. From a single input frame it is therefore impossible to tell a slowly moving high-contrast scene from a quickly moving low-contrast one, and since $\beta$ may be negative, not even the sign of $\wvec$ is determined. Cook \emph{et al.} note that in practice the ambiguity is resolved arbitrarily on the first frame by the random initialisation and then held roughly constant by warm-starting each frame from the previous converged state~\cite{cook2011}. Martel describes the same ambiguity in his formulation~\cite{martel2019thesis}: without a reference, small variations such as the initialisation decide the sign of $\beta$, and the network can switch to the opposite solution during abrupt changes of motion, which appears as inverted intensities (``colour flips''). Since $\beta$ couples all inferred maps, fixing any one of them in absolute units removes it. He gives three ways of doing so: clamping $\wvec$ to gyroscope readings, feeding absolute intensities from an ATIS sensor into $\Imap$, or keeping the previous intensity frame together with a block-matching optical flow and the frame duration, so that $\Fmap$ is expressed in pixels per unit time. To clamp a quantity, he writes the sensor reading into it whenever one arrives and removes it from the quantities the network updates; with $\wvec$ clamped to the gyroscope, the network scales all other maps through it, which removes the colour flips. All three are demonstrated qualitatively only. In our implementation we build on the first of these remedies, for the Martel network only (Sec.~\ref{sec:scale}), while the Cook network keeps the mechanism of its source. 
 
 \subsection{Variant I: Sequential Relaxation (Cook \emph{et al.})}
 \label{sec:cook}
 
-Cook \emph{et al.}~\cite{cook2011} derive the updates from a single recipe: to
+Cook \emph{et al.}~\cite{cook2011,martel2015relational} derive the updates from a single recipe: to
 update a map from one relation, assume the other maps in that relation are
 correct, compute the \emph{candidate} map --- the closest map to the current one
 that would satisfy the relation --- and take a small step of size $\delta$
-towards it. This is a relaxation method applied to local constraints rather than
-to a boundary-constrained differential equation.
+towards it. \st{This is a relaxation method applied to local constraints rather than
+to a boundary-constrained differential equation.}
 
 For the nonlinear relation~\eqref{eq:ofce} the candidate is not unique, so the
 constraint is turned into the quadratic error
@@ -385,22 +272,23 @@ $y$), giving
   - \delta_{G\!I}\big(\hat\Psi^{(x)}_{x,y}+\hat\Psi^{(y)}_{x,y}\big),
 \label{eq:cook_poisson}
 \end{equation}
-a discrete Poisson step. Finally $\Fmap$ is blended towards $\Cmat\wvec$, and
-$\wvec$ is obtained by a linear least-squares fit over the whole flow field,
-which aggregates every pixel's weak opinion into one estimate. Cook stores
+a discrete Poisson step. Finally $\Fmap$ is blended towards the rotational flow,
+which Cook writes as $m_{32}(\wvec\times\vec c_{x,y})$ with $\vec c_{x,y}$ the
+unit viewing direction of pixel $(x,y)$ and $m_{32}$ the projection to the
+image; this is~\eqref{eq:kin} in his notation. In turn, each flow vector leaves a whole line of admissible $\wvec$, and $\wvec$ is blended towards the point with the smallest summed squared distance to all these lines, a linear least-squares fit that aggregates every pixel's weak opinion into one estimate. Cook stores
 $\Imap$ on a $(H\!+\!1)\times(W\!+\!1)$ grid so that forward differences yield a
 full $H\times W$ gradient.
 
 The updates are applied \textbf{sequentially}: each map is written immediately,
 so later updates within the same sweep already see the new values. This is a
-Gauss--Seidel scheme, and the result consequently depends on the order in which
-the relations are visited --- an order the paper does not fix (ours is given in
+Gauss--Seidel scheme, and the result consequently depends on the order in which the relations are visited~\cite{martel2015relational}, an order neither paper
+fixes (ours is given in
 Sec.~\ref{sec:networks}).
 
 \subsection{Variant II: Energy-Based Message Passing (Martel)}
 \label{sec:martel}
 
-Martel~\cite{martel2019thesis,martel2015relational} recasts the same system in a
+Martel~\cite{martel2019thesis} recasts the same system in a
 \emph{quantity-centric} framework. A model is a bipartite graph whose nodes are
 visual quantities and whose factors are explicit energy functions, in the spirit
 of a factor graph~\cite{kschischang2001}. For the rotational model the total energy is
@@ -422,7 +310,7 @@ Inference minimises~\eqref{eq:energy} greedily by message passing
 \emph{Phase~1} every quantity sends its current value to the costs it
 participates in, and each cost computes its partial derivative with respect to
 each of its quantities. In \emph{Phase~2} the costs send those derivatives back
-and every quantity updates. Because the gradient operator is linear, a quantity
+and every quantity updates. Because differentiation is linear, a quantity
 touched by several costs simply sums the messages it receives; e.g.\ $\Gmap$
 receives contributions from both the spatial and the flow-constraint cost.
 Nonlinear relations use gradient steps as in~\eqref{eq:cook_ofce}, whereas linear
@@ -438,12 +326,7 @@ and the update $\wvec \leftarrow \wvec - \eta(\wvec - M^{-1}v)$. Since $M$
 depends only on the pixel grid and the intrinsics, $M^{-1}$ is a $3\times3$
 matrix that can be precomputed once.
 
-The relation $\Gmap=\nabla\Imap$ is linear in the same sense, and the thesis
-gives its closed-form optimum too. Recovering $\Imap$ from $\Gmap$ means solving
-$\min_{\Imap}\lVert\nabla\Imap-\Gmap\rVert^2$, whose normal equations are the
-Poisson equation $\Delta\Imap = \operatorname{div}\Gmap$. Because the Laplacian
-is a convolution it is diagonal in the frequency domain, so the minimiser is one
-division per spatial frequency $k$,
+The relation $\Gmap=\nabla\Imap$ is linear in the same sense, and the thesis gives two updates for it. Recovering $\Imap$ from $\Gmap$ means solving $\min_{\Imap}\lVert\nabla\Imap-\Gmap\rVert^2$, whose normal equations are the Poisson equation $\Delta\Imap = \operatorname{div}\Gmap$. The first (Eq.~6.61 of~\cite{martel2019thesis}) is an iterative step towards a solution of this equation, with an extra term $-\eta\,\Imap$ that pulls $\Imap$ towards zero at every step, a shrinkage term. The second is the closed-form optimum: because the Laplacian is a convolution it is diagonal in the frequency domain, so the minimiser is one division per spatial frequency $k$,
 \begin{equation}
 \widehat{\Imap}(k) \;=\;
   \frac{\overline{D_x(k)}\,\widehat{\Gmap}_x(k)
@@ -453,11 +336,11 @@ division per spatial frequency $k$,
 \end{equation}
 with $D$ the transform of the difference operator. The denominator vanishes at
 $k=0$: the mean of $\Imap$ is the constant of integration and is not determined
-by $\Gmap$, which is the same gauge freedom as the $\beta$-ambiguity of
-Sec.~\ref{sec:scale}. Equation~\eqref{eq:cook_poisson} is one gradient step on
+by $\Gmap$. Equation~\eqref{eq:cook_poisson} is one gradient step on
 the same objective, and~\eqref{eq:poisson_exact} jumps to its minimum; the two
 differ only in that the step of~\eqref{eq:cook_poisson} converges at a rate
-$(1-\delta_{G\!I}\lvert k\rvert^2)$ per frequency, so the low frequencies move
+($1-\delta_{G\!I}\big(\lvert D_x(k)\rvert^2+\lvert D_y(k)\rvert^2\big)\approx
+1-\delta_{G\!I}\lvert k\rvert^2$) per frequency, so the low frequencies move
 far more slowly than the high ones. Sec.~\ref{sec:reconstruction} shows this is
 what separates a recognisable intensity image from an edge map.
 
@@ -466,16 +349,11 @@ all messages are computed from one common snapshot before anything is written.
 This is a Jacobi scheme. It removes the dependence on update order and is the
 property that makes the algorithm parallelisable and portable to
 cellular-processor hardware, which is the thesis' motivation for it. The price
-is paid in propagation speed (Sec.~\ref{sec:converge}), and Jacobi is also less
-forgiving of an inconsistent starting state (Sec.~\ref{sec:networks}). The
+is paid in propagation speed (Sec.~\ref{sec:converge}). The
 thesis also derives extensions of the same
-model --- a persistent world map, a stereo variant, and fusion with an inertial
-measurement unit --- the last of which introduces a fourth cost pulling $\wvec$
-towards an externally measured angular velocity. We implement this IMU fusion,
-and then generalise it: the same cost accepts any external estimate of $\wvec$,
-and we show in Sec.~\ref{sec:scale} that the gyroscope can be removed from it
-altogether.
-
+model: a persistent world
+map, 6-DoF motion with depth, a binocular variant, and fusion with an inertial measurement unit, in which
+$\wvec$ is clamped to the gyroscope reading.
 Table~\ref{tab:variants} summarises the comparison.
 
 \begin{table}[!t]
@@ -486,250 +364,68 @@ Table~\ref{tab:variants} summarises the comparison.
 \footnotesize
 \begin{tabular}{@{}lll@{}}
 \toprule
- & \textbf{Cook \emph{et al.}}~\cite{cook2011} & \textbf{Martel}~\cite{martel2019thesis} \\
+ & \textbf{Cook \emph{et al.}}~\cite{cook2011,martel2015relational} & \textbf{Martel}~\cite{martel2019thesis} \\
 \midrule
-Framing      & interacting maps          & energy-based graph \\
+Representation      & interacting maps          & energy-based graph \\
 Update order & sequential (Gauss--Seidel)& simultaneous (Jacobi) \\
 Derivation   & candidate map + step      & $\partial\mathcal{C}/\partial q$ + step \\
-Input        & $\Vmap$ (binned events)   & $E$, linked to $\Vmap$ by $\sigma$ \\
-Flow model   & $\Fmap = m_{32}(\wvec\times \Cmat)$ & $\Fmap = \Cmat_{x,y}\wvec$ \\
+Input        & $\Vmap$ (2011), $E$ (2015)   & $E$, with $\sigma(\Vmap)=E$  \\
+Flow model   & $\Fmap = m_{32}(\wvec\times \vec c_{x,y})$ & $\Fmap = \Cmat_{x,y}\wvec$ \\
 $\wvec$ from $\Fmap$ & least squares on lines & normal equations~\eqref{eq:normaleq} \\
-Extensions   & --- & persistence, stereo, IMU \\
+Extensions   & --- & world map,6-DoF,\\ & & binocular, IMU \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Resolving the Scale Ambiguity}
-\label{sec:scale}
-
-Neither scheme removes the $\beta$-ambiguity of~\eqref{eq:beta}, because it is a
-property of the constraints and not of the solver. Any remedy must therefore come
-from outside them, in the form of a quantity that is stated in absolute units.
-The thesis' own remedy is the IMU cost mentioned above: a gyroscope measures
-$\wvec$ directly, so adding a term
-\begin{equation}
-\mathcal{C}_{\text{anchor}} \;=\; \|\wvec - \wvec_{\text{ext}}\|^2,
-\qquad \wvec_{\text{ext}} = \wvec_{\text{gyro}}
-\label{eq:anchorcost}
-\end{equation}
-pins down both scale and sign. We implement this first, and it works
-(Sec.~\ref{sec:experiments}). It is, however, an unsatisfying answer to a
-question posed by a vision system: the quantity the network cannot determine is
-supplied by a second sensor rather than recovered from the data.
-
-The observation this report builds on is that $\wvec_{\text{ext}}$
-in~\eqref{eq:anchorcost} need not come from a sensor at all. Any estimator whose
-objective is \emph{not} invariant under the rescaling~\eqref{eq:beta} can occupy
-the same place in the graph.
-
-Contrast maximization~\cite{gallego2018cmax} offers the same anchor from the
-events alone. Under a candidate angular velocity $\wvec$, each event is warped to
-a common reference time $t_{\text{ref}}$ along the trajectory the hypothesis
-implies,
-\begin{equation}
-\vec{p}_k' \;=\; \vec{p}_k + \big(\wvec\,(t_k-t_{\text{ref}})\big)\times\vec{p}_k ,
-\label{eq:warp}
-\end{equation}
-with $\vec{p}_k$ the bearing vector of event $k$. The warped events are
-accumulated into the image of warped events (IWE), and $\wvec$ is chosen to
-maximise its contrast, here the variance
-\begin{equation}
-\wvec^\star = \arg\max_{\wvec}\ \operatorname{Var}\!\big[\mathrm{IWE}(\wvec)\big].
-\label{eq:cmax}
-\end{equation}
-The IWE is sharpest at the true motion and blurs when the hypothesis is wrong in
-\emph{either} direction or magnitude. Objective~\eqref{eq:cmax} is therefore
-\emph{not} invariant under the rescaling~\eqref{eq:beta}, which is precisely the
-property the three constraints lack. Setting
-$\wvec_{\text{ext}} = \wvec^\star$ in~\eqref{eq:anchorcost} therefore turns the
-IMU cost into a sensor-free one, without changing anything else in the model.
-Two ways of coupling the estimator to the message passing are described in
-Sec.~\ref{sec:coupling} and compared in Sec.~\ref{sec:experiments}.
-
-
-\section{Implementation}
+\section{Method and Implementation}
 \label{sec:implementation}
+We reproduce both networks of Sec.~\ref{sec:background} in Python with NumPy, on a shared input and camera model. The following subsections describe the two networks, the choices we made where the sources are incomplete or where we depart from them, how we address the scale ambiguity, how the system was developed and validated, and how we
+evaluate it.
 
-The system is implemented in Python with NumPy. All map updates are expressed as
-whole-array operations, so a message-passing iteration costs a handful of vector
-operations over the $180\times240$ sensor and no per-pixel loop is ever executed.
+\subsection{Input and Camera Model}
+\label{sec:input}
 
-\subsection{Software Structure and Data Path}
+Events are read from the text format of~\cite{mueggler2017} and accumulated per window into the signed-count image~\eqref{eq:eventframe}, the event-frame representation common in the literature~\cite{gallego2022survey}. We then clip it to $\pm c$ and divide by $c$ ($c = 10$), giving $\Vmap \in [-1,1]$. The accumulation window $\Delta t$ serves simultaneously as the input window and as the time step relating the network's internal $R$ (rad/frame) to the reported $\wvec = R/\Delta t$ (rad/s).
 
-The code is organised so that the two formulations share everything except the
-solver: one module converts events into input frames, one builds the kinematic
-matrix, one holds each network, one implements the contrast-maximization
-estimator, and one drives the experiments. Any difference in output between the
-two formulations is therefore attributable to the solver alone.
-
-Events are read from the text format of~\cite{mueggler2017} and accumulated per
-window into the signed-count image~\eqref{eq:eventframe}, which is then clipped
-to $\pm c$ and divided by $c$ ($c = 10$), giving $\Vmap \in [-1,1]$. This is the standard
-event-frame representation~\cite{gallego2022survey}. The accumulation window
-$\Delta t$ serves simultaneously as the input window and as the time step
-relating the network's internal $R$ (rad/frame) to the reported
-$\wvec = R/\Delta t$ (rad/s).
-
-Lens distortion can be removed at either end of this path, and both routes are
-implemented. The first rectifies the event coordinates before accumulation and
-leaves the kinematic matrix in its ideal pinhole form~\eqref{eq:cmat}. The second
-keeps the events in their native pixel coordinates and moves the lens into the
-geometry instead: $\Cmat_{x,y}$ is built from the true undistorted normalised
-coordinates of each physical pixel and pre-multiplied by the analytic Jacobian
-$J_D$ of the distortion map, so that the predicted flow is expressed in
-distorted-pixel units,
+Lens distortion can be removed at either end of this path, and both routes are implemented. The first rectifies the event coordinates before accumulation and leaves the kinematic matrix in its ideal pinhole form~\eqref{eq:cmat}. The second keeps the events in their native pixel coordinates and moves the lens into the geometry instead: $\Cmat_{x,y}$ is built from the true undistorted normalised coordinates of each physical pixel and pre-multiplied by the analytic Jacobian $J_D$ of the distortion map, so that the predicted flow is expressed in distorted-pixel units,
 \begin{equation}
 \Cmat_{x,y} \;=\; \operatorname{diag}(f_x,f_y)\; J_D(x',y')\; A(x',y'),
 \label{eq:cdist}
 \end{equation}
-with $A$ the matrix of~\eqref{eq:cmat}. The second route avoids re-quantising
-rectified sub-pixel coordinates onto the pixel grid during accumulation, and the
-networks use it in every result reported below; the contrast-maximization
-estimator keeps the first route (Sec.~\ref{sec:coupling}).
-Sec.~\ref{sec:distortion} verifies that the two routes describe the same lens
-and explains why the second is preferred for the networks.
-
-Evaluation segments are selected from the gyroscope record
-(Sec.~\ref{sec:protocol}); those of the real sequences span a factor of four in
-rotation speed, which turns out to matter (Sec.~\ref{sec:speed}).
+with $A$ the matrix of~\eqref{eq:cmat}. This second route avoids re-quantising rectified sub-pixel coordinates onto the pixel grid during accumulation, and the networks use it in every result reported below. Sec.~\ref{sec:distortion} verifies that the two routes describe the same lens and explains why the second is preferred for the networks.
 
 \subsection{The Two Networks}
 \label{sec:networks}
 
-Both networks are driven by the \emph{same} kinematic matrix --- the
-distortion-aware form~\eqref{eq:cdist}, which reduces to~\eqref{eq:cmat}
-without distortion --- and the same input frames, so that any difference in
-their output is attributable to the update scheme alone rather than to the
-camera model. The Cook network applies its updates in place, in the fixed order
-$\wvec$ from $\Fmap$; $\Fmap$ and then $\Gmap$ from the flow
-constraint~\eqref{eq:ofce}; $\Gmap$ from $\Imap$; $\Imap$ from $\Gmap$; and
-$\Fmap$ from $\Cmat\wvec$, and stores $\Imap$ on the
-$(H\!+\!1)\times(W\!+\!1)$ grid of~\cite{cook2011}. The Martel network is built
-from \texttt{Quantity} and \texttt{Cost} objects that mirror
-Algorithm~6.5 directly: each cost implements a single method that reads the
-current values and adds its contribution to the gradient accumulator of every
-quantity it touches, and the solver only alternates the two phases. Adding a
-relation therefore means adding one class, which is how the anchoring cost and
-the contrast-maximization cost were introduced; the solver's step function
-needed only small additions (passing the anchor target and the events to the
-costs that use them).
+Both networks implement the update rules of Secs.~\ref{sec:cook} and~\ref{sec:martel}, with the changes listed below. The Cook network applies its updates in place, in the fixed order $\wvec$ from $\Fmap$; $\Fmap$ and then $\Gmap$ from the flow constraint~\eqref{eq:ofce}; $\Gmap$ from $\Imap$; $\Imap$ from $\Gmap$; and $\Fmap$ from $\Cmat\wvec$, and stores $\Imap$ on the $(H\!+\!1)\times(W\!+\!1)$ grid of~\cite{cook2011}. We did not vary this order, so its effect on our results is not measured. The Martel network follows the two-phase scheme of Algorithm~6.5 of~\cite{martel2019thesis} directly: each cost reads the current values of its quantities and adds its partial derivatives to their updates, and the solver only alternates the two phases. A new relation is therefore one new cost, which is how the anchoring and contrast-maximization costs of Sec.~\ref{sec:scale} were added; the solver only had to pass them their external inputs, the anchor target and the events.
 
-Two implementation decisions were necessary and are not stated in either source.
-First, the simultaneous scheme requires a \emph{mutually consistent} initial
-state: if $\wvec$ is initialised from a known value but $\Fmap$ is left at zero,
-the kinematics cost sees a large residual and drives $\wvec$ to zero within a few
-iterations, before the flow constraint has built any structure. Initialising
-$\Fmap = \Cmat\wvec$ removes the problem entirely. Second, in the Martel network
-the flow-constraint gradient in~\eqref{eq:cook_ofce} is clipped per pixel, since
-it grows cubically when $|\Fmap|$ and $|\Gmap|$ are both large. Both networks
-clip $\Imap$, $\Gmap$ and $\Fmap$ to fixed ranges after every iteration; the
-Martel network also clips $\wvec$. Sec.~\ref{sec:speed} shows these bounds do
-not shape the reported angular velocity.
 
-\subsection{Coupling Contrast Maximization to the Network}
-\label{sec:coupling}
-
-The estimator of Sec.~\ref{sec:scale} is used with a fixed-time window equal to
-one frame, a linear warp, signed polarity ($\pm1$ per event) in the IWE, the
-variance objective, and a warm start from the previous frame's estimate; it
-returns $\wvec$ in rad/s in the camera body frame, the same convention as the
-network's $R = \wvec\Delta t$. In both couplings the estimator works on
-rectified event coordinates with a pinhole warp. Because the IWE is formed by
-bilinear voting of the float coordinates, no re-binning occurs and the sampling
-artefact of Sec.~\ref{sec:distortion} does not arise; the network itself still
-receives the raw events and the distortion-aware $\Cmat$. Two couplings to the
-message passing were implemented. They
-differ in \emph{where} the contrast optimisation happens relative to the
-relaxation loop, and consequently in what determines $\wvec$. The first reuses
-the anchoring cost~\eqref{eq:anchorcost} unchanged and only substitutes its
-target, so it is the gyroscope-anchored model with one sensor swapped for an
-estimator; the second replaces the update rule for $\wvec$ entirely.
-
-\subsubsection{Per-frame anchor}
-The first (\texttt{CMax-anchor}) treats contrast maximization as an external
-measurement. Once per frame, before any relaxation, the estimator is run to
-convergence on that frame's events, giving $\wvec_{\text{cmax}}$. The anchoring
-cost of Sec.~\ref{sec:scale} then contributes
-\begin{equation}
-\Delta \wvec \;=\; \delta_{\text{anchor}}\,
-  \big(\wvec - \wvec_{\text{cmax}}\big)
-\label{eq:anchor}
-\end{equation}
-at \emph{every} one of the iterations of that frame, alongside all the other
-costs. The kinematics cost continues to update $\wvec$ from the flow field as
-in~\eqref{eq:normaleq}. The angular velocity is therefore determined jointly by
-the anchor and by the network, and the two can disagree. Because the estimator is
-called once per frame and its gradient is not needed, the optimisation uses a
-derivative-free simplex search (Nelder--Mead) on the variance of the IWE
-blurred by a Gaussian of $\sigma = 1$\,px, with the reference time at the
-window midpoint.
-
-\subsubsection{Interleaved update}
-The second (\texttt{CMax-inloop}) removes the separation between the two
-optimisations. The anchoring cost is dropped, and the kinematics cost is
-restricted to propagating $\wvec$ into the flow field --- it still enforces
-$\Fmap \leftarrow \Cmat\wvec$ but no longer updates $\wvec$ itself. In its place,
-a single gradient-\emph{ascent} step on the contrast objective is taken once per
-message-passing iteration on the network's $R = \wvec\Delta t$,
-\begin{equation}
-R \;\leftarrow\; R \;+\; \lambda\,
-  \frac{\partial}{\partial R}\operatorname{Var}\!\big[\mathrm{IWE}(R/\Delta t)\big],
-\label{eq:inloop}
-\end{equation}
-so that the contrast optimisation and the relaxation of the maps advance
-together rather than one after the other. This requires the analytic gradient of
-the objective, obtained by scattering the derivatives of the bilinear voting
-kernel into three images and differentiating the variance of the unblurred IWE;
-it was checked against finite differences during development. The reference
-time is the midpoint between the first and last event of the window. In this
-variant $\wvec$ is driven by contrast maximization \emph{alone}: the maps
-receive it but never correct it.
-
-The step size $\lambda$ in~\eqref{eq:inloop} is the one parameter without a
-natural scale, since the gradient grows with the square of the number of events
-in the window and therefore varies between sequences. We use a fixed
-$\lambda = 10^{-4}$, equivalent to a step of $\lambda/\Delta t^2 = 0.25$ on
-$\wvec$ (rad/s) at $\Delta t = 20$\,ms. It is stable on all but the densest
-sequence, \texttt{street}, where it diverges (Table~\ref{tab:main}); an order of
-magnitude larger diverges. Sec.~\ref{sec:experiments} shows that the difference
-between the two couplings is almost entirely a difference in how the
-\emph{magnitude} of $\wvec$ is determined, which is what one would expect from
-the fact that only the first lets the kinematic constraint act on it.
-
-\subsection{Deviations From the Published Descriptions}
+\subsection{Deviations From the Sources}
 \label{sec:deviations}
-
-Neither source is complete enough to be implemented without choices. We list
-ours explicitly, since some of them affect the comparison.
+None of the sources is complete enough to be implemented without choices. Some of ours fill details the sources leave open, the others depart from them. We list all of them here, since some affect the comparison.
 
 \begin{enumerate}
-\item \textbf{Shared camera model.} Cook expresses the flow relation as
-  $\Fmap = m_{32}(\wvec\times\Cmat)$ with $\Cmat$ a map of unit ray directions.
-  We use the kinematic matrix~\eqref{eq:cmat}, in its distortion-aware
-  form~\eqref{eq:cdist}, for \emph{both} networks. The two
-  express the same geometry, and sharing it isolates the update scheme as the
-  only difference.
-\item \textbf{Angular velocity from flow.} Cook minimises the point-to-line
-  distance between $\wvec$ and the family of rotations compatible with each flow
-  vector; we use the normal equations~\eqref{eq:normaleq} in both networks.
-\item \textbf{The event cost is omitted.} The term $(\sigma(\Vmap)-E)^2$
-  of~\eqref{eq:energy} is not implemented: $\Vmap$ is identified with the
-  normalised event frame rather than inferred from $E$ through the sensor
-  nonlinearity. $\Vmap$ is therefore treated as observed, as in~\cite{cook2011}.
-\item \textbf{Intensity update.} Inside the message passing both networks use
-  $\Imap \leftarrow \Imap - \eta\operatorname{div}(\Gmap-\nabla \Imap)$, i.e.\
-  Cook's~\eqref{eq:cook_poisson}. For Cook's network this is exact: their
-  Eq.~9 is a convex blend whose two $\Imap$ terms cancel. The thesis' Eq.~6.61
-  carries an additional leading $\Imap$, a shrinkage term, which we therefore
-  omit for the thesis network; Sec.~\ref{sec:regularisers} restores it and
-  measures what it changes. The thesis' exact frequency-domain
-  solution~\eqref{eq:poisson_exact} is also implemented, but as a read-out
-  rather than as the in-loop update; Sec.~\ref{sec:reconstruction} measures both
-  and explains why.
-\item \textbf{Step sizes.} Neither source reports the values of the relaxation
-  step sizes. Two of ours, $\delta_{F\!R}$ and $\delta_{\text{anchor}}$, were
-  chosen by a parameter sweep and the other four set by hand
-  (Table~\ref{tab:params}); Sec.~\ref{sec:sensitivity} examines all six.
+\item \textbf{Shared camera model.} Cook expresses the flow relation as $\Fmap = m_{32}(\wvec\times\vec c_{x,y})$ with $\vec c_{x,y}$ the unit  viewing direction of pixel $(x,y)$. We use the kinematic  matrix~\eqref{eq:cmat}, in its distortion-aware form~\eqref{eq:cdist}, and  the same input frames for \emph{both} networks. The two express the same  geometry, and sharing it removes the camera model as a source of difference  between the networks.
+
+\item \textbf{Angular velocity from flow.} Cook minimises the point-to-line distance between $\wvec$ and the family of rotations compatible with each flow vector (Sec.~\ref{sec:cook}); we use the normal equations~\eqref{eq:normaleq} in both networks.
+
+\item \textbf{The event cost is omitted.} The term $(\sigma(\Vmap)-E)^2$ of~\eqref{eq:energy} is not implemented: $\Vmap$ is identified with the normalised event frame rather than inferred from $E$ through the sensor nonlinearity. $\Vmap$ is therefore treated as observed, as in~\cite{cook2011}.
+
+\item \textbf{Intensity update.} Inside the message passing both networks use $\Imap \leftarrow \Imap - \eta\operatorname{div}(\Gmap-\nabla \Imap)$, i.e.\ Cook's~\eqref{eq:cook_poisson}. For Cook's network this is exact: their Eq.~9 is a convex blend whose two $\Imap$ terms cancel. For the Martel network we omit the shrinkage term of the thesis' iterative update (Sec.~\ref{sec:martel});
+  %The thesis' Eq.~6.61 carries an additional leading $\Imap$, a shrinkage term, which we therefore omit for the Martel network; 
+  Sec.~\ref{sec:regularisers} restores it and measures what it changes. The thesis' exact solution~\eqref{eq:poisson_exact} is also implemented inside the loop, but we use it only as a read-out (item~5); Sec.~\ref{sec:reconstruction} explains why.
+
+\item \textbf{Read-out of $\Imap$.} To read $\Imap$ out of $\Gmap$ we use the thesis' closed-form solution~\eqref{eq:poisson_exact}, computed with the fast Fourier transform (FFT). The FFT treats the image as periodic, so each border continues into the opposite one, whereas the forward differences of the Martel network give zero gradient across the border. We therefore also implemented the same solve with the discrete cosine transform (DCT)~\cite{simchony1990}, which mirrors the image at its borders instead and so matches that convention; none of the sources uses it. Sec.~\ref{sec:reconstruction} compares the two, and we report the FFT read-out. Both return $\Imap$ with its undetermined mean set to zero.
+  
+%\item \textbf{Read-out of $\Imap$.} Two exact solvers are implemented for reading $\Imap$ out of $\Gmap$. The first is the thesis' solution~\eqref{eq:poisson_exact}, computed with the fast Fourier transform (FFT), which implies periodic boundary conditions. The second, which none of the sources uses, solves the same least-squares problem with the discrete cosine transform (DCT)~\cite{simchony1990}, which implies homogeneous Neumann boundary conditions, i.e.\ zero gradient across the image border. These match the forward differences of the Martel network, whose gradient is zero on the last row and column. Both return $\Imap$ with its undetermined mean set to zero.
+
+\item \textbf{Soft gyroscope clamp.} To solve the $\beta$-ambiguity Martel clamps $\wvec$ to the gyroscope reading; we replace the clamp by a soft anchoring cost (Sec.~\ref{sec:scale}).
+  
+\item \textbf{Initialisation.} Instead of the random initialisation of~\cite{cook2011,martel2015relational}, both networks start from a \emph{mutually consistent} state: the gyroscope's $\wvec$ and $\Fmap = \Cmat\wvec$~\eqref{eq:kin}. If $\wvec$ is initialised from a known value but $\Fmap$ is left at zero, the kinematics cost sees a large residual and drives $\wvec$ to zero within a few iterations, before the flow constraint has built any structure; we observed this with Martel's simultaneous scheme.
+  
+\item \textbf{Clipping.} None of the sources clips; Cook \emph{et al.} state that their network needs no clipping of outliers~\cite{cook2011}. Both our networks clip $\Imap$, $\Gmap$ and $\Fmap$ to fixed ranges after every iteration. The Martel network also clips $\wvec$, and clips the flow-constraint gradient of~\eqref{eq:cook_ofce} per pixel, since it grows cubically when $|\Fmap|$ and $|\Gmap|$ are both large.
+
+\item \textbf{Step sizes.} None of the sources reports the values of the relaxation step sizes. Two of ours, $\delta_{F\!R}$ and the anchor weight $\delta_{\text{anchor}}$ of Sec.~\ref{sec:scale}, were chosen by a parameter sweep and the other four set by hand (Table~\ref{tab:params}); Sec.~\ref{sec:sensitivity} examines all six.
 \end{enumerate}
 
 \begin{table}[!t]
@@ -758,217 +454,178 @@ $\delta_{\text{anchor}}$ & external $\wvec$ anchor~\eqref{eq:anchorcost} & --- &
 \end{tabular}
 \end{table}
 
-\subsection{Evaluation Harness}
-\label{sec:harness}
+\subsection{Addressing the Scale Ambiguity}
+\label{sec:scale}
 
-A single code path produces every number in this report. A run is described by a
-configuration object naming the dataset, the segment, the model and the
-parameters; the harness then iterates over frames and writes per-frame estimates,
-a summary and a tracking plot. Five models are evaluated, forming the progression
-of Sec.~\ref{sec:scale}; Table~\ref{tab:models} lists them.
+Neither network removes the $\beta$-ambiguity of~\eqref{eq:beta}, because it is a property of the constraints and not of the solver. In our implementation, both networks carry the scale the way Cook \emph{et al.} describe for theirs (Sec.~\ref{sec:beta}): it is set on the first frame and then passed on by the warm start, each frame starting from the previous converged state. Unlike in~\cite{cook2011}, the first frame is set from the gyroscope instead of at random (Sec.~\ref{sec:deviations}). We leave the Cook network in this form. To the Martel network we add a reference for $\wvec$ that acts at every iteration, in three variants: a gyroscope anchor, a contrast-maximization anchor, and an interleaved update in which contrast maximization updates $\wvec$ directly.
 
-\begin{table}[!t]
-\renewcommand{\arraystretch}{1.2}
-\caption{The Five Models. \textnormal{Code names in the repository in
-parentheses; $\delta_{\text{anchor}}$ is \texttt{delta\_IMU} in the code
-whichever anchor it weights.}}
-\label{tab:models}
-\centering
-\footnotesize
-\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\columnwidth}
->{\raggedright\arraybackslash}p{0.22\columnwidth}
->{\raggedright\arraybackslash}p{0.37\columnwidth}@{}}
-\toprule
-Model & Anchor $\wvec_{\text{ext}}$ & How $\wvec$ is updated \\
-\midrule
-\texttt{cook} & none & least squares on $\Fmap$, Gauss--Seidel \\
-\texttt{thesis} & none & least squares on $\Fmap$, Jacobi \\
-\texttt{thesis+IMU} (\texttt{thesis\_imu}) & gyroscope & least squares + anchor cost \\
-\texttt{CMax-anchor} (\texttt{thesis\_cmax}) & CMax, once per frame & least squares + anchor cost \\
-\texttt{CMax-inloop} (\texttt{thesis\_cmax\_v2}) & --- & one CMax gradient step per iteration \\
-\bottomrule
-\end{tabular}
-\end{table}
 
-The data sources play strictly separate roles. The gyroscope (\texttt{imu.txt})
-is a \emph{model input}: it supplies the anchor target of \texttt{thesis+IMU} at
-every iteration, and the warm start $R_0 = \wvec_{\text{gyro}}\Delta t$ of the
-first frame, which \emph{every} model shares so that all are compared from an
-identical initial state. No model is therefore entirely gyroscope-free; the
-contrast-anchored variants differ in not using it inside the loop. On the real
-sequences the \emph{scoring reference} is the motion-capture record
-(\texttt{groundtruth.txt}, an OptiTrack system at $200$\,Hz~\cite{mueggler2017}),
-differenced between orientations in the body frame,
-$\Delta R = R_1^{\!\top}R_2$; on the synthetic ones it is the simulator's exact
-angular velocity. Because the reference and the gyroscope come from different
-instruments, scoring the gyroscope-anchored model this way is not circular;
-comparing it against the gyroscope itself would be, and we never do.
+\subsubsection{Gyroscope anchor}
+We take Martel's idea of fusing a gyroscope (Sec.~\ref{sec:beta}), but instead of clamping $\wvec$ to the reading we add a soft anchoring cost
+\begin{equation}
+\mathcal{C}_{\text{anchor}} \;=\; \|\wvec - \wvec_{\text{ext}}\|^2,
+\qquad \wvec_{\text{ext}} = \wvec_{\text{gyro}}.
+\label{eq:anchorcost}
+\end{equation}
+At every iteration it moves $\wvec$ towards the reference,
+\begin{equation}
+\Delta \wvec \;=\; -\,\delta_{\text{anchor}}\,\big(\wvec - \wvec_{\text{ext}}\big),
+\label{eq:anchor}
+\end{equation}
+alongside the updates of all the other costs. Because the reference has a definite scale and sign, this cost is not invariant under~\eqref{eq:beta}: it pulls $\wvec$ towards the scale and sign of the reference instead of leaving them free. Unlike a clamp, the anchor leaves the kinematics cost free to update $\wvec$ from the flow field as well, so the network can correct an imperfect reference; the weight $\delta_{\text{anchor}}$ sets how closely $\wvec$ follows it. We call this variant \texttt{thesis+IMU}.
+ 
+\subsubsection{The contrast-maximization estimator}
+\label{sec:coupling}
+The gyroscope, however, is a second sensor. Any estimator whose objective is not invariant under~\eqref{eq:beta} can take its place. Contrast maximization~\cite{gallego2018cmax} is such an estimator: it warps the events of a window along the motion that a candidate $\wvec$ implies and chooses the $\wvec$ that makes the resulting image of warped events (IWE) sharpest, measured by its variance. A wrong hypothesis blurs the IWE whether its direction or its magnitude is wrong, so the objective determines $\wvec$ including its scale and sign, which the constraints~\eqref{eq:ofce}--\eqref{eq:kin} cannot. We use a Python port of the angular-velocity estimator of CMax-SLAM~\cite{guo2024cmaxslam}, run on the rectified events of one frame at a time, with each event voting with its polarity instead of with weight one, and couple it to the Martel network in two ways.
 
-The width of the differencing bracket matters more than it appears. Over a
-single 20\,ms window the reference is dominated by pose noise: the gyroscope
-scores $8$--$25^\circ$/s against it depending on the segment, so the metric
-cannot resolve anything better than that regardless of the model. All results
-below use a $\pm50$\,ms bracket, and every table reports the gyroscope's own
-error against the same reference as an explicit noise floor.
+%\subsubsection{The contrast-maximization estimator}
+%\label{sec:coupling}
+%Contrast maximization~\cite{gallego2018cmax} warps each event to a common reference time $t_{\text{ref}}$ along the trajectory that a candidate angular velocity $\wvec$ implies,
+%\begin{equation}
+%\vec{p}_k' \;=\; \vec{p}_k + \big(\wvec\,(t_k-%t_{\text{ref}})\big)\times\vec{p}_k ,
+%\label{eq:warp}
+%\end{equation}
+%with $\vec{p}_k$ the bearing vector of event $k$, accumulates the warped events into the image of warped events (IWE), and chooses $\wvec$ to maximise its contrast, here the variance,
+%\begin{equation}
+%\wvec^\star = \arg\max_{\wvec}\ \operatorname{Var}\!\big[\mathrm{IWE}(\wvec)\big].
+%\label{eq:cmax}
+%\end{equation}
+%The IWE is sharpest at the true motion and blurs when the hypothesis is wrong in \emph{either} direction or magnitude. Objective~\eqref{eq:cmax} is therefore not invariant under~\eqref{eq:beta}, whereas the constraints~\eqref{eq:ofce}--\eqref{eq:kin} are.
+%We use a Python port of the angular-velocity front-end of CMax-SLAM~\cite{guo2024cmaxslam}., with two changes: the window spans one frame instead of a fixed number of events, so that the estimator returns one $\wvec$ per network frame, and each event votes into the IWE with its polarity ($\pm1$) instead of with weight one. The estimator works on rectified event coordinates, the first route of Sec.~\ref{sec:input}, which costs nothing here because the IWE votes at their sub-pixel positions instead of re-quantising them. The network itself still receives the raw events and the distortion-aware $\Cmat$.
 
-Each frame is scored by the error $\|\wvec_{\text{est}}-\wvec_{\text{ref}}\|$ in
-$^\circ$/s, the angle between the two vectors, and the scale factor
-$\beta = \|\wvec_{\text{ref}}\| / \|\wvec_{\text{est}}\|$. The last is reported
-separately throughout, because Sec.~\ref{sec:beta} predicts that the direction
-and the magnitude of $\wvec$ fail independently, and they do.
+\paragraph{Per-frame anchor}
+The first coupling, \texttt{CMax-anchor}, keeps the anchoring cost and only replaces the gyroscope by the estimator. Once per frame, before the message passing, the estimator is run to convergence on that frame's events, and its result $\wvec_{\text{cmax}}$ becomes the reference $\wvec_{\text{ext}}$ of~\eqref{eq:anchor} at every iteration of that frame. The kinematics cost still updates $\wvec$ from the flow field~\eqref{eq:normaleq}, so $\wvec$ is set jointly by the anchor and the network. Instead of the conjugate-gradient optimiser of the original, the estimator here uses a derivative-free simplex search (Nelder--Mead) on the IWE blurred by a Gaussian of $\sigma = 1$\,px.
 
-Finally, $\wvec$ is \emph{recurrent}. It is initialised once before the first
-frame and is never overwritten afterwards; each frame starts from the previous
-frame's converged state, as in~\cite{cook2011}. No per-frame ground-truth
-re-anchoring is used anywhere, so drift over a segment is fully visible.
+\paragraph{Interleaved update}
+The second coupling, \texttt{CMax-inloop}, drops the anchoring cost and lets contrast maximization update $\wvec$ directly. The kinematics cost now only propagates $\wvec$ into the flow ($\Fmap \leftarrow \Cmat\wvec$) and no longer updates $\wvec$. Instead, each message-passing iteration takes one gradient-ascent step on the contrast objective, written for the network's $R = \wvec\Delta t$,
+\begin{equation}
+R \;\leftarrow\; R \;+\; \lambda\,
+  \frac{\partial}{\partial R}\operatorname{Var}\!\big[\mathrm{IWE}(R/\Delta t)\big].
+\label{eq:inloop}
+\end{equation}
+The gradient is computed analytically on the unblurred IWE, as in the original. We use a fixed $\lambda = 10^{-4}$, at the upper end of the range we found stable. Because the gradient grows with the square of the number of events in the window, no single value suits all sequences.
+
+The two couplings therefore differ in what sets the magnitude of $\wvec$: in \texttt{CMax-anchor} the kinematic constraint still acts on it, while in \texttt{CMax-inloop} contrast maximization alone determines it and the maps never correct it. 
 
 \subsection{Development and Validation}
 
-\subsubsection{Working with a language model}
-The repository was written with the assistance of a large language model. We
-did not ask for an implementation of a method by name, since the model has no
-reliable knowledge of either source; instead we supplied the source material
---- the two papers, the relevant dissertation chapter and the dataset's file
-format --- and asked for a skeleton: the module layout, the event-loading path,
-and class stubs for the two networks with the update rules transcribed from the
-numbered equations. That skeleton was a reasonable starting point, and it is
-where most of the time was saved.
+The code was written with the assistance of a large language model. Since the model has no reliable knowledge of either source, we did not ask for a method by name: we supplied the papers and the dissertation we implement, together with the dataset's file format, and asked for a skeleton of the two networks with the update rules transcribed from the numbered equations. The skeleton saved most of the time, but it was not correct. It silently substituted plausible variants for what the sources say, such as a centred difference where the paper specifies a forward one, a symmetric update where the paper's is asymmetric, or a normalisation the paper does not have, which give slightly wrong answers rather than errors. We therefore checked every update rule line by line against the equation it claims to implement, and treated anything not traceable to a numbered equation as our own decision, listed in Sec.~\ref{sec:deviations}. As a reader the model was useful, explaining derivation steps and catching several of our own errors, but it could not tell us whether a result was right.
 
-It was not, however, correct. The generated code was structurally sound but
-silently substituted plausible variants for what the text says --- a centred
-difference where the paper specifies a forward one, a symmetric update where the
-paper's is asymmetric, a normalisation the paper does not have --- which produce
-slightly wrong answers rather than errors. Every generated update rule was
-therefore checked line by line against the equation it claimed to implement,
-and anything not traceable to a numbered equation was treated as our own design
-decision and documented (Sec.~\ref{sec:deviations}). As a reader, explaining a
-derivation step or what a piece of our code computed, the model caught several
-of our own errors; whether a result was right it could not tell us, which is
-what the validation below is for.
+That is what the validation is for. We built the system in layers (the Cook network, the Martel network, the anchoring cost, the lens distortion, contrast maximization) and validated each before adding the next. Because the output of the network is a single 3-vector that is hard to attribute to any one component, we relied on checks that isolate components rather than on end-to-end accuracy alone. The distortion model was verified against OpenCV's, and the two distortion routes were shown to agree on a fixed-rotation warp to sub-pixel accuracy with the network removed (Sec.~\ref{sec:distortion}). The analytic gradient of the contrast objective was checked against finite differences. The contrast-maximization estimator was validated against \emph{both} the gyroscope and the motion-capture reference before being connected to the network at all, so that a later failure could be attributed to the coupling rather than to the estimator.
 
-\subsubsection{Layered validation}
-The system was built in layers, each validated before the next was added: the
-Cook network, then the Martel network, then the anchoring cost, then distortion
-handling, then contrast maximization. Because the network's output is a single
-3-vector that is hard to attribute to any one component, we relied on checks that
-isolate components rather than on end-to-end accuracy alone. The distortion
-geometry was verified against \texttt{cv2.projectPoints} and by a round-trip
-test, and the two distortion routes were shown to agree on a fixed-rotation warp
-to sub-pixel accuracy with the network removed
-(Sec.~\ref{sec:distortion}). The analytic gradient of the contrast objective was
-checked against finite differences. The contrast-maximization front-end was
-validated against \emph{both} the gyroscope and the motion-capture reference
-before being connected to
-the network at all, so that a later failure could be attributed to the coupling
-rather than to the estimator.
-
-One methodological lesson is worth recording, because it shaped the protocol of
-Sec.~\ref{sec:experiments}: conclusions drawn from a single short segment did not
-survive. A configuration that appeared clearly best on a few frames of one
-medium-speed segment behaved qualitatively differently on a faster one. All
-results below are therefore reported over multiple segments spanning a range of
-rotation speeds, and never as a single aggregate number.
-
-
-\section{Experiments on Angular Velocity}
-\label{sec:experiments}
-
-\subsection{Setup}
+\subsection{Evaluation}
 \label{sec:protocol}
 
-\subsubsection{Sequences and reference}
+We evaluate five models, listed in Table~\ref{tab:models}: the Cook and the
+Martel network without a reference, and the three variants of
+Sec.~\ref{sec:scale}. Each is scored on two of its outputs: the angular velocity, against a reference independent of the gyroscope (Sec.~\ref{sec:experiments}), and the reconstructed intensity, against the intensity frames that the camera's active pixel sensor (APS) records alongside the events (Sec.~\ref{sec:recon_experiments}). Both
+experiment sections share the sequences, segments and configuration described
+here.
 
-We evaluate on three rotation sequences of the Event-Camera
-Dataset~\cite{mueggler2017}, recorded with a DAVIS240C ($240\times180$) that
-provides events, a gyroscope and OptiTrack motion-capture poses simultaneously,
-and on two synthetic sequences from ECRot~\cite{guo2024cmaxslam}, rendered with
-a model of the same sensor. Table~\ref{tab:datasets} lists them.
-
-The synthetic camera is an \emph{idealised} DAVIS240C, and the difference is
-worth stating because it bears on Sec.~\ref{sec:distortion}. It shares the
-resolution and, to within half a percent, the focal length of the real sensor
-($f = 200$ against $199.1$/$198.8$\,px), but its principal point sits at the
-exact image centre where the real one is offset by $(12.2, 20.7)$\,px, and it
-carries no lens distortion at all against $k_1 = -0.37$ for the real camera.
-Each sequence is processed with its own calibration throughout, so the
-distortion-aware kinematic matrix~\eqref{eq:cdist} reduces to the ideal pinhole
-form on the synthetic data.
-
-The synthetic sequences are not a second kind of motion: their rotation is
-spread across all three axes much as the real ones are ($30\%$, $46\%$ and
-$24\%$ of $\lVert\wvec\rVert$ on $x$, $y$ and $z$). What they isolate is the
-\emph{sensor}. With no lens distortion and no sensor noise they are the
-best case the method can be given, and Sec.~\ref{sec:baseline} uses them as
-exactly that: a measurement of what the front-end achieves when nothing in the
-imaging is working against it.
-
-We excluded \texttt{shapes\_rotation} a priori, without running it: its scene
-contains a few isolated shapes on a blank background, whereas both formulations
-assume a scene that produces events densely across the image, so that the flow
-constraint has a spatial gradient to act on almost everywhere.
-
-\texttt{dynamic\_rotation} is included with a caveat. Part of its scene --- a
-person --- can move independently of the camera, which the model of
-Sec.~\ref{sec:model} cannot represent: it explains all image motion as
-ego-rotation. Its segment is therefore chosen by a different criterion from the
-other sequences: not by rotation speed, which would select a stretch in which
-the person stands up and walks across the field of view, but as the stretch in
-which the scene is most nearly static --- the person seated, the camera
-providing essentially all of the image motion. We report the sequence because
-the reconstructed maps remain qualitatively correct on it
-(Sec.~\ref{sec:recon_experiments}), and read its angular-velocity numbers as an
-indication of robustness rather than as a clean measurement.
-
-The synthetic sequences depict busy scenes --- a street with pedestrians, a
-cyclist --- but are nonetheless static in the sense the model requires: they are
-rendered by rotating a virtual camera inside a fixed high-resolution panorama,
-so the depicted people are frozen and all image motion is ego-motion. We
-verified this on the sequences themselves: at the closest revisit of a camera
-orientation, $5$\,s apart, the two frames differ only by a uniform,
-edge-aligned residual consistent with the residual $1.8^\circ$ of
-misalignment, with no localised difference anywhere in the scene. The contrast
-with \texttt{dynamic\_rotation} is therefore one of scene \emph{motion}, not
-scene content.
-
-The two synthetic sequences earn their place on grounds of measurement precision
-rather than realism. Their bags carry the simulator's own angular velocity, so
-the reference is exact and needs no differencing: their simulated gyroscope
-agrees with it to about $0.1^\circ$/s instantaneously and to $0.68^\circ$/s
-under the $\pm50$\,ms averaging used for scoring (Sec.~\ref{sec:harness}),
-against $6$--$9^\circ$/s for the real sequences. They can therefore resolve
-differences between models that the real data cannot, at the cost of lacking
-both real sensor noise and a real lens.
-Usefully, the two were generated along the \emph{same} camera trajectory --- we
-verified that their pose records agree to $5\times10^{-7}$ in quaternion
-components --- over different scenes, \texttt{street} being the denser in
-events. They therefore form a
-controlled pair, varying scene content with the motion held fixed, which
-Sec.~\ref{sec:speed} uses to rule out one explanation of the magnitude error.
-
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.2}
+\caption{The Five Models Evaluated. \textnormal{The two networks as reproduced
+from their sources, without a reference for $\wvec$, and the three variants of
+Sec.~\ref{sec:scale} that give the Martel network one. All five are scored on
+the angular velocity (Sec.~\ref{sec:experiments}) and on the reconstructed
+intensity (Sec.~\ref{sec:recon_experiments}). CMax: contrast maximization.}}
+\label{tab:models}
+\centering
+\footnotesize
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.24\columnwidth}
+>{\raggedright\arraybackslash}p{0.28\columnwidth}
+>{\raggedright\arraybackslash}p{0.37\columnwidth}@{}}
+\toprule
+Model & Reference for $\wvec$ & How $\wvec$ is updated \\
+\midrule
+\texttt{cook} & none & least squares on $\Fmap$, Gauss--Seidel \\
+\texttt{thesis} & none & least squares on $\Fmap$, Jacobi \\
+\texttt{thesis+IMU} & gyroscope & least squares + anchor cost \\
+\texttt{CMax-anchor} & CMax, once per frame & least squares + anchor cost \\
+\texttt{CMax-inloop} & CMax, every iteration & one CMax gradient step per iteration \\
+\bottomrule
+\end{tabular}
+\end{table}
+ 
+\subsubsection{Sequences}
+We use three rotation sequences of the Event-Camera
+Dataset (ECD)~\cite{mueggler2017}, recorded with a DAVIS240C ($240\times180$) that
+provides events, APS frames, a gyroscope and OptiTrack motion-capture poses
+simultaneously, and two synthetic sequences from ECRot~\cite{guo2024cmaxslam},
+rendered with a model of the same sensor. Table~\ref{tab:datasets} lists them.
+ 
+We excluded \texttt{shapes\_rotation} without running it: its scene contains a
+few isolated shapes on a blank background, whereas both formulations assume a
+scene that produces events densely across the image.
+\texttt{dynamic\_rotation} is included with a caveat. A person in the scene can
+move independently of the camera, which the model of Sec.~\ref{sec:model}
+cannot represent, so its segment is the stretch in which the scene is most
+nearly static, with the person seated. We read its numbers as an indication of
+robustness rather than as a clean measurement.
+ 
+The synthetic sequences rotate about all three axes much as the real ones do,
+but with an idealised sensor: no lens distortion, so~\eqref{eq:cdist} reduces
+to the pinhole form, and no sensor noise. Although they depict people, they are
+rendered by rotating a virtual camera inside a fixed panorama, so the scene is
+static as the model requires. Their reference angular velocity is exact, and
+their simulated gyroscope agrees with it to about $0.1^\circ$/s at each
+instant. They are therefore the best case the method can be given
+(Sec.~\ref{sec:baseline}), and they can resolve differences between models
+that the real data cannot. The two were generated along the same camera
+trajectory over different scenes, \texttt{street} being the denser in events,
+so they form a controlled pair that Sec.~\ref{sec:speed} uses.
+ 
+\subsubsection{Segments}
 Each segment spans $150$ frames of $\Delta t = 20$\,ms, i.e.\ three seconds of
-continuous tracking --- long enough for drift to appear, which shorter
-evaluations hide. The scale-ambiguity analysis (Table~\ref{tab:anchor},
-Fig.~\ref{fig:beta_speed}) uses all $150$; the main comparison
-(Table~\ref{tab:main}) and the figures drawn from its runs use the first $75$
-($1.5$\,s). The segment reported per sequence is the one of median
-rotation speed, chosen on that criterion alone and not on any model's error.
-Because Sec.~\ref{sec:speed} finds that accuracy depends systematically on
-rotation speed, reporting a single segment per sequence would otherwise amount
-to an undeclared choice of operating point; Fig.~\ref{fig:beta_speed} therefore
-shows all seven segments we measured on \texttt{boxes} and \texttt{poster}.
+continuous tracking, long enough for drift to appear. The scale-ambiguity
+analysis (Table~\ref{tab:anchor}, Fig.~\ref{fig:beta_speed}) uses all $150$
+frames; the main comparison (Table~\ref{tab:main}) and the figures drawn from
+its runs use the first $75$ ($1.5$\,s). Segments are taken from stretches in
+which the gyroscope's $\|\wvec\|$ varies little, but $\wvec$ is not constant
+within them (on \texttt{poster} $\omega_x$ reverses, Fig.~\ref{fig:tracking}),
+and it need not be, since the constraints of Sec.~\ref{sec:model} hold at every
+instant.
+ 
+During development, conclusions drawn from a single short segment did not
+survive: a configuration that appeared clearly best on one medium-speed segment
+behaved qualitatively differently on a faster one. For each sequence we
+therefore report the segment of median rotation speed, chosen on that criterion
+alone and not on any model's error, and Fig.~\ref{fig:beta_speed} shows all
+seven segments we measured on \texttt{boxes} and \texttt{poster}.
+ 
+\subsubsection{Angular velocity}
+On the real sequences the reference is the motion-capture record, differenced
+between orientations in the body frame, $\Delta R = R_1^{\!\top}R_2$; on the
+synthetic ones it is the simulator's angular velocity. Motion capture is a
+different instrument from the gyroscope, so scoring the gyroscope-anchored model
+against it is not circular. Differenced over a single $20$\,ms frame, the
+reference is dominated by pose noise: the gyroscope scores $8$--$25^\circ$/s
+against it, depending on the segment. We therefore take the reference over a
+$\pm50$\,ms bracket around each frame, differencing the poses across it on the
+real sequences and averaging the exact angular velocity over it on the synthetic
+ones, so that both are scored the same way. Every table reports the gyroscope's
+own error against this reference as a noise floor: $6$--$9^\circ$/s on the real
+sequences and $0.68^\circ$/s on the synthetic ones (Table~\ref{tab:datasets}).
+ 
+Each frame is scored by the error $\|\wvec_{\text{est}}-\wvec_{\text{ref}}\|$ in
+$^\circ$/s, the angle between the two vectors, and the scale factor
+$\beta = \|\wvec_{\text{ref}}\| / \|\wvec_{\text{est}}\|$. We report $\beta$
+separately, because the rescaling~\eqref{eq:beta} changes the magnitude and the
+sign of $\wvec$ but not its axis.
 
-Segment start times come from a pass over the gyroscope record that flags
-windows of $0.5$--$3$\,s with low angular-velocity variance (relative standard
-deviation of $\|\wvec\|$ below $0.25$; on \texttt{boxes} the flagged windows
-are $0.5$\,s long), and the tracks run $1.5$ or $3$\,s from those starts. Over
-the tracks themselves
-$\wvec$ is not constant --- on \texttt{poster} it goes through a full reversal of
-$\omega_x$ (Fig.~\ref{fig:tracking}) --- and it need not be: the constraints of
-Sec.~\ref{sec:model} hold instantaneously for any $\wvec$, and the differenced
-reference only requires $\wvec$ to be roughly constant across its $\pm50$\,ms
-bracket. A reference obtained by fitting a rotation spline through the poses
-and differentiating it analytically would remove even that requirement; we did
-not implement one.
+\subsubsection{Intensity}
+\label{sec:recon_metric}
+$\Imap$ is never observed, so we score it against the APS frame nearest in time, by the magnitude $|r|$ of the Pearson correlation over the interior $80\%$ of the image. The APS intensities, scaled to $[0,1]$, enter as $\log(1+\text{APS})$; scoring against the logarithm of the 8-bit values instead changes no ranking between models on any sequence. The magnitude of the correlation is used because it is invariant to scale, offset and sign, which the reconstruction cannot determine: the $\beta$-ambiguity of Sec.~\ref{sec:beta} admits an inverted $\Imap$, and the mean of $\Imap$ is the undetermined constant of integration of~\eqref{eq:poisson_exact}. The $|r|$ in the tables is taken at every frame of the track and averaged; Table~\ref{tab:recon} instead reports it at three track lengths ($0.4$, $0.8$, $1.2$\,s), because the reconstruction is not uniform in time. Since the APS frames differ from $\Imap$ in exposure and are offset in time, $|r|$ compares reconstructions with each other and stays well below unity even for a good map.
+
+\subsubsection{Configuration}
+Unless stated otherwise, all runs use the parameters of Table~\ref{tab:params},
+$75$ iterations per frame and the distortion-aware kinematic
+matrix~\eqref{eq:cdist} (Sec.~\ref{sec:distortion}); results at the original
+step sizes are marked as such. Every model starts from the gyroscope on the
+first frame (Sec.~\ref{sec:scale}), so none is entirely gyroscope-free; only
+\texttt{thesis+IMU} uses it after that. $\wvec$ is never reset, so the numbers
+include the drift accumulated over a segment. The step sizes were tuned for the
+angular velocity alone, not for the reconstruction (Sec.~\ref{sec:objective}).
 
 \begin{table}[!t]
 \renewcommand{\arraystretch}{1.2}
@@ -991,54 +648,25 @@ Sequence & $\|\wvec\|$ & Floor & Source \\
 \bottomrule
 \end{tabular}
 \end{table}
-\subsubsection{Lens distortion}
+
+\section{Results on Angular Velocity}
+\label{sec:experiments}
+This section reports the angular velocity estimated by the five models, scored as described in Sec.~\ref{sec:protocol}. It begins with the experiment that decided the camera model used in all the others (Sec.~\ref{sec:distortion}), then compares the five models (Sec.~\ref{sec:mainresults}) and shows how the two update schemes converge within a frame (Sec.~\ref{sec:converge}). Sec.~\ref{sec:maps_add} examines what the maps contribute once an anchor is present, and Sec.~\ref{sec:sensitivity} how the choice of parameters affects the result.
+
+\subsection{Lens Distortion}
 \label{sec:distortion}
+The DAVIS240C lens is appreciably distorted ($k_1 = -0.37$), and Sec.~\ref{sec:input} described two ways of accounting for it. The distortion-aware kinematic matrix~\eqref{eq:cdist} is our own derivation rather than something taken from either source, so we first verified that it encodes the lens correctly. The scale ambiguity of the network would confound an end-to-end comparison, so the check uses contrast maximization as an independent estimator, with the network removed: one path undistorts the events and warps them under a pinhole model, the other keeps the events raw and carries the lens through the warp, as $\Cmat$ does. The forward distortion model matches OpenCV's to $2.8\times10^{-14}$\,px, and undistortion and distortion compose to the identity to $10^{-8}$\,px. The decisive check is the third: at a fixed rotation, warping the distortion-aware way and then undistorting the result lands on the pinhole warp to $0.043$\,px. The two routes are the same map.
 
-The DAVIS240C lens is appreciably distorted ($k_1 = -0.37$), and
-Sec.~\ref{sec:implementation} described two ways of accounting for it. Both are
-correct as geometry; they differ in where the correction is applied, and that
-turns out to matter for a reason unrelated to the geometry.
+They differ in sampling. Undistortion (\texttt{cv2.undistortPoints}) returns sub-pixel coordinates, which the accumulation~\eqref{eq:eventframe} must then bin onto the integer pixel grid. The lens is barrel-distorted, so rectification stretches the periphery: neighbouring sensor pixels land up to $1.5$\,px apart, binning skips the pixels in between, and because the mapping is fixed the same pixels stay empty in every frame. The result is a concentric moir\'e pattern that is not present in the data (Fig.~\ref{fig:distortion}), and the outer ring of the sensor falls outside the frame altogether. Over the same events, undistorting first reduces the number of occupied pixels from $43.2$k to $33.7$k, about a fifth of the spatial support of $\Vmap$. $\Gmap$ is computed by differencing neighbouring pixels of $\Imap$, so an artefact at exactly that scale is the worst kind for this model.
 
-We first verified that the distortion-aware kinematic
-matrix~\eqref{eq:cdist}, which is our own derivation rather than something taken
-from either source, encodes the lens correctly. Because the network's scale
-ambiguity would confound any end-to-end comparison, the check is made with the
-network removed, using contrast maximization as an independent estimator: one
-path undistorts the events and warps them under a pinhole model, the other keeps
-the events raw and carries the lens through the warp, as $\Cmat$ does. Three
-checks agree. The forward distortion model matches \texttt{cv2.projectPoints} to
-$2.8\times10^{-14}$\,px; undistortion and distortion compose to the identity to
-$10^{-8}$\,px; and --- the decisive one --- at a fixed rotation, warping the
-distortion-aware way and then undistorting the result lands on the pinhole warp
-to $0.043$\,px, well below one pixel. The two routes are the same map.
-
-The difference is one of sampling, not geometry, and it is visible directly in
-the input. \texttt{cv2.undistortPoints} returns sub-pixel float coordinates,
-which the accumulation of~\eqref{eq:eventframe} must then bin onto the integer
-pixel grid. The lens is barrel-distorted, so rectification stretches the
-periphery: neighbouring sensor pixels land up to $1.5$\,px apart, binning skips
-the pixels in between, and because the mapping is fixed the same pixels stay
-empty in every frame. The result is a concentric moir\'e pattern that is not
-present in the data (Fig.~\ref{fig:distortion}), and the outer ring of the
-sensor falls outside the frame altogether. Over the same events, undistorting
-first reduces the number of occupied pixels from $43.2$k to $33.7$k: roughly a
-fifth of the spatial support of $\Vmap$ is lost. The spatial gradient $\Gmap$ is
-computed by differencing neighbouring pixels of $\Imap$, so an artefact at
-exactly that scale is the worst kind for this model.
-
-Carrying the lens in $\Cmat$ avoids the resampling entirely: the events stay on
-the pixels that produced them, and the distortion is applied to the
-\emph{prediction} instead, where it costs nothing. We therefore use the
-distortion-aware $\Cmat$ in both networks for every result in this report; the
-contrast-maximization anchor, which never bins its coordinates, undistorts its
-events first (Sec.~\ref{sec:coupling}).
+Carrying the lens in $\Cmat$ avoids the resampling: the events stay on the pixels that produced them, and the distortion is applied to the prediction instead. Both networks therefore use~\eqref{eq:cdist} for every result in this report. The contrast-maximization anchor, which never bins its coordinates, undistorts its events first (Sec.~\ref{sec:coupling}).
 
 \begin{figure}[!t]
 \centering
 \includegraphics[width=\columnwidth]{fig_distortion}
 \caption{Event frames over the same $200$\,ms of \texttt{poster}. Left: raw
 events, with the lens carried by $\Cmat$~\eqref{eq:cdist}. Middle: the same
-events after \texttt{cv2.undistortPoints}, showing the concentric moir\'e left
+events after undistortion (OpenCV \texttt{cv2.undistortPoints}), showing the concentric moir\'e left
 by re-quantising sub-pixel coordinates onto the pixel grid. Right: detail of the
 periphery, where rectification stretches the image most and the artefact is
 strongest.
@@ -1047,15 +675,6 @@ first $200$\,ms of the \texttt{poster} segment of Table~\ref{tab:datasets},
 binned directly from the events; no network is run.}
 \label{fig:distortion}
 \end{figure}
-
-\subsubsection{Configuration}
-Unless stated otherwise all runs use the parameters of
-Table~\ref{tab:params}, $75$ iterations per frame, and the distortion-aware
-kinematic matrix~\eqref{eq:cdist}; results at the original step sizes are
-marked as such. Every model is warm-started identically and $\wvec$ is
-recurrent thereafter, so the numbers below include accumulated drift. The step
-sizes were tuned for the angular velocity alone, not for the reconstruction
-(Sec.~\ref{sec:objective}).
 
 \subsection{Main Results}
 \label{sec:mainresults}
@@ -1071,7 +690,7 @@ $76$--$85^\circ$ leave the recovered axis uninformative, and total errors of
 $43$--$57^\circ$/s are as large as the rotation being measured.
 
 Adding an anchor changes the picture entirely, and most of what the anchor
-provides does not depend on where it comes from. Both anchored models recover the
+provides does not depend on where it comes from. \texttt{thesis+IMU} and \texttt{CMax-anchor} recover the
 rotation axis to $6$--$13^\circ$ on the real sequences and to $1$--$2^\circ$ on
 the synthetic ones, against $76$--$85^\circ$ without an anchor, and both bring
 $\beta$ to within $14\%$ of unity where the unanchored \texttt{cook} reaches
@@ -1118,7 +737,7 @@ Table~\ref{tab:main}.}
 parameters of Table~\ref{tab:params} with no regulariser. $\|\wvec\|$ is the
 mean reference speed over the track. $|r|$ is the absolute correlation of the
 reconstructed intensity against the APS frame, averaged over every frame of the
-track (Sec.~\ref{sec:reconstruction}). The last row of each block is not a
+track (Sec.~\ref{sec:recon_metric}). The last row of each block is not a
 model: it is the gyroscope scored against the same reference (the noise floor
 of Table~\ref{tab:datasets}). \texttt{cook} on \texttt{street} does not
 reproduce exactly from run to run (three runs: direction $60$--$75^\circ$,
@@ -1247,6 +866,8 @@ visibly, through the excursion of Sec.~\ref{sec:recon_experiments}.}
 \end{figure*}
 
 \subsection{Scale Ambiguity and the Anchor}
+\label{sec:anchor_exp}
+Sec.~\ref{sec:mainresults} showed that without an anchor neither network tracks, and that with one the remaining error is mostly a magnitude error. This subsection examines both findings. It first scores the anchors on their own (Sec.~\ref{sec:baseline}), then shows what the network does without and with an anchor over longer segments (Sec.~\ref{sec:beta_exp}), compares the contrast estimate with the gyroscope as anchor (Sec.~\ref{sec:cmax_exp}) and the two couplings with each other, and finally traces the magnitude error to its cause (Sec.~\ref{sec:speed}).
 
 \subsubsection{Anchor-only baseline}
 \label{sec:baseline}
@@ -1262,7 +883,7 @@ the network they feed (Table~\ref{tab:baseline}).
 \renewcommand{\arraystretch}{1.15}
 \caption{The Anchors Without the Network. \textnormal{Mean angular-velocity
 error, $1.5$\,s per sequence, scored identically to Table~\ref{tab:main}.
-``CMax'' and ``gyro'' use no network: they are the raw front-end estimates.
+``CMax'' and ``gyro'' use no network: they are the anchors' own estimates.
 ``network'' is \texttt{CMax-anchor} at the configuration of
 Table~\ref{tab:params}. The gyroscope column is meaningless on the synthetic
 sequences, whose simulated IMU is nearly exact (Sec.~\ref{sec:protocol}) and so
@@ -1429,7 +1050,7 @@ against $1.18$ --- and for \texttt{CMax-inloop} the magnitude and direction
 errors partially cancel inside the norm. Ranking on total error alone would
 have selected the worse estimator. The
 difference between the couplings is therefore almost entirely a difference in
-how $\|\wvec\|$ is determined, which is what Sec.~\ref{sec:coupling} predicts:
+how $\|\wvec\|$ is determined, which is what Sec.~\ref{sec:scale} predicts:
 only \texttt{CMax-anchor} leaves the kinematic constraint acting on $\wvec$.
 
 \subsubsection{Speed dependence of the magnitude error}
@@ -1484,7 +1105,7 @@ sequences and is not their scene, their event density or their rotation speed.
 We report the discrepancy rather than resolve it.
 
 We can rule out one candidate explanation. The value clipping of
-Sec.~\ref{sec:implementation} is not responsible, although it is active. At the
+Sec.~\ref{sec:deviations} is not responsible, although it is active. At the
 parameters of Table~\ref{tab:params} only the gradient map ever reaches its
 bound, and only on \texttt{poster}: in $25$ of its $75$ frames, on $0.6\%$ of
 the pixels on average and at most $7.8\%$; $\Imap$ and $\Fmap$ never do. It is
@@ -1555,13 +1176,12 @@ least-squares fits.}
 \subsection{Sensitivity and Ablation}
 \label{sec:sensitivity}
 
-\subsubsection{Procedure}
 \label{sec:objective}
 The model produces two things we care about --- an angular velocity and an
 intensity map --- and the parameters of Table~\ref{tab:params} were set by the
 angular-velocity error alone; no reconstruction measurement entered that
 choice. The asymmetry is deliberate: $\wvec$ has an independent reference in
-the motion-capture poses and the simulator twist, whereas $\Imap$ has none,
+the motion-capture poses and the simulator's angular velocity, whereas $\Imap$ has none,
 since the APS frames differ from log-intensity in exposure and in time and can
 support a comparison between reconstructions but not an absolute one. The
 configuration reported here is therefore not the best one for image quality.
@@ -1716,7 +1336,7 @@ $10^4$). Short windows fail for two compounding reasons --- fewer events per
 frame make the contrast estimate that anchors $\wvec$ noisier, and
 $\wvec = R/\Delta t$ divides whatever error remains by a smaller number. The
 degradation is not an artefact of how we score: the synthetic sequences are
-scored against the simulator's exact twist, with no pose differencing
+scored against the simulator's exact angular velocity, with no pose differencing
 involved, and degrade the most.
 
 For the reconstruction the ordering reverses. The track-mean $|r|$ of the
@@ -1842,7 +1462,7 @@ standard deviation varies between $0.03$ and $1.59$ over the $1.5$\,s of
 \texttt{poster}, with the excursions concentrated at the peaks of the rotation;
 the same network without an anchor stays between $0.02$ and $0.05$ throughout.
 During those excursions the map loses its structure and the gradient map reaches
-the clipping bound of Sec.~\ref{sec:networks}. The angular velocity is unaffected
+the clipping bound of Sec.~\ref{sec:deviations}. The angular velocity is unaffected
 --- the errors of Sec.~\ref{sec:experiments} are computed over the whole track, excursions
 included --- but the visual interpretation and the quantity we score are not
 equally reliable at all times, and only the latter has been measured
@@ -1866,41 +1486,13 @@ is brightness for $\Gmap$ and saturation for $\Fmap$.}
 \subsection{Factors Affecting the Reconstruction}
 \label{sec:reconstruction}
 
-The intensity map is the one inferred quantity we have so far judged only by
-eye. It is also the quantity in which our results looked least like the
-published ones: where Martel and Cook show a recognisable photograph, our
-$\Imap$ was closer to a relief map of the scene edges. This section and the
+The intensity map is the inferred quantity in which our results looked least
+like the published ones: where Martel and Cook show a recognisable photograph, our
+$\Imap$ was closer to a relief map of the scene edges. This subsection and the
 next two identify what that depends on: the accumulation window and the
 intensity update (this section), the anchor (Sec.~\ref{sec:anchor_image}) and
 the regularisation of the maps (Sec.~\ref{sec:regularisers}). The accuracy of
 the angular velocity is not among them.
-
-\subsubsection{Reconstruction metric}
-We score $\Imap$ by the magnitude $|r|$ of the Pearson correlation between the
-reconstruction and the APS frame nearest the end of the track, over the
-interior $80\%$ of the image. The APS intensities, scaled to $[0,1]$, enter as
-$\log(1+\text{APS})$, which on that range is close to linear rather than a
-log-intensity like $\Imap$. Scoring against the logarithm of the 8-bit values
-instead changes the final-frame $|r|$ of the runs of Table~\ref{tab:main} by
-between $-0.10$ and $+0.04$ ($-0.01$ on average) and changes no ranking between
-models on any sequence. The absolute correlation is used because
-it is invariant to scale, offset and sign, which is exactly the freedom the
-reconstruction has: neither the $\beta$-ambiguity of Sec.~\ref{sec:scale} ---
-which admits $\beta < 0$ and so an inverted $\Imap$ --- nor the constant of
-integration in~\eqref{eq:poisson_exact} is determined by the data, so a metric
-sensitive to any of them would be measuring the gauge rather than the image.
-The sign matters in practice: an unanchored network inverts $\Imap$ whenever
-its $\wvec$ points away from the true one (Appendix~\ref{app:maps}), and a
-signed $r$ averages such a track to zero although every frame of it is a
-recognisable image. Each sequence is scored at three track lengths ($0.4$,
-$0.8$, $1.2$\,s), since the reconstruction is not uniform in time and one
-end-of-run snapshot is not representative (Table~\ref{tab:recon},
-Fig.~\ref{fig:recon}). The $|r|$ of Tables~\ref{tab:main},
-\ref{tab:regularisers} and~\ref{tab:curl} is the same quantity taken at every
-frame of the $1.5$\,s track, against the APS frame nearest each, and averaged.
-This is a comparison between reconstructions, not an absolute quality measure:
-the APS differs in exposure and is offset in time, so the attainable $|r|$ is
-well below unity even for a good map.
 
 \subsubsection{Integrability of the gradient map}
 \label{sec:curl}
@@ -2104,14 +1696,12 @@ image, at the frame shown.}
 \label{fig:recon}
 \end{figure}
 
-\subsection{Regularisation and Image-Optimised Configuration}
-
-\subsubsection{Regularisation of the maps}
+\subsection{Regularisation of the Maps}
 \label{sec:regularisers}
 
 Neither source regularises $\Gmap$, and the inferred maps show the consequence:
 $\lvert\Gmap\rvert$ reaches the clipping bound of
-Sec.~\ref{sec:networks}, and $\Imap$ makes the excursions described at the
+Sec.~\ref{sec:deviations}, and $\Imap$ makes the excursions described at the
 start of Sec.~\ref{sec:recon_experiments}. The flow
 constraint~\eqref{eq:ofce} is the likely culprit, since it is the one relation
 that touches each pixel independently: it can grow a few pixels without any
@@ -2207,7 +1797,7 @@ $1.5$\,s at the parameters of Table~\ref{tab:params}, with only the term named
 above the column switched on. Values below each panel are $|r|$ at the frame
 shown, which is the last of the track; the table
 reports the mean over all $75$ frames, and the two differ because
-reconstruction quality is not uniform in time (Sec.~\ref{sec:reconstruction}).}
+reconstruction quality is not uniform in time (Sec.~\ref{sec:recon_metric}).}
 \label{fig:regularisers}
 \end{figure}
 
@@ -2292,7 +1882,7 @@ Sequence & Model & none & curl & none & curl \\
 \end{tabular}
 \end{table}
 
-\subsubsection{Image-optimised configuration}
+\subsection{Image-Optimised Configuration}
 \label{sec:image_settings}
 Every number above was measured at the configuration of
 Table~\ref{tab:params}, which was chosen for $\wvec$ alone
@@ -2377,8 +1967,7 @@ angular-velocity error in $^\circ$/s.}
 
 We have re-implemented both published formulations of Interacting Maps --- the
 sequential relaxation of Cook \emph{et al.} and the energy-based message passing
-of Martel's dissertation --- on a shared camera model, data path and evaluation
-harness, and evaluated them on five sequences against an independent reference.
+of Martel's dissertation --- on a shared camera model and data path, and evaluated them on five sequences against an independent reference.
 To our knowledge no implementation of either was previously available.
 
 The clearest result is negative and concerns the method as published. Neither
@@ -2472,7 +2061,7 @@ enter the network.
 
 
 \section*{Acknowledgment}
-The authors would like to thank Prof.\ Guillermo Gallego for supervising this
+The authors would like to thank Prof. Dr. Guillermo Gallego for supervising this
 project.
 
 
@@ -2540,6 +2129,11 @@ Robotics}, vol.~40, 2024.
 S.~Guo and G.~Gallego, ``Event-based mosaicing bundle adjustment,'' in
 \emph{European Conf. Computer Vision (ECCV)}, 2024, pp. 479--496.
 
+\bibitem{simchony1990}
+T.~Simchony, R.~Chellappa, and M.~Shao, ``Direct analytical methods for solving
+Poisson equations in computer vision problems,'' \emph{IEEE Trans. Pattern Anal.
+Mach. Intell.}, vol.~12, no.~5, pp. 435--446, 1990.
+
 \end{thebibliography}
 
 
@@ -2574,8 +2168,7 @@ $\Imap$ invert, which the constraints permit (a negative $\beta$
 in~\eqref{eq:beta}). The \texttt{poster} and \texttt{dynamic} rows of
 Figs.~\ref{fig:appendix_cook} and~\ref{fig:appendix_thesis} are such inverted
 frames. A signed track mean
-cancels these runs to zero although every frame is an image, which is why the
-report scores $|r|$ (Sec.~\ref{sec:reconstruction}).
+cancels these runs to zero although every frame is an image, which is why the report scores $|r|$ (Sec.~\ref{sec:recon_metric}).
 
 These are single frames, and as Sec.~\ref{sec:recon_experiments} notes the
 reconstruction is not uniform in time: at the peaks of the rotation the
