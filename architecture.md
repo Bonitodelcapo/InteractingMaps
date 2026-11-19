@@ -22,7 +22,7 @@
    - [6.4 interacting_maps/network.py — Cook 2011](#64-interacting_mapsnetworkpy--cook-2011)
    - [6.5 interacting_maps/network_dissertation.py — Martel 2019](#65-interacting_mapsnetwork_dissertationpy--martel-2019)
    - [6.6 evaluation.py](#66-evaluationpy)
-   - [6.7 find_segments.py & demo.py](#67-find_segmentspy--demopy)
+   - [6.7 find_segments.py & demo.ipynb](#67-find_segmentspy--demoipynb)
 7. [Cross-cutting concerns](#7-cross-cutting-concerns)
 
 ---
@@ -143,18 +143,26 @@ design and results are documented separately in
 ```
 InteractingMaps/
 ├── config.py                 (1) datasets/segments + model hyper-parameters
-├── data_loader.py            (2) events → V frames (+ cv2 undistortion)
 ├── interacting_maps/
+│   ├── data_loader.py        (2) events → V frames (+ cv2 undistortion)
 │   ├── camera.py             (3) calibration + kinematic matrix C
 │   ├── network.py            (4) InteractingMaps  (Cook, Gauss-Seidel)
-│   └── network_dissertation.py (5) InteractingMapsThesis (+ Cost_IMU)
+│   ├── network_dissertation.py (5) InteractingMapsThesis (+ Cost_IMU)
+│   ├── angular_velocity.py       CMax angular-velocity estimator (cmax.md)
+│   ├── eval_io.py                sensor/reference I/O, APS frames
+│   ├── metrics.py                ω metrics, |r| reconstruction score
+│   ├── style.py, viz.py          plot conventions and drawing
+│   └── find_segments.py      (7) discover constant-ω segments from imu.txt
 ├── run_config.py             (6) RunConfig + make_network (run configuration)
-├── evaluation.py             (6) experiments 1–8 + metrics
-├── find_segments.py          (7) discover constant-ω segments from imu.txt
-├── demo.py                       live animated demo
+├── evaluation.py             (6) single-run experiments 2, 5, 6, 9
+├── experiment_tracking.py        run.json, MLflow mirror, find_run
+├── report/                       run_all.sh, run_experiments.py (runs),
+│                                 make_figures.py, make_tables.py, report_runs.py
+├── tests/                        standalone test scripts
+├── demo.ipynb                    live animated demo
 ├── data/<dataset>/
 │   ├── events.txt  calib.txt  imu.txt  groundtruth.txt  images.txt  images/
-└── results/                      per-run outputs + parameter_grid_*.csv
+└── results/                      per-run outputs
 ```
 
 ---
@@ -166,7 +174,7 @@ InteractingMaps/
 Pure data + a couple of helpers.
 
 - **`DATASET_SEGMENTS`** — per dataset, a list of hand-picked segments (from
-  `find_segments.py`). Each has `id`, `t_start`, `frame_duration`, `n_frames`,
+  `interacting_maps/find_segments.py`). Each has `id`, `t_start`, `frame_duration`, `n_frames`,
   `initial_R` (usually `None` → derived from IMU), `sensor_size`.
 - **`DATASET_CONFIGS`** — `{name: segments[0]}`, a backward-compatible "first
   segment" shortcut.
@@ -178,7 +186,7 @@ Pure data + a couple of helpers.
 
 The warm start `R = gyro(t_start)·dt` is computed with
 `eval_io.get_gyro_for_frame(imu, t_start, t_start+dt) * dt` (used by
-`RunConfig` and `demo.py`).
+`RunConfig` and `demo.ipynb`).
 
 > Note: `sensor_size` is authoritative (240×180 for the DAVIS240C). It is *not*
 > derived from `2·(cx,cy)` because the principal point is offset from center.
@@ -309,7 +317,7 @@ before OFCE builds structure), plus tiny noise in `I` to seed `∇I`.
 
 ### 6.6 `evaluation.py`
 
-The harness (experiments 1–9). Run configuration lives in `run_config.py`:
+The single-run harness (experiments 2, 5, 6, 9). Run configuration lives in `run_config.py`:
 `RunConfig` bundles dataset/segment/model/params and derives `initial_R` from
 the IMU; the model is built by `make_network`. `evaluation.py` imports both.
 
@@ -338,29 +346,25 @@ frame. So every run is the standard *recurrent* run.
 > mid-run except (for `thesis_imu`) the soft IMU cost.
 
 **Experiments** (`--exp N`):
-1. Single-frame convergence — maps at iteration checkpoints (visual).
 2. **Multi-frame tracking** — the core: per-frame ω_est vs ω_ref → `tracking.csv`,
    `run.json` (provenance + config + summary; see §7), `tracking_plot.png`
-   (+ optional 3-col video frames).
-3. Parameter influence — iterations & frame-duration sweeps for one frame.
-4. Qualitative video (alias of Exp 2 with frames).
+   (+ per-frame panels V | I | I read-out | G | F | APS unless `--no-frames`).
 5. Assemble MP4s from saved frames (batch).
 6. Basin of attraction — vary `initial_R` distance from GT; does it converge?
-7. Full evaluation — all datasets × models × segments → `full_evaluation.csv`.
-8. **Parameter grid** — sweeps `frame_duration × n_frames × n_iters × delta_FR ×
-   delta_IMU` (thesis_imu only for `delta_IMU`) → `parameter_grid_<dataset>.csv`.
 9. **Distortion ablation** — runs `undistort_events` vs `C_full` on the same
    segment(s) and compares (`--segment all` sweeps every segment).
 
-Exp 2/7/8/9 all funnel through `experiment_tracking`, so any scoring change lives
-in one place.
+Exp 2 and 9 funnel through `experiment_tracking`, so any scoring change lives
+in one place. The studies behind the report (convergence within a frame, sweeps,
+grids, the main table) are commands of `report/run_experiments.py`; see
+[report/RUN_ALL.md](report/RUN_ALL.md).
 
-### 6.7 `find_segments.py` & `demo.py`
+### 6.7 `find_segments.py` & `demo.ipynb`
 
-- **`find_segments.py`** — slides a window over `imu.txt`, flags intervals of
+- **`interacting_maps/find_segments.py`** — slides a window over `imu.txt`, flags intervals of
   low gyro-std (≈ constant ω) and prints a `DATASET_SEGMENTS` block to paste
   into `config.py`.
-- **`demo.py`** — live matplotlib animation (V, I, |G|, F, R, residuals) for a
+- **`demo.ipynb`** — live matplotlib animation (V, I, |G|, F, R, residuals) for a
   single dataset; qualitative sanity check.
 
 ---
@@ -396,7 +400,7 @@ Either way distortion is applied exactly once; `--exp 9` compares them.
 `run.json` = `{provenance, config, summary}` — `provenance` carries the git commit,
 a dirty-tree flag, timestamp and library versions, so a result on disk records
 which code produced it. Reported runs (`out_root='results'`) are also mirrored to a
-local MLflow store. See [provenance.py](provenance.py) and
+local MLflow store. See [experiment_tracking.py](experiment_tracking.py) and
 [architecture_review.md](architecture_review.md) §R1. (`read_run`/`read_summary`/
 `read_config` still fall back to the older split `params.json`/`summary.json` for
 runs made before this change.)

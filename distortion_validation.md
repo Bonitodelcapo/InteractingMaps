@@ -4,7 +4,7 @@
 > (raw events, distortion baked into the kinematics) is geometrically equivalent
 > to the trusted **undistort-events-first** approach.
 >
-> Reproduce: `python test_distortion_cmax.py` → **RESULT: PASS**
+> Reproduce: `PYTHONPATH=. python tests/test_distortion_cmax.py` → **RESULT: PASS**
 
 ---
 

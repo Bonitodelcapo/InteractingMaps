@@ -6,7 +6,7 @@ geometry_msgs/PoseStamped messages describing a known constant rotation about z
 at ω = 0.5 rad/s), runs the converter, and asserts the produced text files are
 correct — including that omega_gt.txt recovers ≈ (0, 0, 0.5).
 
-Run:  python test_ecrot_convert.py
+Run:  python tests/test_ecrot_convert.py
 """
 
 import os
@@ -14,7 +14,21 @@ import tempfile
 import numpy as np
 
 from rosbags.rosbag1 import Writer
-from convert_ecrot import make_typestore, convert
+from rosbags.typesys import Stores, get_typestore, get_types_from_msg
+from convert_ecrot import convert
+
+
+def make_typestore():
+    """ROS1 typestore with dvs_msgs/Event and dvs_msgs/EventArray registered."""
+    ts = get_typestore(Stores.ROS1_NOETIC)
+    types = {}
+    types.update(get_types_from_msg('uint16 x\nuint16 y\ntime ts\nbool polarity\n',
+                                    'dvs_msgs/msg/Event'))
+    types.update(get_types_from_msg('std_msgs/Header header\nuint32 height\nuint32 width\n'
+                                    'Event[] events\n', 'dvs_msgs/msg/EventArray'))
+    ts.register(types)
+    return ts
+
 
 TS = make_typestore()
 OMEGA_Z = 0.5     # rad/s, constant rotation about z

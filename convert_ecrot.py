@@ -106,26 +106,14 @@ def parse_calib_yaml(path):
     return float(fx), float(fy), float(cx), float(cy), [float(d) for d in dist]
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--bag', required=True, help='path to the ECRot .bag')
-    ap.add_argument('--name', help='dataset name -> data/<name>/ (default: ecrot_<bag stem>)')
-    ap.add_argument('--calib', help='calibration YAML -> calib.txt (else read from CameraInfo)')
-    ap.add_argument('--no-images', action='store_true', help='skip extracting image_raw frames')
-    ap.add_argument('--list', action='store_true', help='only list bag topics/types, then exit')
-    ap.add_argument('--t-end', type=float, default=None,
-                    help='only convert bag time up to T_END seconds (large bags)')
-    ap.add_argument('--events-topic', default=None, help='override event topic')
-    ap.add_argument('--imu-topic', default=None, help='override IMU topic')
-    ap.add_argument('--gt-topic', default=None, help='override pose/twist topic')
-    args = ap.parse_args()
-
+def convert(bag, out, calib_yaml=None, no_images=False, t_end=None,
+            events_topic=None, imu_topic=None, gt_topic=None, list_only=False):
+    """Convert one ECRot ROS1 bag into the pipeline's text files in `out`
+    (events.txt, imu.txt, groundtruth.txt, omega_gt.txt, images.txt, calib.txt)."""
     from rosbags.highlevel import AnyReader
 
-    bag = Path(args.bag)
-    name = args.name or f'ecrot_{bag.stem.lower()}'
-    out = os.path.join(os.path.dirname(__file__), 'data', name)
+    bag = Path(bag)
+    name = os.path.basename(os.path.normpath(out))
     img_dir = os.path.join(out, 'images')
 
     with AnyReader([bag]) as reader:
@@ -135,7 +123,7 @@ def main():
         print('-' * 78)
         for c in reader.connections:
             print(f"{c.topic:<32} {c.msgtype:<34} {c.msgcount:>8}")
-        if args.list:
+        if list_only:
             return
 
         # Events are STREAMED to disk: a dense bag holds tens of millions of
@@ -151,12 +139,12 @@ def main():
         with open(ev_path_tmp, 'w') as fev:
             for conn, _ts, raw in reader.messages():
                 mt, topic = conn.msgtype, conn.topic
-                if args.t_end is not None and _ts * 1e-9 > args.t_end:
+                if t_end is not None and _ts * 1e-9 > t_end:
                     break
-                if args.events_topic and mt.endswith('EventArray') \
-                        and topic != args.events_topic:
+                if events_topic and mt.endswith('EventArray') \
+                        and topic != events_topic:
                     continue
-                if args.imu_topic and mt.endswith('Imu') and topic != args.imu_topic:
+                if imu_topic and mt.endswith('Imu') and topic != imu_topic:
                     continue
                 try:
                     msg = reader.deserialize(raw, mt)
@@ -186,7 +174,7 @@ def main():
                     D = getattr(msg, 'd', None); D = D if D is not None else getattr(msg, 'D', [])
                     cam_info = (float(K[0]), float(K[4]), float(K[2]), float(K[5]), list(D))
 
-                elif mt.endswith('Image') and topic.endswith('image_raw') and not args.no_images:
+                elif mt.endswith('Image') and topic.endswith('image_raw') and not no_images:
                     t = _stamp(msg.header.stamp)
                     H_, W_, step = msg.height, msg.width, msg.step
                     buf = np.frombuffer(msg.data, dtype=np.uint8)
@@ -204,7 +192,7 @@ def main():
                     img_rows.append((t, fname))
 
                 elif mt.endswith(_TWIST_TYPES):
-                    if args.gt_topic and topic != args.gt_topic:
+                    if gt_topic and topic != gt_topic:
                         continue
                     tw = getattr(msg, 'twist', msg)
                     tw = getattr(tw, 'twist', tw)          # TwistStamped -> twist
@@ -212,7 +200,7 @@ def main():
                     tw_rows.append((t, tw.angular.x, tw.angular.y, tw.angular.z))
 
                 elif mt.endswith(_POSE_TYPES):
-                    if args.gt_topic and topic != args.gt_topic:
+                    if gt_topic and topic != gt_topic:
                         continue
                     t = _stamp(msg.header.stamp)
                     if mt.endswith('PoseStamped'):
@@ -282,8 +270,8 @@ def main():
         omega_src = f"central difference of poses, {len(om)} samples"
 
     # calib: prefer --calib YAML, else the bag's CameraInfo
-    if args.calib:
-        fx, fy, cx, cy, dist = parse_calib_yaml(args.calib)
+    if calib_yaml:
+        fx, fy, cx, cy, dist = parse_calib_yaml(calib_yaml)
     elif cam_info is not None:
         fx, fy, cx, cy, d = cam_info
         dist = (list(d) + [0, 0, 0, 0, 0])[:5]
@@ -318,6 +306,28 @@ def main():
           f"'n_frames': {int(dur/0.02)}, 'initial_R': None, "
           f"'sensor_size': ({H}, {W})}},")
     print(f"    ],")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--bag', required=True, help='path to the ECRot .bag')
+    ap.add_argument('--name', help='dataset name -> data/<name>/ (default: ecrot_<bag stem>)')
+    ap.add_argument('--calib', help='calibration YAML -> calib.txt (else read from CameraInfo)')
+    ap.add_argument('--no-images', action='store_true', help='skip extracting image_raw frames')
+    ap.add_argument('--list', action='store_true', help='only list bag topics/types, then exit')
+    ap.add_argument('--t-end', type=float, default=None,
+                    help='only convert bag time up to T_END seconds (large bags)')
+    ap.add_argument('--events-topic', default=None, help='override event topic')
+    ap.add_argument('--imu-topic', default=None, help='override IMU topic')
+    ap.add_argument('--gt-topic', default=None, help='override pose/twist topic')
+    args = ap.parse_args()
+    bag = Path(args.bag)
+    name = args.name or f'ecrot_{bag.stem.lower()}'
+    convert(bag, os.path.join(os.path.dirname(__file__), 'data', name),
+            calib_yaml=args.calib, no_images=args.no_images, t_end=args.t_end,
+            events_topic=args.events_topic, imu_topic=args.imu_topic,
+            gt_topic=args.gt_topic, list_only=args.list)
 
 
 if __name__ == '__main__':

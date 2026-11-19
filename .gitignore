@@ -261,10 +261,11 @@ __marimo__/
 # run_all.sh logs
 report/logs/
 report/.stamps/
+run_all.out
 
-# Cluster outputs: generated on the cluster, downloaded as a zip, never committed
-report/experiments/
-report/figures/
+# report/experiments/ and report/figures/ are tracked: the PDF needs the
+# figures, and the tables are generated from the csv files there.
+report/experiments/_old/
 EcRot_*/
 /diag_*.png
 /diag_*.csv

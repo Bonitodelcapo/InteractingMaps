@@ -11,8 +11,8 @@ Two stages, each a list of independent jobs run up to `PARALLEL` at a time:
 
 | stage | jobs | what they produce |
 |---|---|---|
-| `runs` | `main_*`, `dissoc_*`, `curl_*`, `sweep_*`, `grid_*`, `anchor_*`, `ablation_*`, `beta_*`, `baseline`, `window`, `ofce_*` | tracking runs and the CSVs behind every table |
-| `figures` | `converge_*`, `recon`, `dissoc`, `regfig`, `make_figures`, `make_tables`, `ofce_summary` | `report/figures/*`, `report/experiments/table_main.tex` |
+| `runs` | `main_*`, `dissoc_*`, `curl_*`, `sweep_*`, `grid_*`, `sens_*`, `anchor_*`, `ablation_*`, `beta_*`, `readout_*`, `poisson`, `best_image_*`, `maps_poster_*`, `converge_*`, `recon`, `baseline`, `window`, `distortion_test`, `ofce_*` | tracking runs and the CSVs behind every table |
+| `figures` | `make_figures`, `make_tables`, `ofce_summary` | `report/figures/*`, `report/experiments/table_*.tex` |
 
 The `figures` stage starts only if every `runs` job succeeded.
 
@@ -35,12 +35,12 @@ fingerprint means unchanged numbers.
 
 | group | files hashed | used by |
 |---|---|---|
-| `HASH_REPORT` | every `*.py` except `tests/`, `diag_*.py`, `demo.py`, `debug_*.py`, `report/make_figures.py`, `report/make_tables.py`, `report/analyze_grid.py` | all `runs` jobs except `ofce_*` |
+| `HASH_REPORT` | every `*.py` except `tests/`, `diag_*.py`, `report/make_figures.py`, `report/make_tables.py` | all `runs` jobs except `ofce_*` |
 | `HASH_DIAG` | `interacting_maps/*.py`, `config.py`, `diag_omega_ladder.py` | `ofce_*` |
 | `HASH_FIGURES` | every `*.py` except `tests/`, plus the contents of all run stamps | all `figures` jobs |
 
 Consequence: **any edit to any file in `HASH_REPORT`, even a comment or a
-plotting-only function in `report/run_experiments.py`, changes the fingerprint
+helper in `report/report_runs.py`, changes the fingerprint
 of every run job.** A plain `run_all.sh` then reruns all of them (about 2.5 h),
 although their results would be identical.
 
@@ -96,7 +96,7 @@ Run these in this order:
 ```bash
 git pull
 ADOPT=1 bash report/run_all.sh
-rm -f report/.stamps/{converge_dynamic,converge_bicycle,recon,dissoc,regfig,make_figures,make_tables,ofce_summary}
+rm -f report/.stamps/{make_figures,make_tables,ofce_summary}
 nohup bash report/run_all.sh > run_all.out 2>&1 &
 ```
 
@@ -144,10 +144,10 @@ same jobs and write the same files at the same time. Check with `pgrep` first.
 
 | path | content |
 |---|---|
-| `results/` | run folders (`run.json`, `tracking.csv`, `tracking_plot.png`, `maps_final.npz`) of main, dissoc, curl, beta, anchor, converge |
-| `report/experiments/` | table CSVs, `baseline_dt20ms*.npz`, `table_main.tex`, `window_choice.csv` |
+| `results/` | run folders (`run.json`, `tracking.csv`, `tracking_plot.png`, `maps_final.npz`) of main, dissoc, curl, beta, anchor |
+| `report/experiments/` | table CSVs, `baseline_dt20ms*.npz`, `table_*.tex`, `window_choice.csv`, `distortion_numbers.csv` |
 | `report/figures/` | every report figure, PDF and PNG |
-| `experiments/sweep/`, `experiments/grid/`, `experiments/ablation/`, `experiments/recon_figure/` | sweep, grid and ablation CSVs and their runs |
+| `experiments/sweep/`, `grid/`, `sens/`, `ablation/`, `best_image/`, `maps_poster/`, `readout_*/`, `recon_figure/`, `converge/` | sweep, grid, sensitivity and ablation CSVs and their runs; the converge snapshots |
 | `diag_ofce/` | OFCE diagnostic CSVs, plots, `summary.csv` |
 | `report/logs/<timestamp>/` | per-job logs, `runs.txt`, `figures.txt` |
 | `report/.stamps/` | fingerprints |
@@ -168,9 +168,11 @@ file times, so the age of each output stays visible.
 
 ## 9. What is still manual
 
-`make_tables.py` writes only the main table (`table_main.tex`). The numbers in
-`tab:baseline`, `tab:sweep`, `tab:params`, `tab:curl` and `tab:anchor` are typed
-into `report/bare_jrnl.tex` by hand from the CSVs above.
+`make_tables.py` writes every results table of the report as
+`report/experiments/table_<name>.tex`: main, baseline, curl, anchor, sweep,
+params, grid, recon, regularisers, image. `report/bare_jrnl.tex` still holds typed
+copies of them; switching each to `\input{experiments/table_<name>}` is the
+remaining manual step.
 
 ## 10. Rules that keep the stamps honest
 
@@ -179,8 +181,9 @@ into `report/bare_jrnl.tex` by hand from the CSVs above.
   the code, so it reuses stale results after a code change. The stamps already
   decide whether a job runs.
 - A job that reads another job's runs must build the exact run folder through
-  `RunConfig`/`_cfg`, not a glob. A glob also matches older runs with other
-  parameters.
+  `report_runs.run_cfg`, or find it by its stored config with
+  `experiment_tracking.find_run`, not a glob. A glob also matches older runs with
+  other parameters.
 - A job line must not depend on quote removal: `xargs -d '\n'` passes each line
   through unchanged, then `eval` parses it. A `--vary` value with `;` must stay
   in single quotes.
