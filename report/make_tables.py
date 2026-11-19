@@ -118,34 +118,6 @@ def expected_params(model):
     return p
 
 
-def same_params(a, b):
-    """Equal step sizes; a step size neither side uses (delta_IMU of an
-    unanchored model, stored by older runs) is not compared."""
-    keys = (set(a) | set(b)) - ({'delta_IMU'} - set(b))
-    return all(abs(float(a.get(k, 0.0)) - float(b.get(k, 0.0))) < 1e-9 for k in keys)
-
-
-def find_run(ds, model, segment_id, n_frames):
-    """The run folder in results/ whose stored config is the adopted one.
-
-    Matched on the stored config, not on a folder-name glob: results/ also holds
-    runs of the same segment at other step sizes, which a pattern would match.
-    Older runs store params.json instead of run.json, without segment_id or
-    poisson; those come from the folder name and the default ('iterative').
-    """
-    want = expected_params(model)
-    for d in sorted(glob.glob(os.path.join('results', ds, model, f'{segment_id}_*'))):
-        try:
-            c = experiment_tracking.read_config(d)
-        except (OSError, ValueError, KeyError):
-            continue
-        if (c.get('segment_id', segment_id) == segment_id and c.get('n_frames') == n_frames
-                and c.get('n_iters') == ITERS_PER_FRAME and c.get('distortion_mode') == 'C_full'
-                and c.get('poisson', 'iterative') == 'iterative'
-                and abs(c.get('frame_duration', 0) - 0.02) < 1e-9
-                and same_params(c.get('params', {}), want)):
-            return d
-    return None
 
 
 # ------------------------------------------------------------------- tables
@@ -231,7 +203,8 @@ def table_anchor():
     """tab:anchor: poster, three segments of 3 s, every model plus the gyro floor."""
     body = []
     for sid in ANCHOR_SEGMENTS:
-        runs = {k: find_run('poster_rotation', k, sid, 150) for _, k in MODELS}
+        runs = {k: experiment_tracking.find_run('results', 'poster_rotation', k, sid, 150,
+                                                expected_params(k)) for _, k in MODELS}
         ref = runs.get('thesis_imu')
         fl = gyro_floor(ref) if ref else None
         body += [r'\midrule',

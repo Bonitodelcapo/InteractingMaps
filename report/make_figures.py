@@ -31,7 +31,6 @@ import os
 import sys
 import csv
 import json
-import glob
 import argparse
 
 import numpy as np
@@ -97,54 +96,15 @@ BETA_SEGMENTS = [
 ]
 
 
-def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
-             poisson='iterative', deltas=None, n_frames=N_TRACK, dt=DT,
-             root='results'):
-    """Locate the run directory under `root` matching this configuration exactly.
-
-    Matching on the step sizes ALONE is not enough. results/ accumulates runs
-    from earlier configurations -- different iteration counts, and in particular
-    the 'undistort_events' distortion mode, whose directories lack the _C_full
-    suffix. Several of those share step sizes with the reported runs, and
-    sorted() can return one of them first (e.g. 'i100' sorts before 'i75').
-    Every field that changes the result is therefore checked, and an ambiguous
-    match is reported rather than silently resolved.
-
-    `poisson` and `deltas` extend that guard to the parameters added for the
-    solver comparison: a run differing only in the I-update or in one of the
-    remaining relaxation rates must not be picked up as if it were this one.
-    Older runs carry no 'poisson' key and are treated as 'iterative'.
-    The regularisers default to off, as everywhere outside their own section,
-    so e.g. the _curl0.6 ablation run is not mistaken for the reported one.
-    """
-    deltas = {'delta_shrinkI': 0.0, 'delta_map': 0.0, 'delta_curl': 0.0,
-              **(deltas or {})}
-    hits = []
-    pat = f'{root}/{ds}/{model}/{sid}_t{t0}_dt{round(dt * 1000)}ms_n{n_frames}_*'
-    for d in sorted(glob.glob(pat)):
-        try:
-            cfg = experiment_tracking.read_config(d)
-            pr = cfg['params']
-        except Exception:
-            continue
-        if cfg.get('distortion_mode') != 'C_full':
-            continue
-        if int(cfg.get('n_iters', -1)) != n_iters:
-            continue
-        if abs(pr['delta_FR'] - d_fr) > 1e-9:
-            continue
-        if d_anchor is not None and abs(pr.get('delta_IMU', -1) - d_anchor) > 1e-9:
-            continue
-        if cfg.get('poisson', 'iterative') != poisson:
-            continue
-        if any(abs(pr.get(k, float('nan')) - v) > 1e-9
-               for k, v in deltas.items()):
-            continue
-        hits.append(d)
-    if len(hits) > 1:
-        print(f'    AMBIGUOUS ({len(hits)} runs match) {ds}/{sid}/{model} '
-              f'dFR={d_fr} anchor={d_anchor}; using {os.path.basename(hits[0])}')
-    return hits[0] if hits else None
+def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_frames=N_TRACK, root='results'):
+    """The run behind a figure (experiment_tracking.find_run), regularisers off as
+    everywhere outside their own section, so e.g. the _curl0.6 ablation run is not
+    mistaken for the reported one. d_anchor None: the model has no anchor."""
+    params = {'delta_FR': d_fr, 'delta_shrinkI': 0.0, 'delta_map': 0.0, 'delta_curl': 0.0}
+    if d_anchor is not None:
+        params['delta_IMU'] = d_anchor
+    return experiment_tracking.find_run(root, ds, model, sid, n_frames, params,
+                                        dt=DT, t_start=t0)
 
 
 def reference_omega(E, ds, t0, n=N_TRACK):

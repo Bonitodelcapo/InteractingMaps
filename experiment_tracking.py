@@ -139,6 +139,42 @@ def read_config(output_dir):
     return read_run(output_dir)['config'] or {}
 
 
+def find_run(root, dataset, model, segment_id, n_frames, params, dt=0.02, t_start=None,
+             n_iters=75, poisson='iterative', distortion_mode='C_full'):
+    """The run folder under root/dataset/model whose stored config matches.
+
+    Matched on the stored config (run.json, or params.json for older runs), not
+    on the folder name: a results tree holds runs of the same segment at other
+    step sizes, iteration counts and distortion modes, and sorted() can return
+    one of those first. Every key of `params` must equal the stored step size;
+    a step size the run did not store counts as 0.0 (the regularisers were added
+    later, off by default). Older runs store no segment_id or poisson; those
+    come from the folder name and the default ('iterative'). An ambiguous match
+    is reported and the first folder is used.
+    """
+    import glob
+    hits = []
+    for d in sorted(glob.glob(os.path.join(root, dataset, model, f'{segment_id}_*'))):
+        try:
+            c = read_config(d)
+        except (OSError, ValueError):
+            continue
+        pr = c.get('params', {})
+        if (c.get('segment_id', segment_id) == segment_id
+                and c.get('n_frames') == n_frames
+                and int(c.get('n_iters', -1)) == n_iters
+                and c.get('distortion_mode') == distortion_mode
+                and c.get('poisson', 'iterative') == poisson
+                and abs(c.get('frame_duration', 0) - dt) < 1e-9
+                and (t_start is None or abs(c.get('t_start', -1) - t_start) < 1e-9)
+                and all(abs(float(pr.get(k) or 0.0) - v) < 1e-9 for k, v in params.items())):
+            hits.append(d)
+    if len(hits) > 1:
+        print(f'    AMBIGUOUS ({len(hits)} runs match) {dataset}/{segment_id}/{model}; '
+              f'using {os.path.basename(hits[0])}')
+    return hits[0] if hits else None
+
+
 # ---------------------------------------------------------------------------
 # MLflow mirror
 # ---------------------------------------------------------------------------

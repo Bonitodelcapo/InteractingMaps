@@ -55,6 +55,8 @@ os.chdir(ROOT)
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
 from interacting_maps.style import MODELS as MODEL_STYLE, PAPER_WIDTH, PAPER_WIDE, use_style, save
 from interacting_maps.viz import draw_map, map_scale, net_maps
+from interacting_maps.metrics import abs_corr, crop_interior
+from interacting_maps.eval_io import load_aps_list, nearest_aps
 from config import THESIS_PARAMS
 
 # the adopted step sizes of config.py, for the commands that fix them
@@ -506,16 +508,7 @@ def cmd_poisson(E, args):
 
 def _aps(E, ds, t):
     """The APS frame nearest time t, for visual reference."""
-    import matplotlib.pyplot as plt
-    p = E.get_dataset_paths(ds)
-    try:
-        rows = [l.split() for l in open(p['images']) if l.strip()]
-        at = np.array([float(r[0]) for r in rows])
-        j = int(np.argmin(np.abs(at - t)))
-        img = plt.imread(os.path.join(p['data_dir'], rows[j][1].replace('\\', '/')))
-        return img.mean(-1) if img.ndim == 3 else img
-    except Exception:
-        return None
+    return nearest_aps(load_aps_list(E.get_dataset_paths(ds)['data_dir']), t)
 
 
 # --------------------------------------------- report figure: reconstruction
@@ -571,7 +564,7 @@ def cmd_recon(E, args):
                 if col == 0:
                     a.set_ylabel(lab)
                 if col > 0 and ref is not None:
-                    a.set_xlabel(f'$|r|={_corr(_crop(img), _crop(ref)):.2f}$')
+                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
             print(f"  {lab}: done", flush=True)
         save(fig, os.path.join(FIGDIR, 'fig_recon.png'))
     print(f"-> fig_recon.pdf / .png")
@@ -690,7 +683,7 @@ def cmd_regfig(E, args):
                 if col == 0:
                     a.set_ylabel(lab)
                 elif ref is not None and ref.shape == img.shape:
-                    a.set_xlabel(f'$|r|={_corr(_crop(img), _crop(ref)):.2f}$')
+                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
             print(f'  {lab}: done', flush=True)
         save(fig, os.path.join(FIGDIR, 'fig_regularisers.png'))
     print('-> fig_regularisers.pdf / .png')
@@ -841,8 +834,8 @@ def cmd_readout(E, args):
             got = {}
             for name, I in variants.items():
                 st = E._intensity_stats(I)
-                r_full = _corr(I, ref)
-                r_crop = _corr(_crop(I), _crop(ref))
+                r_full = abs_corr(I, ref)
+                r_crop = abs_corr(crop_interior(I), crop_interior(ref))
                 got[name] = r_crop
                 wr.writerow([ds, dur, nf, name, round(r_full, 4),
                              round(r_crop, 4), round(st['low_freq_share'], 4),
@@ -854,27 +847,6 @@ def cmd_readout(E, args):
     f.close()
     print(f"\npaired wins on r_crop:  fft {tally['fft']}   dct {tally['dct']}")
     print(f"-> {path}")
-
-
-def _crop(a, frac=0.1):
-    """Drop a border: the reconstruction is worst where the solvers' boundary
-    assumptions differ most, and we want the comparison to hold in the interior
-    too, not only because of the edges."""
-    h, w = a.shape[:2]
-    dy, dx = int(h * frac), int(w * frac)
-    return a[dy:h - dy, dx:w - dx]
-
-
-def _corr(a, b):
-    """|Pearson r|, invariant to the scale, offset and sign the reconstruction
-    is free in (beta < 0 inverts I; see metrics._corr_to_aps)."""
-    a = np.asarray(a, dtype=np.float64).ravel()
-    b = np.asarray(b, dtype=np.float64).ravel()
-    if a.size != b.size:
-        return float('nan')
-    a = a - a.mean(); b = b - b.mean()
-    d = np.sqrt((a * a).sum() * (b * b).sum())
-    return float(abs((a * b).sum()) / d) if d > 0 else float('nan')
 
 
 # ------------------------------------------------------- front-end baselines

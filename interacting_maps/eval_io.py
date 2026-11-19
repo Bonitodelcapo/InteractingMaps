@@ -146,3 +146,36 @@ def get_reference_omega(gt_data, imu_data, t_lo, t_hi, omega_data=None):
                               t_mid + GT_DIFF_HALFWIDTH),
                 'groundtruth')
     return get_gyro_for_frame(imu_data, t_lo, t_hi), 'imu'
+
+
+def load_aps_list(data_dir, t_lo=None, t_hi=None):
+    """[(t, path)] of the APS frames listed in data_dir/images.txt, in time order,
+    restricted to [t_lo, t_hi] when given; None if there are none."""
+    images_file = os.path.join(data_dir, 'images.txt')
+    if not os.path.exists(images_file):
+        return None
+    out = []
+    with open(images_file) as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 2 or parts[0].startswith('#'):
+                continue
+            t = float(parts[0])
+            if t_lo is not None and t < t_lo:
+                continue
+            if t_hi is not None and t > t_hi:
+                break
+            path = os.path.join(data_dir, parts[1].replace('\\', '/'))
+            if os.path.exists(path):
+                out.append((t, path))
+    return out or None
+
+
+def nearest_aps(images, t):
+    """The grey APS frame of `images` (load_aps_list) nearest time t, or None."""
+    if not images:
+        return None
+    import matplotlib.pyplot as plt
+    times = np.array([s for s, _ in images])
+    img = plt.imread(images[int(np.argmin(np.abs(times - t)))][1])
+    return img.mean(-1) if img.ndim == 3 else img

@@ -9,6 +9,8 @@ re-exports every name here, so existing callers are unchanged.
 
 import numpy as np
 
+from interacting_maps.eval_io import nearest_aps
+
 
 def compute_metrics(omega_est, omega_gt):
     """Compute all metrics for a single frame."""
@@ -43,24 +45,33 @@ def _corr_to_aps(img, gt_images, t_mid, crop_frac=0.1):
     if not gt_images or img is None:
         return float('nan')
     try:
-        import matplotlib.pyplot as plt
-        times = np.array([t for t, _ in gt_images])
-        aps = plt.imread(gt_images[int(np.argmin(np.abs(times - t_mid)))][1])
-        if aps.ndim == 3:
-            aps = aps.mean(-1)
-        ref = np.log(aps.astype(np.float64) + 1.0)
+        ref = np.log(nearest_aps(gt_images, t_mid).astype(np.float64) + 1.0)
         if ref.shape != img.shape:
             return float('nan')
-        h, w = img.shape
-        dy, dx = int(h * crop_frac), int(w * crop_frac)
-        a = img[dy:h - dy, dx:w - dx].ravel()
-        b = ref[dy:h - dy, dx:w - dx].ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        d = np.sqrt((a * a).sum() * (b * b).sum())
-        return float(abs((a * b).sum()) / d) if d > 0 else float('nan')
+        return abs_corr(crop_interior(img, crop_frac), crop_interior(ref, crop_frac))
     except Exception:
         return float('nan')
+
+
+def crop_interior(a, frac=0.1):
+    """a without a border of frac of its height and width: the reconstruction is
+    worst where the Poisson boundary assumption is weakest."""
+    h, w = a.shape[:2]
+    dy, dx = int(h * frac), int(w * frac)
+    return a[dy:h - dy, dx:w - dx]
+
+
+def abs_corr(a, b):
+    """|Pearson r| of two arrays, invariant to the scale, offset and sign the
+    reconstruction is free in (beta < 0 inverts I); nan if sizes differ."""
+    a = np.asarray(a, dtype=np.float64).ravel()
+    b = np.asarray(b, dtype=np.float64).ravel()
+    if a.size != b.size:
+        return float('nan')
+    a = a - a.mean()
+    b = b - b.mean()
+    d = np.sqrt((a * a).sum() * (b * b).sum())
+    return float(abs((a * b).sum()) / d) if d > 0 else float('nan')
 
 
 def _recon_scores(net, H, W, gt_images, t_mid):

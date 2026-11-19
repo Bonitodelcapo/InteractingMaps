@@ -13,7 +13,7 @@ from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAM
                     ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
                     get_dataset_paths)
 import experiment_tracking
-from interacting_maps.eval_io import load_imu, get_gyro_for_frame
+from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_aps_list
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
 
@@ -255,40 +255,11 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
 
 
 def _try_load_gt_images(rc: RunConfig):
-    """Load GT APS images from images.txt."""
-    data_dir = rc.paths['data_dir']
-    images_file = os.path.join(data_dir, 'images.txt')
-
-    if not os.path.exists(images_file):
-        print("  No images.txt found")
-        return None
-
-    img_list = []
+    """GT APS images of this run's time range (+-0.5 s) from images.txt."""
     t_end = rc.t_start + rc.n_frames * rc.frame_duration + 0.5
-
-    with open(images_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            t = float(parts[0])
-            fname = parts[1]
-
-            if t < rc.t_start - 0.5:
-                continue
-            if t > t_end:
-                break
-
-            img_path = os.path.join(data_dir, fname)
-            if os.path.exists(img_path):
-                img_list.append((t, img_path))
-
+    img_list = load_aps_list(rc.paths['data_dir'], rc.t_start - 0.5, t_end)
     if img_list:
         print(f"  Loaded {len(img_list)} GT images")
     else:
-        print("  No GT images found in time range")
-        return None
+        print("  No GT images found")
     return img_list
