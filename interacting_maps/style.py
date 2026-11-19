@@ -40,7 +40,10 @@ _REF_NAMES = {'omega_gt': r'$\omega_{gt}$', 'groundtruth': 'Vicon', 'imu': 'IMU'
 PAPER_WIDTH, PAPER_WIDE, SCREEN_WIDTH = 3.4, 7.05, 12.0
 _BASE = {'axes.grid': True, 'grid.alpha': 0.3, 'axes.spines.top': False,
          'axes.spines.right': False, 'legend.frameon': False,
-         'font.family': 'DejaVu Sans', 'mathtext.fontset': 'dejavusans',
+         # the report's font (IEEEtran sets Times); STIX ships with matplotlib,
+         # so machines without Times render the same Times-like face
+         'font.family': 'serif', 'font.serif': ['Times New Roman', 'STIXGeneral'],
+         'mathtext.fontset': 'stix',
          'figure.constrained_layout.use': True}
 _PRESETS = {
     'paper':  {'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 8,
