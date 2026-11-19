@@ -1,5 +1,5 @@
 """
-Shared configuration for the InteractingMaps pipeline (evaluation.py, demo.py).
+Shared configuration for the InteractingMaps pipeline (evaluation.py, demo.ipynb).
 
 Contents
 --------

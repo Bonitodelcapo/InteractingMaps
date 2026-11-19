@@ -560,7 +560,7 @@ class InteractingMapsThesis:
         self.cost_cmax = Cost_CMax(self.q_dict, estimator, self.frame_duration, lr)
         self.costs.append(self.cost_cmax)
 
-    # Properties for demo.py
+    # Properties for demo.ipynb
     @property
     def I(self): return self.q_I.value
     @property

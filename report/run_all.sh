@@ -37,8 +37,8 @@ code_hash() {   # code_hash PATHSPEC...: sha1 over names + working-tree contents
 # import (plotting-only and diagnostic scripts excluded); DIAG: the diagnostic
 # and the core it imports; FIGURES is set after the runs (code + run stamps).
 export HASH_REPORT HASH_DIAG HASH_DATA HASH_FIGURES=
-HASH_REPORT=$(code_hash '*.py' ':!tests/*' ':!diag_*.py' ':!demo.py' ':!debug_*.py' \
-              ':!report/make_figures.py' ':!report/make_tables.py' ':!report/analyze_grid.py')
+HASH_REPORT=$(code_hash '*.py' ':!tests/*' ':!diag_*.py' \
+              ':!report/make_figures.py' ':!report/make_tables.py')
 HASH_DIAG=$(code_hash 'interacting_maps/*.py' config.py diag_omega_ladder.py)
 HASH_DATA=$(find data -type f -printf '%p %s %T@\n' 2>/dev/null | sort | sha1sum | cut -c1-40)
 

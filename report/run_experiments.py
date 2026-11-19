@@ -2,7 +2,6 @@
 run_experiments.py — every experiment behind the report, from committed code.
 
 Run from the repository root:
-    python report/run_experiments.py --what grid        # 2-D (dFR, dAnchor) grid
     python report/run_experiments.py --what window      # dt / n_frames choice
     python report/run_experiments.py --what main        # Table III, 5 models
     python report/run_experiments.py --what converge    # per-iteration figure data
@@ -197,46 +196,6 @@ def cmd_window(E, args):
                  for ms in (10, 20, 30, 50)]
         print(f"{lab:<10} " + ' '.join(f'{c:>12}' for c in cells))
     print(f"\n-> {os.path.join(OUTDIR, 'window_choice.csv')}")
-
-
-# ------------------------------------------------------------------- 2-D grid
-def cmd_grid(E, args):
-    """Joint (delta_FR, delta_anchor) grid -- they interact, so a
-    one-at-a-time sweep cannot locate the optimum."""
-    d_fr = [float(x) for x in args.d_fr.split(',')]
-    d_anc = [float(x) for x in args.d_anchor.split(',')]
-    nf = int(round(args.duration / args.dt))
-    root = _root(args, 'grid_FR_anchor')
-    path = os.path.join(root, f'grid_dt{int(args.dt*1000)}ms.csv')
-    f = open(path, 'w', newline='', encoding='utf-8')
-    wr = csv.writer(f)
-    wr.writerow(['sequence', 'segment', 'model', 'dt_ms', 'n_frames',
-                 'delta_FR', 'delta_anchor', 'err', 'median', 'dir', 'beta', 'secs'])
-    f.flush()
-    print(f"{len(SEGMENTS)*len(d_fr)*len(d_anc)} runs   dt={args.dt*1000:.0f} ms, "
-          f"{nf} frames ({args.duration:.1f} s), C_full, {args.model}", flush=True)
-    for ds, sid, t0, lab in SEGMENTS:
-        print(f"\n### {lab}/{sid}", flush=True)
-        print(f"{'dFR':>6} " + ' '.join(f'{a:>8}' for a in d_anc), flush=True)
-        for fr in d_fr:
-            cells = []
-            for anc in d_anc:
-                try:
-                    rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
-                              out_root=root, delta_FR=fr, delta_IMU=anc)
-                    s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
-                    wr.writerow([ds, sid, args.model, int(args.dt*1000), nf, fr, anc,
-                                 round(s['mean_err_deg_s'], 2),
-                                 round(s['median_err_deg_s'], 2),
-                                 round(s['mean_dir_err_deg'], 2),
-                                 round(s['mean_beta'], 3), round(secs)])
-                    f.flush()
-                    cells.append(f"{s['mean_err_deg_s']:8.2f}")
-                except Exception:
-                    cells.append(f"{'FAIL':>8}"); traceback.print_exc()
-            print(f"{fr:6.2f} " + ' '.join(cells), flush=True)
-    f.close()
-    print(f"\n-> {path}")
 
 
 # ------------------------------------------------------------------ main table
@@ -1017,7 +976,7 @@ def cmd_beta(E, args):
               f"beta={s['mean_beta']:.3f} ({secs:.0f}s)", flush=True)
 
 
-COMMANDS = {'window': cmd_window, 'grid': cmd_grid, 'main': cmd_main,
+COMMANDS = {'window': cmd_window, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
             'readout': cmd_readout, 'recon': cmd_recon,
@@ -1032,8 +991,6 @@ def main():
     ap.add_argument('--dt', type=float, default=0.02, help='frame_duration (s)')
     ap.add_argument('--duration', type=float, default=3.0, help='track length (s)')
     ap.add_argument('--model', default='thesis_cmax')
-    ap.add_argument('--d-fr', default='0.02,0.05,0.10,0.30,0.50')
-    ap.add_argument('--d-anchor', default='0.1,0.3,0.5,0.7,0.9')
     ap.add_argument('--no-frames', action='store_true',
                     help='skip video_frames (they are the slow part)')
     ap.add_argument('--frame-stride', type=int, default=1,

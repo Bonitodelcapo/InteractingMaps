@@ -14,33 +14,18 @@ so the IMU-fed models are not graded on their own input. Metrics per frame:
 err = ‖ω_est − ω_ref‖ (deg/s), direction error (deg), and β = ‖ω_ref‖/‖ω_est‖.
 
 Experiments (``--exp N``)
-  1. Single-frame convergence (maps at iteration checkpoints)
-  2. Multi-frame tracking (ω_est vs ω_ref over time)   ← the core; 4/7/8/9 call it
-  3. Parameter influence (iterations & frame-duration sweeps for one frame)
-  4. Qualitative video (tracking with per-frame panels: V | I | I read-out | G | F | APS)
+  2. Multi-frame tracking (ω_est vs ω_ref over time; per-frame panels
+     V | I | I read-out | G | F | APS unless --no-frames)   ← the core; 9 calls it
   5. Assemble MP4s from saved frames (batch)
   6. Basin of attraction (how far can init-R be from GT and still converge?)
-  7. Full evaluation (all datasets × models × segments → full_evaluation.csv)
-  8. Parameter grid (sweep frame_duration × n_frames × n_iters × delta_FR × delta_IMU)
   9. Distortion ablation (Way-1 undistort-events vs Way-2 distortion-aware C/warp)
 
+Every other study, and every run behind the report, is a command of
+report/run_experiments.py (see report/run_all.sh): --what converge replaces the
+old single-frame convergence, --what sweep the parameter influence and grid,
+--what main the full evaluation.
+
 Usage:
-    python evaluation.py --exp 8 --all-segments     # for all segments sweep over
-                                                    #  'n_frames':  [25, 50, 150],
-                                                    #  'n_iters':   [75, 100],
-                                                    #  'delta_FR':  [0.10, 0.20, 0.30, 0.50],
-                                                    #  'delta_IMU': [0.10, 0.20, 0.30, 0.50],
-
-    # Alles mit Bildern (Standard):
-    python evaluation.py --exp 7 --model all
-
-    # Schneller ohne Bilder (nur Metriken):
-    python evaluation.py --exp 7 --model all --no-frames
-
-    # Parameter-Grid, alle Segmente, alle Models, mit Bildern:
-    python evaluation.py --exp 8 --all-segments --model all
-
-    # Einzelner Run:
     python evaluation.py --exp 2 --dataset poster_rotation --model thesis_imu
 
     # exp 9 
@@ -66,7 +51,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from config import DATASET_SEGMENTS, DISTORTION_MODE, get_dataset_paths
+from config import DATASET_SEGMENTS, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
 import experiment_tracking as run_store
 
@@ -80,124 +65,10 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
 from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps, map_scale
-from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
-                                    LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
+from interacting_maps.style import (MODELS, SCREEN_WIDTH, frame_times,
                                     to_deg_s, ref_label, use_style, save)
-from run_config import (RunConfig, resolve_best_kwargs, make_network,
+from run_config import (RunConfig, make_network,
                         _try_load_gt_images)
-
-# ===========================================================================
-# EXPERIMENT 1: Single-Frame Map Convergence
-# ===========================================================================
-
-def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=100,
-                                         snapshot_iters=None):
-    """Maps at iteration checkpoints — visual inspection."""
-    print("\n" + "="*70)
-    print("EXPERIMENT 1: Single-Frame Map Convergence")
-    print(f"  Config: {rc}")
-    print("="*70)
-
-    if snapshot_iters is None:
-        snapshot_iters = [1, 3, 5, 10, 25, 50, max_iters]
-    snapshot_iters = [i for i in snapshot_iters if i <= max_iters]
-
-    seq = EventFrameSequence(
-        rc.paths['events'], rc.paths['calib'],
-        frame_duration=rc.frame_duration, t_start=rc.t_start,
-        n_frames=frame_idx + 1, clip_value=10.0,
-        undistort=rc.undistort_at_event_level,
-        sensor_size=rc.sensor_size,
-    )
-    frames = list(seq)
-    V, t_mid = frames[frame_idx]
-    H, W = seq.H, seq.W
-    fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
-
-    imu_data = load_imu(rc.paths['imu'])
-    t_lo = rc.t_start + frame_idx * rc.frame_duration
-    t_hi = t_lo + rc.frame_duration
-    gt_omega = get_gyro_for_frame(imu_data, t_lo, t_hi)
-    gt_R = gt_omega * rc.frame_duration
-
-    print(f"  GT ω = ({gt_omega[0]:.3f}, {gt_omega[1]:.3f}, {gt_omega[2]:.3f}) rad/s")
-
-    net = make_network(rc, H, W, fx, fy, cx, cy)
-    snapshots = {}
-    R_history = []
-    res_history = []
-
-    if rc.use_thesis:
-        net.q_V.value = V
-        for it in range(1, max_iters + 1):
-            for q in [net.q_I, net.q_G, net.q_F, net.q_R]:
-                q.reset_gradient()
-            for cost in net.costs:
-                if cost is net.cost_imu and not rc.use_imu:
-                    continue
-                cost.compute_and_send_gradients()
-            net.q_I.update(1.0)
-            net.q_G.update(1.0)
-            net.q_F.update(1.0)
-            net.q_R.update(1.0)
-            net.q_I.value = np.clip(net.q_I.value, -10.0, 10.0)
-            net.q_G.value = np.clip(net.q_G.value, -5.0, 5.0)
-            net.q_F.value = np.clip(net.q_F.value, -10.0, 10.0)
-            net.q_R.value = np.clip(net.q_R.value, -1.0, 1.0)
-
-            R_history.append(net.R.copy())
-            res_history.append(net.residual_VFG(V))
-
-            if it in snapshot_iters:
-                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
-                                 'R': net.R.copy()}
-    else:
-        for it in range(1, max_iters + 1):
-            net.update_R_from_FC()
-            net.update_F_from_VG(V)
-            net.update_G_from_VF(V)
-            net.update_G_from_I()
-            net.update_I_from_G()
-            net.update_F_from_RC()
-
-            R_history.append(net.R.copy())
-            res_history.append(net.residual_VFG(V))
-
-            if it in snapshot_iters:
-                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
-                                 'R': net.R.copy()}
-
-    R_history = np.array(R_history)
-
-    # --- Save plot ---
-    rc.save_params()
-    n_snaps = len(snapshot_iters)
-    path = os.path.join(rc.output_dir, 'exp1_convergence.png')
-    with use_style('screen'):
-        fig, axes = plt.subplots(5, n_snaps, figsize=(SCREEN_WIDTH, 11))
-        fig.suptitle(f'Exp 1: map convergence — {MODELS[rc.model][0]}   '
-                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, frame {frame_idx}, '
-                     f'{ref_label("imu")}]')
-        scales = {k: map_scale(k, snapshots[snapshot_iters[-1]][k]) for k in ('I', 'G', 'F')}
-        for col, it in enumerate(snapshot_iters):
-            snap = snapshots[it]
-            draw_map(axes[0, col], 'V', V, title=f'iter {it}')
-            for row, kind in enumerate(('I', 'G', 'F'), start=1):
-                draw_map(axes[row, col], kind, snap[kind], title='', scale=scales[kind])
-            err = to_deg_s(np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration)
-            ax = axes[4, col]
-            ax.bar(range(3), to_deg_s(snap['R'] / rc.frame_duration), color=OMEGA_AXIS_COLORS)
-            ax.bar(range(3), to_deg_s(gt_omega), color='none', edgecolor=REF_STYLE['color'],
-                   linewidth=1.5, label=ref_label('imu'))
-            ax.set_xticks(range(3), [r'$\omega_x$', r'$\omega_y$', r'$\omega_z$'])
-            ax.set_title(f'error {err:.1f} °/s')
-        for row, kind in enumerate(('V', 'I', 'G', 'F')):
-            axes[row, 0].set_ylabel(MAP_TITLES[kind])
-        axes[4, 0].set_ylabel(LABEL_OMEGA)
-        axes[4, 0].legend(loc='upper right')
-        save(fig, path)
-    print(f"  Saved: {path}")
-
 
 # ===========================================================================
 # EXPERIMENT 2: Multi-Frame Tracking
@@ -523,14 +394,10 @@ def experiment_distortion_ablation(rc: RunConfig, save_frames=False):
     print(f"\nAblation CSV saved: {csv_path}")
     return rows
 
-def experiment_distortion_ablation_all_segments(dataset, model, save_frames=False,
-                                                use_best=False):
+def experiment_distortion_ablation_all_segments(dataset, model, save_frames=False):
     """
     Run the distortion ablation over EVERY segment of a dataset and emit one
     combined CSV (dataset × segment × mode) plus a grouped summary table.
-
-    If use_best=True, each segment's base config is taken from best_config.py
-    (best grid params for that dataset/segment/model) instead of the defaults.
     """
     print("\n" + "="*80)
     print(f"EXPERIMENT 9 (ALL SEGMENTS): Distortion Ablation — {dataset}, model={model}")
@@ -539,9 +406,8 @@ def experiment_distortion_ablation_all_segments(dataset, model, save_frames=Fals
     segs = DATASET_SEGMENTS[dataset]
     all_rows = []
     for seg in segs:
-        best_kw = resolve_best_kwargs(dataset, seg['id'], model) if use_best else {}
         rc = RunConfig(dataset=dataset, model=model, segment=seg['id'],
-                       distortion_mode=None, **best_kw)  # per-mode override happens inside
+                       distortion_mode=None)  # per-mode override happens inside
         rows = experiment_distortion_ablation(rc, save_frames=save_frames)
         for r in rows:
             all_rows.append({'dataset': dataset, 'segment_id': seg['id'],
@@ -572,116 +438,6 @@ def experiment_distortion_ablation_all_segments(dataset, model, save_frames=Fals
         writer.writerows(all_rows)
     print(f"\nCombined ablation CSV saved: {csv_path}")
     return all_rows
-
-# ===========================================================================
-# EXPERIMENT 3: Parameter Influence
-# ===========================================================================
-
-def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
-    """Iterations sweep + frame duration sweep."""
-    print("\n" + "="*70)
-    print("EXPERIMENT 3: Parameter Influence")
-    print(f"  Config: {rc}")
-    print("="*70)
-
-    rc.save_params()
-    imu_data = load_imu(rc.paths['imu'])
-
-    # (a) Iterations sweep
-    print("\n  (a) Iterations sweep:")
-    iter_counts = [1, 3, 5, 10, 20, 50, 100]
-    iter_results = []
-
-    seq = EventFrameSequence(
-        rc.paths['events'], rc.paths['calib'],
-        frame_duration=rc.frame_duration, t_start=rc.t_start,
-        n_frames=frame_idx + 1, clip_value=10.0, undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
-    )
-    frames = list(seq)
-    V, _ = frames[frame_idx]
-    H, W = seq.H, seq.W
-    fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
-
-    t_lo = rc.t_start + frame_idx * rc.frame_duration
-    t_hi = t_lo + rc.frame_duration
-    gt_omega = get_gyro_for_frame(imu_data, t_lo, t_hi)
-
-    for n_iters in iter_counts:
-        net = make_network(rc, H, W, fx, fy, cx, cy)
-        if rc.use_thesis and rc.use_imu:
-            net.step(V, n_iters=n_iters, omega_imu=gt_omega)
-        else:
-            net.step(V, n_iters=n_iters)
-        omega_est = net.R / rc.frame_duration
-        err, dir_err, beta = compute_metrics(omega_est, gt_omega)
-        iter_results.append({'iters': n_iters, 'err': err, 'dir': dir_err, 'beta': beta})
-        print(f"    iters={n_iters:4d} | err={err:.2f}°/s | dir={dir_err:.1f}°")
-
-    # (b) Frame duration sweep
-    print("\n  (b) Frame duration sweep:")
-    durations = [0.005, 0.010, 0.015, 0.020, 0.030, 0.050]
-    dt_results = []
-
-    for dt in durations:
-        seq2 = EventFrameSequence(
-            rc.paths['events'], rc.paths['calib'],
-            frame_duration=dt, t_start=rc.t_start,
-            n_frames=frame_idx + 1, clip_value=10.0, undistort=rc.undistort_at_event_level, sensor_size=rc.sensor_size,
-        )
-        frames2 = list(seq2)
-        V2, _ = frames2[frame_idx]
-        H2, W2 = seq2.H, seq2.W
-
-        t_lo2 = rc.t_start + frame_idx * dt
-        t_hi2 = t_lo2 + dt
-        gt_omega2 = get_gyro_for_frame(imu_data, t_lo2, t_hi2)
-
-        # Temporarily override frame_duration for make_network
-        orig_dt = rc.frame_duration
-        rc.frame_duration = dt
-        net = make_network(rc, H2, W2, fx, fy, cx, cy)
-        rc.frame_duration = orig_dt
-
-        if rc.use_thesis and rc.use_imu:
-            net.step(V2, n_iters=rc.n_iters, omega_imu=gt_omega2)
-        else:
-            net.step(V2, n_iters=rc.n_iters)
-
-        omega_est2 = net.R / dt
-        err2, dir2, beta2 = compute_metrics(omega_est2, gt_omega2)
-        n_active = np.count_nonzero(V2)
-        dt_results.append({'dt_ms': dt*1000, 'err': err2, 'active': n_active})
-        print(f"    dt={dt*1000:5.1f}ms | active={n_active:5d} | err={err2:.2f}°/s")
-
-    # Plot
-    color = MODELS[rc.model][1]
-    with use_style('screen'):
-        fig, axes = plt.subplots(1, 2, figsize=(SCREEN_WIDTH, 4.5))
-        fig.suptitle(f'Exp 3: parameter influence — {MODELS[rc.model][0]}   '
-                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
-                     f'{ref_label("imu")}]')
-        axes[0].plot([r['iters'] for r in iter_results],
-                     [r['err'] for r in iter_results], 'o-', color=color)
-        axes[0].set_xscale('log')
-        axes[0].set_xlabel('iterations per frame')
-        axes[0].set_title(f'(a) iterations (dt {rc.frame_duration*1000:.0f} ms)')
-        axes[1].plot([r['dt_ms'] for r in dt_results],
-                     [r['err'] for r in dt_results], 's-', color=color)
-        axes[1].set_xlabel('frame duration (ms)')
-        axes[1].set_title(f'(b) frame duration ({rc.n_iters} iters)')
-        for ax in axes:
-            ax.set_ylabel(LABEL_ERROR)
-        save(fig, os.path.join(rc.output_dir, 'exp3_parameters.png'))
-
-
-# ===========================================================================
-# EXPERIMENT 4: Qualitative Video
-# ===========================================================================
-
-def experiment_qualitative_video(rc: RunConfig):
-    print("  (Exp 4 is now integrated into Exp 2 — running tracking with frames)")
-    return experiment_tracking(rc, save_frames=True)
-
 
 def _steady_scale(rc, kind, arr, k, a=0.05):
     """Per-frame scale smoothed across frames (EMA), so a fading map shows as fading."""
@@ -744,10 +500,7 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
 
 
 # ===========================================================================
-# EXPERIMENT 5: Make Video
-# ===========================================================================
-# ===========================================================================
-# EXPERIMENT 5: Make Videos (batch-fähig)
+# EXPERIMENT 5: Make Videos (batch)
 # ===========================================================================
 
 def experiment_make_videos_batch(base_dir='results', fps=15):
@@ -788,33 +541,6 @@ def experiment_make_videos_batch(base_dir='results', fps=15):
         print(f"  Video: {output_path} ({len(frame_files)} frames)")
 
     print("Done.")
-
-def experiment_make_video(rc: RunConfig, fps=15):
-    """Assemble video from saved frames."""
-    import imageio
-    import glob
-    from PIL import Image
-
-    frames_dir = os.path.join(rc.output_dir, 'video_frames')
-    output_path = os.path.join(rc.output_dir, 'comparison.mp4')
-
-    frame_files = sorted(glob.glob(os.path.join(frames_dir, 'frame_*.png')))
-    if not frame_files:
-        print(f"No frames found in {frames_dir}")
-        return
-
-    first = Image.open(frame_files[0])
-    w, h = first.size
-    w = (w // 16) * 16
-    h = (h // 16) * 16
-
-    writer = imageio.get_writer(output_path, fps=fps)
-    for f in frame_files:
-        img = Image.open(f).resize((w, h), Image.LANCZOS)
-        writer.append_data(np.array(img))
-    writer.close()
-    print(f"Video saved: {output_path} ({w}×{h}, {len(frame_files)} frames)")
-
 
 # ===========================================================================
 # EXPERIMENT 6: Basin of Attraction
@@ -902,281 +628,6 @@ def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
 
 
 # ===========================================================================
-# EXPERIMENT 7: Full Systematic Evaluation
-# ===========================================================================
-
-def experiment_full_evaluation(dataset_filter=None, model_filter=None, save_frames=True):
-    """
-    Läuft über ALL datasets × ALL models × ALL SEGMENTS.
-    """
-    print("\n" + "="*70)
-    print("EXPERIMENT 7: Full Systematic Evaluation (All Segments)")
-    print("="*70)
-
-    # Datasets auswählen
-    if dataset_filter:
-        datasets = {dataset_filter: DATASET_SEGMENTS[dataset_filter]}
-    else:
-        datasets = DATASET_SEGMENTS
-
-    # Models auswählen
-    models = ([model_filter] if model_filter
-              else ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2'])
-
-    all_results = []
-
-    for dataset, segments in datasets.items():
-        for seg in segments:                          # ← NEU: innere Schleife
-            for model in models:
-                print(f"\n--- {dataset} / {seg['id']} / {model} ---")
-                try:
-                    rc = RunConfig(dataset=dataset, model=model, segment=seg)
-                    summary = experiment_tracking(rc, save_frames=save_frames)
-                    summary['dataset'] = dataset
-                    summary['segment_id'] = seg['id']  # ← NEU
-                    summary['model'] = model
-                    summary['duration_s'] = rc.duration_s
-                    all_results.append(summary)
-                except Exception as e:
-                    print(f"  FAILED: {e}")
-                    all_results.append({
-                        'dataset': dataset, 'segment_id': seg['id'],
-                        'model': model,
-                        'mean_err_deg_s': float('nan'),
-                        'mean_dir_err_deg': float('nan'),
-                        'mean_beta': float('nan'),
-                        'duration_s': 0,
-                    })
-
-    # Tabelle ausgeben
-    print("\n\n" + "="*90)
-    print("FULL EVALUATION RESULTS")
-    print("="*90)
-    print(f"{'Dataset':<18} {'Segment':<8} {'Model':<12} "
-          f"{'ω err°/s':<10} {'Dir err°':<10} {'β':<8} {'Dur(s)':<6}")
-    print("-"*90)
-    for r in all_results:
-        print(f"{r['dataset']:<18} {r.get('segment_id','?'):<8} {r['model']:<12} "
-              f"{r.get('mean_err_deg_s', float('nan')):>7.1f}   "
-              f"{r.get('mean_dir_err_deg', float('nan')):>7.1f}   "
-              f"{r.get('mean_beta', float('nan')):>6.2f}  "
-              f"{r.get('duration_s', 0):>5.1f}")
-
-    # CSV speichern
-    os.makedirs('results', exist_ok=True)
-    csv_path = 'results/full_evaluation.csv'
-    if all_results:
-        with open(csv_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
-            writer.writeheader()
-            writer.writerows(all_results)
-        print(f"\nMaster table saved: {csv_path}")
-
-    return all_results
-
-# ===========================================================================
-# EXPERIMENT 8: Automatic Parameter Grid Sweep
-# ===========================================================================
-def experiment_parameter_grid(dataset_filter=None, model_filter=None,
-                              all_segments=False, save_frames=True,
-                              distortion_mode=None):
-    """
-    Sweep over:
-      - frame_duration: [0.010, 0.020, 0.030]
-      - n_frames: [25, 50, 150]
-      - n_iters: [75, 100]
-      - delta_FR: [0.10, 0.20, 0.30, 0.50]
-      - delta_IMU: [0.10, 0.20, 0.30, 0.50]  (only for thesis_imu)
-    
-    For each config: runs tracking (Exp 2) AND single-frame convergence (Exp 1).
-    """
-    print("\n" + "="*70)
-    print("EXPERIMENT 8: Automatic Parameter Grid Sweep")
-    print("="*70)
-
-    # ─── GRID DEFINITION ──────────────────────────────────────────────
-    # Trimmed per sensitivity analysis of the previous grid:
-    #   - n_iters: FIXED at 75 (75 vs 100 moved error by <0.2 deg/s → inert)
-    #   - frame_duration: NOW SWEPT (was silently fixed at 0.020 before; it is
-    #     the physically most important untested axis — sets flow magnitude/frame)
-    #   - delta_FR: [0.1, 0.2, 0.5] (inert for pure vision; matters only for imu)
-    #   - delta_IMU: [0.1, 0.2, 0.5] (main knob for thesis_imu)
-    grid = {
-        'frame_duration': [0.010, 0.020, 0.050],
-        'n_frames':  [25, 150],       # short-track accuracy + long-track drift/reversal
-        'n_iters':   [75],
-        'delta_FR':  [0.10, 0.20, 0.50],    # 0.9 add 
-        'delta_IMU': [0.10, 0.20, 0.50],
-    }
-
-    # ─── DATASETS ─────────────────────────────────────────────────────
-    if dataset_filter:
-        datasets = [dataset_filter]
-    else:
-        datasets = list(DATASET_SEGMENTS.keys())
-
-    # ─── MODELS ───────────────────────────────────────────────────────
-    if model_filter is None:
-        models = ['cook', 'thesis', 'thesis_imu']
-    else:
-        models = [model_filter]
-
-    all_results = []
-    run_idx = 0
-
-    # Count total runs
-    total_runs = 0
-    for dataset in datasets:
-        n_segs = len(DATASET_SEGMENTS[dataset]) if all_segments else 1
-        for model in models:
-            n_imu = len(grid['delta_IMU']) if model == 'thesis_imu' else 1
-            total_runs += (n_segs * len(grid['frame_duration']) * 
-                          len(grid['n_frames']) * len(grid['n_iters']) * 
-                          len(grid['delta_FR']) * n_imu)
-
-    print(f"  Datasets: {datasets}")
-    print(f"  Models:   {models}")
-    print(f"  Segments: {'ALL' if all_segments else 'first only'}")
-    print(f"  Distortion mode: {distortion_mode or DISTORTION_MODE}")
-    print(f"  Grid axes: {list(grid.keys())}")
-    print(f"  Total runs: {total_runs}")
-    print()
-
-    for dataset in datasets:
-        if all_segments:
-            segs = DATASET_SEGMENTS[dataset]
-        else:
-            segs = [DATASET_SEGMENTS[dataset][0]]
-
-        for seg in segs:
-            for model in models:
-                imu_values = grid['delta_IMU'] if model == 'thesis_imu' else [None]
-
-                for frame_duration in grid['frame_duration']:
-                    for n_frames in grid['n_frames']:
-                        for n_iters in grid['n_iters']:
-                            for delta_FR in grid['delta_FR']:
-                                for delta_IMU in imu_values:
-                                    run_idx += 1
-                                    imu_str = f", δ_IMU={delta_IMU}" if delta_IMU else ""
-                                    print(f"\n{'─'*60}")
-                                    print(f"  RUN {run_idx}/{total_runs}: "
-                                          f"{dataset}/{seg['id']}/{model}")
-                                    print(f"  dt={frame_duration*1000:.0f}ms, "
-                                          f"n_frames={n_frames}, n_iters={n_iters}, "
-                                          f"δ_FR={delta_FR}{imu_str}")
-                                    print(f"{'─'*60}")
-
-                                    try:
-                                        rc = RunConfig(
-                                            dataset=dataset,
-                                            model=model,
-                                            segment=seg,
-                                            frame_duration=frame_duration,
-                                            n_frames=n_frames,
-                                            n_iters=n_iters,
-                                            delta_IMU=delta_IMU,
-                                            distortion_mode=distortion_mode,
-                                        )
-                                        rc.params['delta_FR'] = delta_FR
-
-                                        # ── Run Exp 2 (tracking) ──
-                                        summary = experiment_tracking(
-                                            rc, save_frames=save_frames)
-
-                                        # ── Run Exp 1 (convergence diagnostic) ──
-                                        if save_frames:
-                                            experiment_single_frame_convergence(
-                                                rc, frame_idx=0, 
-                                                max_iters=n_iters)
-
-                                        result = {
-                                            'dataset': dataset,
-                                            'segment_id': seg['id'],
-                                            'model': model,
-                                            'distortion_mode': rc.distortion_mode,
-                                            'frame_duration': frame_duration,
-                                            'n_frames': n_frames,
-                                            'n_iters': n_iters,
-                                            'delta_FR': delta_FR,
-                                            'delta_IMU': delta_IMU if delta_IMU else 0.0,
-                                            'duration_s': n_frames * frame_duration,
-                                            'mean_err_deg_s': summary['mean_err_deg_s'],
-                                            'median_err_deg_s': summary['median_err_deg_s'],
-                                            'mean_dir_err_deg': summary['mean_dir_err_deg'],
-                                            'mean_beta': summary['mean_beta'],
-                                        }
-                                        all_results.append(result)
-
-                                    except Exception as e:
-                                        print(f"  FAILED: {e}")
-                                        all_results.append({
-                                            'dataset': dataset,
-                                            'segment_id': seg['id'],
-                                            'model': model,
-                                            'distortion_mode': distortion_mode or DISTORTION_MODE,
-                                            'frame_duration': frame_duration,
-                                            'n_frames': n_frames,
-                                            'n_iters': n_iters,
-                                            'delta_FR': delta_FR,
-                                            'delta_IMU': delta_IMU if delta_IMU else 0.0,
-                                            'duration_s': n_frames * frame_duration,
-                                            'mean_err_deg_s': float('nan'),
-                                            'median_err_deg_s': float('nan'),
-                                            'mean_dir_err_deg': float('nan'),
-                                            'mean_beta': float('nan'),
-                                        })
-
-    # ─── RESULTS TABLE ─────────────────────────────────────────────────
-    print("\n\n" + "="*130)
-    print("PARAMETER GRID RESULTS")
-    print("="*130)
-    print(f"{'Dataset':<16} {'Seg':<6} {'Model':<12} {'dt_ms':>5} {'n_fr':>5} "
-          f"{'iters':>5} {'δ_FR':>5} {'δ_IMU':>6} | "
-          f"{'err°/s':>7} {'med°/s':>7} {'dir°':>6} {'β':>5}")
-    print("-"*130)
-    for r in all_results:
-        print(f"{r['dataset']:<16} {r['segment_id']:<6} {r['model']:<12} "
-              f"{r['frame_duration']*1000:>5.0f} {r['n_frames']:>5} "
-              f"{r['n_iters']:>5} {r['delta_FR']:>5.2f} "
-              f"{r['delta_IMU']:>6.2f} | "
-              f"{r['mean_err_deg_s']:>7.1f} {r['median_err_deg_s']:>7.1f} "
-              f"{r['mean_dir_err_deg']:>6.1f} {r['mean_beta']:>5.2f}")
-
-    # ─── SAVE CSV ──────────────────────────────────────────────────────
-    os.makedirs('results', exist_ok=True)
-    if dataset_filter:
-        csv_path = f'results/parameter_grid_{dataset_filter}.csv'
-    else:
-        csv_path = 'results/parameter_grid.csv'
-
-    if all_results:
-        with open(csv_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
-            writer.writeheader()
-            writer.writerows(all_results)
-        print(f"\nGrid results saved: {csv_path}")
-
-    # ─── FIND BEST PER MODEL ──────────────────────────────────────────
-    valid = [r for r in all_results if not np.isnan(r['mean_err_deg_s'])]
-    if valid:
-        print(f"\n  ★ BEST CONFIG PER MODEL:")
-        for m in models:
-            m_valid = [r for r in valid if r['model'] == m]
-            if m_valid:
-                best = min(m_valid, key=lambda r: r['mean_err_deg_s'])
-                imu_str = (f", δ_IMU={best['delta_IMU']:.2f}" 
-                          if m == 'thesis_imu' else "")
-                print(f"    [{m:12s}] {best['dataset']}/{best['segment_id']}, "
-                      f"dt={best['frame_duration']*1000:.0f}ms, "
-                      f"n={best['n_frames']}, i={best['n_iters']}, "
-                      f"δ_FR={best['delta_FR']:.2f}{imu_str} "
-                      f"→ {best['mean_err_deg_s']:.1f}°/s")
-
-    return all_results
-
-
-# ===========================================================================
 # Main
 # ===========================================================================
 
@@ -1184,7 +635,8 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Systematic Evaluation')
-    parser.add_argument('--exp', type=int, default=2, help='1-7')
+    parser.add_argument('--exp', type=int, default=2, choices=[2, 5, 6, 9],
+                        help='2 tracking, 5 videos, 6 basin, 9 distortion ablation')
     parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--model', type=str, default='thesis_imu',
                         choices=['cook', 'thesis', 'thesis_imu', 'thesis_cmax',
@@ -1196,30 +648,19 @@ if __name__ == '__main__':
     parser.add_argument('--delta_imu', type=float, default=None)
     parser.add_argument('--frame', type=int, default=0)
     parser.add_argument('--fps', type=int, default=15)
-    parser.add_argument('--all-segments', action='store_true',
-                    help='Run grid sweep over ALL segments (slow)')
     parser.add_argument('--no-frames', action='store_true',
                         help='Skip saving 3-col PNGs (faster)')
     parser.add_argument('--save-iwe', action='store_true',
                         help='Save the final CMax IWE per frame (V1/V2 only)')
     parser.add_argument('--distortion-mode', type=str, default=None,
                         choices=['undistort_events', 'C_full'],
-                        help='Override distortion handling (exp 1-6, 8). Exp 9 sweeps both.')
-    parser.add_argument('--best', action='store_true',
-                        help='Fill unspecified params from best_config.py '
-                             '(best grid params for this dataset/segment/model). '
-                             'Explicit CLI flags still win.')
+                        help='Override distortion handling (exp 2, 6). Exp 9 sweeps both.')
     args = parser.parse_args()
     save_frames = not args.no_frames  # Default: save images
 
-    # Build config ONLY for experiments that need it (1-6)
-    
-    # Resolve --model all → None (triggers all-models logic in exp 7/8)
-    effective_model = None if args.model == 'all' else args.model
-
-    # Build config ONLY for experiments that need it (1-6)
+    # Build the run config for the experiments that need one
     rc = None
-    need_rc = args.exp in (1, 2, 3, 4, 5, 6, 9)
+    need_rc = args.exp in (2, 6, 9)
     if args.exp == 9 and args.segment == 'all':
         need_rc = False                       # all-segments path builds its own configs
     if need_rc:
@@ -1234,41 +675,17 @@ if __name__ == '__main__':
             delta_IMU=args.delta_imu,
             distortion_mode=args.distortion_mode,
         )
-        if args.best:
-            if args.segment in (None, 'all'):
-                print("  [--best] requires a specific --segment (e.g. seg_A); "
-                      "ignoring --best.")
-            else:
-                cli = {'n_frames': args.n_frames, 'n_iters': args.n_iters,
-                       'delta_IMU': args.delta_imu}
-                rc_kwargs.update(resolve_best_kwargs(dataset, args.segment, model, cli))
         rc = RunConfig(**rc_kwargs)
         rc.save_iwe = args.save_iwe
 
     experiments = {
-        1: lambda: experiment_single_frame_convergence(rc, frame_idx=args.frame),
         2: lambda: experiment_tracking(rc, save_frames=save_frames),
-        3: lambda: experiment_parameter_influence(rc, frame_idx=args.frame),
-        4: lambda: experiment_tracking(rc, save_frames=True),  # Always with frames
-        #5: lambda: experiment_make_video(rc, fps=args.fps),
-        5: lambda: experiment_make_videos_batch(fps=args.fps),  # ← Batch!
+        5: lambda: experiment_make_videos_batch(fps=args.fps),
         6: lambda: experiment_basin_of_attraction(rc, frame_idx=args.frame),
-        7: lambda: experiment_full_evaluation(
-            dataset_filter=args.dataset,
-            model_filter=effective_model,
-            save_frames=save_frames,
-        ),
-        8: lambda: experiment_parameter_grid(
-            dataset_filter=args.dataset,
-            model_filter=effective_model,
-            all_segments=args.all_segments,
-            save_frames=save_frames,
-            distortion_mode=args.distortion_mode,
-        ),
         9: lambda: (experiment_distortion_ablation_all_segments(
                         dataset=args.dataset or 'boxes_rotation',
                         model=(args.model if args.model != 'all' else 'thesis_imu'),
-                        save_frames=save_frames, use_best=args.best)
+                        save_frames=save_frames)
                     if args.segment == 'all'
                     else experiment_distortion_ablation(rc, save_frames=save_frames)),
         }

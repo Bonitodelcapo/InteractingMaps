@@ -2,7 +2,7 @@
 run_config.py — Run configuration and network factory for Interacting Maps.
 
 Extracted from evaluation.py (architecture_review.md R5 / §"Concern" table:
-RunConfig, resolve_best_kwargs, make_network) so scripts and tests can import
+RunConfig, make_network) so scripts and tests can import
 run configuration without pulling in the whole experiment-dispatch module.
 """
 
@@ -12,7 +12,6 @@ import numpy as np
 from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
                     ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
                     get_dataset_paths)
-from best_config import best_params
 import experiment_tracking
 from interacting_maps.eval_io import load_imu, get_gyro_for_frame
 from interacting_maps.network import InteractingMaps
@@ -212,32 +211,6 @@ class RunConfig:
 # ===========================================================================
 # HELPERS
 # ===========================================================================
-
-def resolve_best_kwargs(dataset, segment_id, model, cli_overrides=None):
-    """Return RunConfig kwargs (frame_duration/n_frames/n_iters/delta_FR/delta_IMU)
-    from best_config.py for a (dataset, segment_id, model).
-
-    delta_IMU is only included for thesis_imu. `cli_overrides` (a dict of any of
-    those keys with non-None values) wins over the stored best values, so an
-    explicit CLI flag always takes precedence. Returns {} if no best entry exists.
-    """
-    bp = best_params(dataset, segment_id, model)
-    if bp is None:
-        print(f"  [--best] No best config for {dataset}/{segment_id}/{model}; "
-              f"using defaults.")
-        return {}
-    kw = {
-        'frame_duration': bp['frame_duration'],
-        'n_frames': bp['n_frames'],
-        'n_iters': bp['n_iters'],
-        'delta_FR': bp['delta_FR'],
-    }
-    if model == 'thesis_imu':
-        kw['delta_IMU'] = bp['delta_IMU']
-    if cli_overrides:
-        kw.update({k: v for k, v in cli_overrides.items() if v is not None})
-    return kw
-
 
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig; distortion handling from rc.distortion_mode."""
