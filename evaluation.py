@@ -17,7 +17,7 @@ Experiments (``--exp N``)
   1. Single-frame convergence (maps at iteration checkpoints)
   2. Multi-frame tracking (ω_est vs ω_ref over time)   ← the core; 4/7/8/9 call it
   3. Parameter influence (iterations & frame-duration sweeps for one frame)
-  4. Qualitative video (tracking with 3-column frames: Events | I | GT APS)
+  4. Qualitative video (tracking with per-frame panels: V | I | I read-out | G | F | APS)
   5. Assemble MP4s from saved frames (batch)
   6. Basin of attraction (how far can init-R be from GT and still converge?)
   7. Full evaluation (all datasets × models × segments → full_evaluation.csv)
@@ -66,297 +66,25 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
-                    ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
-                    get_dataset_paths, get_initial_R_from_imu)
-from best_config import best_params
-from data_loader import EventFrameSequence
-import provenance
+from config import DATASET_SEGMENTS, DISTORTION_MODE, get_dataset_paths
+from interacting_maps.data_loader import EventFrameSequence
+import experiment_tracking as run_store
 
-# Helpers extracted into focused modules (R3 of architecture_review.md) and
+# Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
 # re-exported here so existing callers (incl. report scripts' E.<name>) are
-# unchanged. See eval_io.py / metrics.py / viz.py.
-from eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu,
+# unchanged. See eval_io.py / metrics.py / viz.py / run_config.py.
+from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu,
                      get_gyro_for_frame, load_groundtruth, _quat_to_rotmat,
                      gt_omega_body, load_omega_gt, omega_gt_at,
                      get_reference_omega)
-from metrics import (compute_metrics, curl_share, _intensity_stats,
+from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from viz import normalise, normalise_robust, flow_to_rgb, grad_to_rgb
-from interacting_maps.network import InteractingMaps
-from interacting_maps.network_dissertation import InteractingMapsThesis
-
-
-# ===========================================================================
-# RUN CONFIGURATION (override via CLI args)
-# ===========================================================================
-
-class RunConfig:
-    """All parameters for a single evaluation run."""
-    def __init__(self, dataset='boxes_rotation', model='thesis_imu',
-                 segment=None, t_start=None, frame_duration=None, n_frames=None,
-                 n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None,
-                 poisson=None, deltas=None, out_root=None):
-
-        # Where this run's directory goes. 'results' holds the runs behind the
-        # reported tables; a sweep passes e.g. 'experiments/sweep_deltas' so its
-        # hundreds of throwaway runs stay out of the way and can be deleted as
-        # a unit without touching anything the report depends on.
-        self.out_root = out_root or 'results'
-        self.dataset = dataset
-        self.model = model  # 'cook', 'thesis', 'thesis_imu'
-        self.distortion_mode = distortion_mode or DISTORTION_MODE
-        # Which of the thesis' two I-updates to use: 'iterative' (Eq. 6.61) or
-        # the exact frequency-domain solve, 'fft'/'dct' (Eq. 6.64-6.65).
-        # Thesis network only; Cook's variant has its own intensity update.
-        self.poisson = poisson or POISSON_MODE
-        
-        if segment is None:
-            # Fallback: erstes Segment bzw. DATASET_CONFIGS
-            self.segment = DATASET_CONFIGS[dataset]
-            self.segment_id = 'default'
-        elif isinstance(segment, str):
-            # Lookup by ID (z.B. 'seg_A')
-            segs = DATASET_SEGMENTS[dataset]
-            match = [s for s in segs if s['id'] == segment]
-            if not match:
-                raise ValueError(f"Segment '{segment}' not found for {dataset}")
-            self.segment = match[0]
-            self.segment_id = segment
-        else:
-            # Direkt ein Dict übergeben
-            self.segment = segment
-            self.segment_id = segment.get('id', 'unknown')
-
-        # Load dataset defaults
-        cfg = self.segment
-        self.t_start = t_start if t_start is not None else cfg['t_start']
-        self.frame_duration = frame_duration if frame_duration is not None else cfg['frame_duration']
-        self.n_frames = n_frames if n_frames is not None else cfg['n_frames']
-        self.n_iters = n_iters if n_iters is not None else ITERS_PER_FRAME
-        self.sensor_size = cfg.get('sensor_size', (180, 240))
-        
-        # Model parameters
-        self.use_cmax = False       # load raw events + compute per-frame CMax ω
-        self.use_cmax_v2 = False    # V2: CMax drives R inside the MP loop
-        self.save_iwe = False       # save the final CMax IWE per frame (V1/V2)
-        self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
-                                    # ≳5e-4 diverges. Scales with event count² —
-                                    # lower it for denser streams (see cmax.md).
-        if model == 'cook':
-            self.params = COOK_PARAMS.copy()
-            self.use_thesis = False
-            self.use_imu = False
-        elif model == 'thesis':
-            self.params = THESIS_PARAMS.copy()
-            self.use_thesis = True
-            self.use_imu = False
-        elif model == 'thesis_cmax':
-            # V1: same as thesis_imu, but the per-frame R anchor comes from a
-            # full CMax solve on the events instead of the IMU gyro. Reuses the
-            # Cost_IMU mechanism (a generic "pull R toward an external ω").
-            # Init still from the gyro at frame 0 (see _compute_initial_R).
-            self.params = THESIS_PARAMS.copy()
-            self.use_thesis = True
-            self.use_imu = True     # Cost_IMU is the anchor; target = ω_cmax
-            self.use_cmax = True
-        elif model == 'thesis_cmax_v2':
-            # V2: CMax is the per-iteration R update INSIDE the message passing.
-            # Kinematics updates F only; no IMU. Events loaded per frame (B1).
-            self.params = THESIS_PARAMS.copy()
-            self.use_thesis = True
-            self.use_imu = False
-            self.use_cmax = True
-            self.use_cmax_v2 = True
-        else:  # thesis_imu
-            self.params = THESIS_PARAMS.copy()
-            self.use_thesis = True
-            self.use_imu = True
-        
-        # Override delta_IMU if specified
-        if delta_IMU is not None and self.use_imu:
-            self.params['delta_IMU'] = delta_IMU
-
-        # Override delta_FR if specified
-        if delta_FR is not None:
-            self.params['delta_FR'] = delta_FR
-
-        # Generic override for any relaxation rate, so a sweep can vary the
-        # deltas the two named arguments above do not cover. Unknown keys are
-        # rejected here rather than surfacing as a TypeError from the network.
-        for k, v in (deltas or {}).items():
-            if k not in self.params:
-                raise ValueError(f"{model!r} has no parameter {k!r} "
-                                 f"(has: {sorted(self.params)})")
-            self.params[k] = v
-        
-        # Paths
-        self.paths = get_dataset_paths(dataset)
-        
-        # Initial R from IMU
-        self.initial_R = self._compute_initial_R()
-    
-    @property
-    def delta_IMU(self):
-        return self.params.get('delta_IMU', 0.0)
-    
-    @property
-    def undistort_at_event_level(self):
-        return self.distortion_mode == 'undistort_events'
-    
-    @property
-    def duration_s(self):
-        return self.n_frames * self.frame_duration
-    
-    @property
-    def output_dir(self):
-        """Folder now includes dt."""
-        folder_name = (f"{self.segment_id}_t{self.t_start:.3f}"
-                    f"_dt{self.frame_duration*1000:.0f}ms"
-                    f"_n{self.n_frames}_i{self.n_iters}")
-        if self.use_imu:
-            folder_name += f"_dimu{self.delta_IMU:.2f}"
-        # Also encode delta_FR to distinguish configs
-        folder_name += f"_dFR{self.params.get('delta_FR', 0):.2f}"
-        folder_name += f"_{self.distortion_mode}"
-        # Any OTHER relaxation rate that deviates from this model's defaults,
-        # so a sweep over the remaining deltas cannot overwrite a run that
-        # differs only in a parameter the name above does not carry.
-        base = COOK_PARAMS if self.model == 'cook' else THESIS_PARAMS
-        extra = [f"{k.replace('delta_', '')}{v:g}"
-                 for k, v in sorted(self.params.items())
-                 if k not in ('delta_FR', 'delta_IMU') and base.get(k) != v]
-        if extra:
-            folder_name += '_' + '-'.join(extra)
-        if self.use_thesis and self.poisson != 'iterative':
-            folder_name += f"_{self.poisson}"
-        return os.path.join(self.out_root, self.dataset, self.model, folder_name)
-    
-    def to_dict(self):
-        """Serialize all parameters for JSON."""
-        return {
-            'dataset': self.dataset,
-            'model': self.model,
-            'segment_id': self.segment_id,
-            't_start': self.t_start,
-            'frame_duration': self.frame_duration,
-            'n_frames': self.n_frames,
-            'distortion_mode': self.distortion_mode,
-            'poisson': self.poisson,
-            'out_root': self.out_root,
-            'n_iters': self.n_iters,
-            'duration_s': self.duration_s,
-            'sensor_size': list(self.sensor_size),
-            'initial_R': self.initial_R.tolist(),
-            'params': self.params,
-        }
-
-    def save_run(self, summary=None):
-        """Write the merged run.json (provenance + config + summary).
-
-        Called once early with summary=None, so config and provenance survive a
-        crash, and again at the end with the metrics filled in. Replaces the old
-        split params.json/summary.json (read_run still falls back to those for
-        runs written before this change)."""
-        return provenance.save_run(self.output_dir, self.to_dict(), summary)
-
-    def save_params(self):
-        """Back-compat: write the early run.json (config + provenance, no metrics
-        yet). Kept because exp 1/3/6 call it and have no summary to record."""
-        self.save_run()
-    
-    def __repr__(self):
-        return (f"RunConfig({self.dataset}, {self.model}, "
-                f"t={self.t_start:.3f}, dt={self.frame_duration*1000:.0f}ms, "
-                f"n={self.n_frames}, iters={self.n_iters})")
-
-    def _compute_initial_R(self):
-        """Compute initial R from IMU at THIS segment's t_start."""
-        imu_data = np.loadtxt(self.paths['imu'], dtype=np.float64)
-        t_lo = self.t_start
-        t_hi = self.t_start + self.frame_duration
-        mask = (imu_data[:, 0] >= t_lo) & (imu_data[:, 0] < t_hi)
-        
-        if np.sum(mask) > 0:
-            omega = np.mean(imu_data[mask, 4:7], axis=0)
-        else:
-            idx = np.argmin(np.abs(imu_data[:, 0] - self.t_start))
-            omega = imu_data[idx, 4:7]
-        
-        return omega * self.frame_duration  # rad/s → rad/frame
-
-
-# ===========================================================================
-# HELPERS
-# ===========================================================================
-
-def resolve_best_kwargs(dataset, segment_id, model, cli_overrides=None):
-    """Return RunConfig kwargs (frame_duration/n_frames/n_iters/delta_FR/delta_IMU)
-    from best_config.py for a (dataset, segment_id, model).
-
-    delta_IMU is only included for thesis_imu. `cli_overrides` (a dict of any of
-    those keys with non-None values) wins over the stored best values, so an
-    explicit CLI flag always takes precedence. Returns {} if no best entry exists.
-    """
-    bp = best_params(dataset, segment_id, model)
-    if bp is None:
-        print(f"  [--best] No best config for {dataset}/{segment_id}/{model}; "
-              f"using defaults.")
-        return {}
-    kw = {
-        'frame_duration': bp['frame_duration'],
-        'n_frames': bp['n_frames'],
-        'n_iters': bp['n_iters'],
-        'delta_FR': bp['delta_FR'],
-    }
-    if model == 'thesis_imu':
-        kw['delta_IMU'] = bp['delta_IMU']
-    if cli_overrides:
-        kw.update({k: v for k, v in cli_overrides.items() if v is not None})
-    return kw
-
-
-def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
-    """Create network from RunConfig; distortion handling from rc.distortion_mode."""
-    from data_loader import CameraCalibration
-    mode = rc.distortion_mode
-    if mode == 'undistort_events':
-        dist_coeffs = None                                    # events already undistorted → pinhole C
-    elif mode == 'C_full':
-        dist_coeffs = CameraCalibration(rc.paths['calib']).dist  # distortion-aware C (+ Jacobian)
-    else:
-        raise ValueError(f"Unknown distortion_mode: {mode}")
-
-    if rc.use_thesis:
-        net = InteractingMapsThesis(
-            H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
-            frame_duration=rc.frame_duration,
-            dist_coeffs=dist_coeffs,
-            poisson=getattr(rc, 'poisson', 'iterative'),
-            **rc.params
-        )
-        # V2: CMax drives R inside the loop (kinematics → F only, no IMU).
-        if getattr(rc, 'use_cmax_v2', False):
-            from cmax import CMaxAngularVelocity
-            est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
-            net.enable_cmax_r_update(est, lr=rc.cmax_lr)
-        net.initialize_from_rotation(rc.initial_R)
-    else:
-        net = InteractingMaps(
-            H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
-            dist_coeffs=dist_coeffs,
-            **rc.params
-        )
-        # Seeded (matches the thesis init's default_rng(42)) so Cook runs are
-        # reproducible; the global np.random here previously made them vary
-        # run-to-run. The I-noise only seeds ∇I, so fixing the seed is strictly a
-        # reproducibility gain, not a tuning change.
-        net.I = np.random.default_rng(42).standard_normal((H+1, W+1)) * 0.001
-        net.G = np.zeros((H, W, 2), dtype=np.float64)
-        net.F = np.einsum('hwij,j->hwi', net._C_mat, rc.initial_R)
-        net.R = rc.initial_R.copy()
-    return net
-
+from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps, map_scale
+from interacting_maps.style import (MODELS, OMEGA_AXIS_COLORS, REF_STYLE, LABEL_OMEGA,
+                                    LABEL_ERROR, MAP_TITLES, SCREEN_WIDTH, frame_times,
+                                    to_deg_s, ref_label, use_style, save)
+from run_config import (RunConfig, resolve_best_kwargs, make_network,
+                        _try_load_gt_images)
 
 # ===========================================================================
 # EXPERIMENT 1: Single-Frame Map Convergence
@@ -421,10 +149,8 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
             res_history.append(net.residual_VFG(V))
 
             if it in snapshot_iters:
-                snapshots[it] = {
-                    'I': net.I.copy(), 'G': net.G.copy(),
-                    'F': net.F.copy(), 'R': net.R.copy(),
-                }
+                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
+                                 'R': net.R.copy()}
     else:
         for it in range(1, max_iters + 1):
             net.update_R_from_FC()
@@ -438,49 +164,39 @@ def experiment_single_frame_convergence(rc: RunConfig, frame_idx=0, max_iters=10
             res_history.append(net.residual_VFG(V))
 
             if it in snapshot_iters:
-                snapshots[it] = {
-                    'I': net.I[:H, :W].copy(), 'G': net.G.copy(),
-                    'F': net.F.copy(), 'R': net.R.copy(),
-                }
+                snapshots[it] = {**{n: m.copy() for n, m in net_maps(net, H, W).items()},
+                                 'R': net.R.copy()}
 
     R_history = np.array(R_history)
 
     # --- Save plot ---
     rc.save_params()
     n_snaps = len(snapshot_iters)
-    fig, axes = plt.subplots(5, n_snaps, figsize=(3 * n_snaps, 14))
-    fig.suptitle(f'Exp 1: Map Convergence ({rc.model}, {rc.dataset})\n'
-                 f'GT ω = ({gt_omega[0]:.3f}, {gt_omega[1]:.3f}, {gt_omega[2]:.3f}) rad/s',
-                 fontsize=11)
-
-    for col, it in enumerate(snapshot_iters):
-        snap = snapshots[it]
-        omega_it = snap['R'] / rc.frame_duration
-
-        axes[0, col].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
-        axes[0, col].set_title(f'iter {it}', fontsize=9)
-        axes[1, col].imshow(normalise(snap['I']), cmap='gray')
-        G_mag = np.sqrt(snap['G'][..., 0]**2 + snap['G'][..., 1]**2)
-        axes[2, col].imshow(normalise(G_mag), cmap='hot')
-        axes[3, col].imshow(flow_to_rgb(snap['F']))
-
-        err = np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration * 180 / np.pi
-        axes[4, col].bar(['ωx','ωy','ωz'], omega_it,
-                        color=['#4e79a7','#f28e2b','#e15759'])
-        axes[4, col].bar(['ωx','ωy','ωz'], gt_omega,
-                        color='none', edgecolor='black', linewidth=2)
-        axes[4, col].set_title(f'err={err:.1f}°/s', fontsize=8)
-
-    row_labels = ['V (input)', 'I (intensity)', '|G| (gradient)', 'F (flow)', 'ω']
-    for row, label in enumerate(row_labels):
-        axes[row, 0].set_ylabel(label, fontsize=9)
-    for ax in axes[:4].flat:
-        ax.axis('off')
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp1_convergence.png'), dpi=150)
-    plt.close()
-    print(f"  Saved: {rc.output_dir}/exp1_convergence.png")
+    path = os.path.join(rc.output_dir, 'exp1_convergence.png')
+    with use_style('screen'):
+        fig, axes = plt.subplots(5, n_snaps, figsize=(SCREEN_WIDTH, 11))
+        fig.suptitle(f'Exp 1: map convergence — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, frame {frame_idx}, '
+                     f'{ref_label("imu")}]')
+        scales = {k: map_scale(k, snapshots[snapshot_iters[-1]][k]) for k in ('I', 'G', 'F')}
+        for col, it in enumerate(snapshot_iters):
+            snap = snapshots[it]
+            draw_map(axes[0, col], 'V', V, title=f'iter {it}')
+            for row, kind in enumerate(('I', 'G', 'F'), start=1):
+                draw_map(axes[row, col], kind, snap[kind], title='', scale=scales[kind])
+            err = to_deg_s(np.linalg.norm(snap['R'] - gt_R) / rc.frame_duration)
+            ax = axes[4, col]
+            ax.bar(range(3), to_deg_s(snap['R'] / rc.frame_duration), color=OMEGA_AXIS_COLORS)
+            ax.bar(range(3), to_deg_s(gt_omega), color='none', edgecolor=REF_STYLE['color'],
+                   linewidth=1.5, label=ref_label('imu'))
+            ax.set_xticks(range(3), [r'$\omega_x$', r'$\omega_y$', r'$\omega_z$'])
+            ax.set_title(f'error {err:.1f} °/s')
+        for row, kind in enumerate(('V', 'I', 'G', 'F')):
+            axes[row, 0].set_ylabel(MAP_TITLES[kind])
+        axes[4, 0].set_ylabel(LABEL_OMEGA)
+        axes[4, 0].legend(loc='upper right')
+        save(fig, path)
+    print(f"  Saved: {path}")
 
 
 # ===========================================================================
@@ -495,7 +211,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
       - run.json (provenance + config + summary, one self-describing file)
     Reported runs are also mirrored to the local MLflow store (see provenance.py).
     If save_frames=True (default):
-      - video_frames/frame_XXXX.png (3-col: Events | I | GT)
+      - video_frames/frame_XXXX.png (V | I | I read-out | G | F | APS)
     """
     print("\n" + "="*70)
     print("EXPERIMENT 2: Multi-Frame Angular Velocity Tracking")
@@ -542,7 +258,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     omega_cmax_prev = np.zeros(3)
     omega_anchor = None
     if getattr(rc, 'use_cmax', False):
-        from data_loader import load_events_fast, undistort_events
+        from interacting_maps.data_loader import load_events_fast, undistort_events
         dur = rc.n_frames * rc.frame_duration + 0.1
         cmax_events = undistort_events(
             load_events_fast(rc.paths['events'], t_start=rc.t_start, duration=dur),
@@ -552,7 +268,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
                   f"(lr={rc.cmax_lr}, {len(cmax_events)} events).")
         else:
             # V1: standalone full-solve estimator, feeds the R anchor.
-            from cmax import CMaxAngularVelocity
+            from interacting_maps.angular_velocity import CMaxAngularVelocity
             cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
             print(f"  CMax V1 active — R anchored to full CMax ω per frame "
                   f"({len(cmax_events)} events).")
@@ -560,7 +276,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
     iwe_dir = None
     if getattr(rc, 'save_iwe', False) and getattr(rc, 'use_cmax', False):
-        from cmax.iwe_io import save_iwe, plot_contrast_curve, make_gif
+        from interacting_maps.iwe_io import save_iwe, plot_contrast_curve, make_gif
         iwe_dir = os.path.join(rc.output_dir, 'iwe')
         os.makedirs(iwe_dir, exist_ok=True)
         print(f"  Saving final IWE per frame to: {iwe_dir}/")
@@ -657,7 +373,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
 
     # ─── IWE sequence artefacts (contrast curve + GIF) ────────────────
     if iwe_dir is not None:
-        plot_contrast_curve(iwe_dir)
+        plot_contrast_curve(iwe_dir, rc.t_start)
         make_gif(iwe_dir)
         print(f"  IWE: {rc.n_frames} PNGs + iwe_log.csv + contrast_curve.png "
               f"(+gif) → {iwe_dir}/")
@@ -714,7 +430,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # logged by default; throwaway sweeps under experiments/ are skipped unless
     # IM_MLFLOW_ALL=1, so the tracking store is not flooded. IM_MLFLOW=0 disables.
     if os.environ.get('IM_MLFLOW_ALL') == '1' or rc.out_root == 'results':
-        provenance.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
+        run_store.mlflow_log_run(rc.to_dict(), summary, output_dir=rc.output_dir)
 
     print(f"\n  {'='*50}")
     print(f"  RESULTS: {rc.model}, {rc.dataset}, {rc.duration_s:.1f}s")
@@ -731,46 +447,28 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     return summary
 
 def _plot_tracking(rows, rc: RunConfig):
-    """Tracking plot with ω components + error."""
-    times = np.array([r['time'] for r in rows]) - rows[0]['time']
-    omega_est = np.array([[r['est_wx'], r['est_wy'], r['est_wz']] for r in rows])
-    omega_gt = np.array([[r['gt_wx'], r['gt_wy'], r['gt_wz']] for r in rows])
-    err = np.array([r['err_deg_s'] for r in rows])
+    """ω components and error against seconds since segment start."""
+    t = frame_times(rc.frame_duration, len(rows))
+    col = lambda p: np.array([[r[f'{p}_wx'], r[f'{p}_wy'], r[f'{p}_wz']] for r in rows])
+    est, ref, imu = col('est'), col('gt'), col('imu')
+    ref_src = rows[0]['ref_source']
 
-    ref_src = rows[0].get('ref_source', 'imu')
-    ref_label = 'GT (Vicon quat)' if ref_src == 'groundtruth' else 'GT (IMU)'
-    # Only overlay the gyro separately when it is NOT the scoring reference.
-    has_imu_col = 'imu_wx' in rows[0]
-    omega_imu = (np.array([[r['imu_wx'], r['imu_wy'], r['imu_wz']] for r in rows])
-                 if has_imu_col else None)
-
-    fig, axes = plt.subplots(4, 1, figsize=(14, 10), sharex=True)
-    fig.suptitle(f'ω Tracking — {rc.dataset} ({rc.model})\n'
-                 f'dt={rc.frame_duration*1000:.0f}ms, {rc.n_iters} iters, '
-                 f'{rc.duration_s:.1f}s  |  scored vs {ref_label}', fontsize=11)
-
-    labels = ['ωx', 'ωy', 'ωz']
-    colors = ['#4e79a7', '#f28e2b', '#e15759']
-
-    for i in range(3):
-        axes[i].plot(times, omega_gt[:, i], 'k-', lw=1.0, alpha=0.8, label=ref_label)
-        if omega_imu is not None and ref_src == 'groundtruth':
-            axes[i].plot(times, omega_imu[:, i], color='#59a14f', lw=0.8, ls=':',
-                         alpha=0.7, label='IMU gyro (model input)')
-        axes[i].plot(times, omega_est[:, i], color=colors[i], lw=1.5, label='Estimated')
-        axes[i].set_ylabel(f'{labels[i]} (rad/s)')
-        axes[i].legend(loc='upper right', fontsize=8)
-        axes[i].grid(True, alpha=0.3)
-
-    axes[3].plot(times, err, 'r-', lw=1.0)
-    axes[3].set_ylabel('Error (°/s)')
-    axes[3].set_xlabel('Time (s)')
-    axes[3].set_title(f'Error: mean={np.mean(err):.1f}°/s, median={np.median(err):.1f}°/s')
-    axes[3].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'tracking_plot.png'), dpi=150)
-    plt.close()
+    with use_style('screen'):
+        fig, axes = plt.subplots(4, 1, figsize=(SCREEN_WIDTH, 10), sharex=True)
+        fig.suptitle(f'ω tracking — {MODELS[rc.model][0]}   [{rc.dataset} {rc.segment_id}, '
+                     f't_start {rc.t_start:.3f} s]\n'
+                     f'dt {rc.frame_duration*1000:.0f} ms, {rc.n_iters} iters, '
+                     f'{rc.duration_s:.1f} s, scored vs {ref_label(ref_src)}')
+        for i in range(3):
+            draw_omega(axes[i], t, est[:, i], ref=ref[:, i], imu=imu[:, i], axis=i,
+                       ref_src=ref_src)
+        axes[0].legend(loc='upper right')
+        err = np.array([r['err_deg_s'] for r in rows])
+        draw_error(axes[3], t, err)
+        axes[3].set_title(f'error: mean {err.mean():.1f} °/s, median {np.median(err):.1f} °/s')
+        for ax in axes:
+            ax.label_outer()
+        save(fig, os.path.join(rc.output_dir, 'tracking_plot.png'))
 
 def experiment_distortion_ablation(rc: RunConfig, save_frames=False):
     """
@@ -956,27 +654,24 @@ def experiment_parameter_influence(rc: RunConfig, frame_idx=0):
         print(f"    dt={dt*1000:5.1f}ms | active={n_active:5d} | err={err2:.2f}°/s")
 
     # Plot
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(f'Exp 3: Parameter Influence ({rc.model}, {rc.dataset})', fontsize=11)
-
-    axes[0].plot([r['iters'] for r in iter_results],
-                [r['err'] for r in iter_results], 'bo-', lw=1.5)
-    axes[0].set_xlabel('Iterations per frame')
-    axes[0].set_ylabel('ω error (°/s)')
-    axes[0].set_title(f'(a) Iterations (dt={rc.frame_duration*1000:.0f}ms)')
-    axes[0].grid(True, alpha=0.3)
-    axes[0].set_xscale('log')
-
-    axes[1].plot([r['dt_ms'] for r in dt_results],
-                [r['err'] for r in dt_results], 'rs-', lw=1.5)
-    axes[1].set_xlabel('Frame duration (ms)')
-    axes[1].set_ylabel('ω error (°/s)')
-    axes[1].set_title(f'(b) Frame duration ({rc.n_iters} iters)')
-    axes[1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp3_parameters.png'), dpi=150)
-    plt.close()
+    color = MODELS[rc.model][1]
+    with use_style('screen'):
+        fig, axes = plt.subplots(1, 2, figsize=(SCREEN_WIDTH, 4.5))
+        fig.suptitle(f'Exp 3: parameter influence — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
+                     f'{ref_label("imu")}]')
+        axes[0].plot([r['iters'] for r in iter_results],
+                     [r['err'] for r in iter_results], 'o-', color=color)
+        axes[0].set_xscale('log')
+        axes[0].set_xlabel('iterations per frame')
+        axes[0].set_title(f'(a) iterations (dt {rc.frame_duration*1000:.0f} ms)')
+        axes[1].plot([r['dt_ms'] for r in dt_results],
+                     [r['err'] for r in dt_results], 's-', color=color)
+        axes[1].set_xlabel('frame duration (ms)')
+        axes[1].set_title(f'(b) frame duration ({rc.n_iters} iters)')
+        for ax in axes:
+            ax.set_ylabel(LABEL_ERROR)
+        save(fig, os.path.join(rc.output_dir, 'exp3_parameters.png'))
 
 
 # ===========================================================================
@@ -988,146 +683,64 @@ def experiment_qualitative_video(rc: RunConfig):
     return experiment_tracking(rc, save_frames=True)
 
 
-def _try_load_gt_images(rc: RunConfig):
-    """Load GT APS images from images.txt."""
-    data_dir = rc.paths['data_dir']
-    images_file = os.path.join(data_dir, 'images.txt')
-
-    if not os.path.exists(images_file):
-        print("  No images.txt found")
-        return None
-
-    img_list = []
-    t_end = rc.t_start + rc.n_frames * rc.frame_duration + 0.5
-
-    with open(images_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            t = float(parts[0])
-            fname = parts[1]
-
-            if t < rc.t_start - 0.5:
-                continue
-            if t > t_end:
-                break
-
-            img_path = os.path.join(data_dir, fname)
-            if os.path.exists(img_path):
-                img_list.append((t, img_path))
-
-    if img_list:
-        print(f"  Loaded {len(img_list)} GT images")
+def _steady_scale(rc, kind, arr, k, a=0.05):
+    """Per-frame scale smoothed across frames (EMA), so a fading map shows as fading."""
+    s = map_scale(kind, arr)
+    store = rc.__dict__.setdefault('_disp_scale', {})
+    prev = None if k == 0 else store.get(kind)
+    if prev is None:
+        blended = s
     else:
-        print("  No GT images found in time range")
-        return None
-    return img_list
+        blended = np.asarray(prev) + a * (np.asarray(s) - np.asarray(prev))
+        blended = tuple(blended) if kind == 'I' else float(blended)
+    store[kind] = blended
+    return blended
 
 
 def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     """
-    One inspection frame per time step: events | I | exact read-out of I |
-    G (direction-coloured) | flow | ground-truth APS.
+    One inspection frame per time step: V | in-loop I | I read out from G by
+    the exact solve (what recon_r scores) | G | F | nearest APS frame.
 
-    Both intensity panels are shown because they differ and only one of them is
-    scored. `Estimated I` is the in-loop map, which the iterative update of
-    Eq. 6.61 leaves as an edge map; `I from G (exact)` solves Eq. 6.64 on the
-    same G and is what recon_r measures. Judging a run by the first panel while
-    the numbers describe the second is how a comparison goes wrong.
-
-    Every quantity the network infers is shown, because the angular-velocity
-    number alone cannot tell you whether the interpretation behind it is sound.
-    G is coloured by direction rather than shown as magnitude only -- see
-    grad_to_rgb.
+    V, in-loop I, G and F keep a display scale smoothed across frames (EMA),
+    so a map that loses contrast shows washed out instead of being
+    re-stretched; I's std and correlation with APS are in the title. "I from
+    G (exact)" and APS keep per-image scaling.
     """
-    fig, axes = plt.subplots(1, 6, figsize=(22, 4))
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    maps = net_maps(net, H, W)
+    I, G, F = maps['I'], maps['G'], maps['F']
+    t_rel = (k + 0.5) * rc.frame_duration
+    t_mid = rc.t_start + t_rel
 
-    axes[0].imshow(V, cmap='RdBu', vmin=-1, vmax=1)
-    axes[0].set_title('Events (V)', fontsize=10)
-    axes[0].axis('off')
+    v_scale = _steady_scale(rc, 'V', V, k)
+    rng = _steady_scale(rc, 'I', I, k)
+    g_scale = _steady_scale(rc, 'G', G, k)
+    f_scale = _steady_scale(rc, 'F', F, k)
+    I_ro = solve_poisson_exact(G, 'fft')
+    fmt_r = lambda r: f'r = {r:+.2f}' if np.isfinite(r) else ''
+    r_in = _corr_to_aps(np.asarray(I, dtype=np.float64), gt_images, t_mid)
+    r_ro = _corr_to_aps(I_ro, gt_images, t_mid)
+    w = to_deg_s(np.linalg.norm(net.R) / rc.frame_duration)
 
-    I_disp = net.I if net.I.shape == (H, W) else net.I[:H, :W]
-    # Display range is carried across frames with a slow EMA rather than
-    # recomputed per frame. Per-frame percentile normalisation removes flicker
-    # but also HIDES loss of contrast: when I collapses (which it does
-    # transiently at high rotation speed) a near-flat map gets stretched to full
-    # black-to-white, so amplified noise reads as texture. A slowly-adapting
-    # range keeps the video steady while letting a genuine collapse show up as
-    # what it is -- a washed-out frame. The measured contrast is printed in the
-    # title so it can be read off rather than inferred from appearance.
-    lo, hi = np.percentile(I_disp, [1.0, 99.0])
-    if hi - lo < 1e-9:
-        lo, hi = lo - 0.5, hi + 0.5
-    prev = getattr(rc, '_I_disp_range', None)
-    if prev is None or k == 0:
-        rng = [lo, hi]
-    else:
-        a = 0.05                      # slow: ~20 frames to follow a real change
-        rng = [prev[0] + a * (lo - prev[0]), prev[1] + a * (hi - prev[1])]
-    rc._I_disp_range = rng
-    axes[1].imshow(I_disp, cmap='gray', vmin=rng[0], vmax=rng[1])
-    _r_in = _corr_to_aps(np.asarray(I_disp, dtype=np.float64), gt_images,
-                         rc.t_start + (k + 0.5) * rc.frame_duration)
-    axes[1].set_title(f'Estimated I (in-loop)   std {I_disp.std():.3f}'
-                      + ('' if not np.isfinite(_r_in) else f'   r = {_r_in:+.2f}'),
-                      fontsize=10)
-    axes[1].axis('off')
-
-    # The quantity recon_r actually scores: I recovered from THIS G by the
-    # exact solve of Eq. 6.64, not the in-loop iterative map beside it.
-    G = net.G[:H, :W]
-    try:
-        from interacting_maps.network_dissertation import solve_poisson_exact
-        I_ro = solve_poisson_exact(G, 'fft')
-        lo_r, hi_r = np.percentile(I_ro, [1.0, 99.0])
-        axes[2].imshow(I_ro, cmap='gray', vmin=lo_r, vmax=max(hi_r, lo_r + 1e-9))
-        r = _corr_to_aps(I_ro, gt_images,
-                         rc.t_start + (k + 0.5) * rc.frame_duration)
-        axes[2].set_title('I from G (exact)'
-                          + ('' if not np.isfinite(r) else f'   r = {r:+.2f}'),
-                          fontsize=10)
-    except Exception:
-        axes[2].set_title('I from G (exact) - failed', fontsize=10)
-    axes[2].axis('off')
-
-    axes[3].imshow(grad_to_rgb(net.G))
-    axes[3].set_title(r'Gradient G   hue = direction'
-                      f'   (max |G| {np.abs(net.G).max():.2f})', fontsize=10)
-    axes[3].axis('off')
-
-    axes[4].imshow(flow_to_rgb(net.F))
-    axes[4].set_title(r'Flow F   hue = direction'
-                      f'   (|w| {np.linalg.norm(net.R)/rc.frame_duration:.2f} rad/s)',
-                      fontsize=10)
-    axes[4].axis('off')
-
-    if gt_images is not None and len(gt_images) > 0:
-        t_frame = rc.t_start + k * rc.frame_duration + rc.frame_duration / 2
-        closest = min(gt_images, key=lambda x: abs(x[0] - t_frame))
-        gt_img = plt.imread(closest[1])
-        axes[5].imshow(gt_img, cmap='gray')
-        axes[5].set_title(f'GT Image (APS)  dt {1000*abs(closest[0]-t_frame):.0f} ms',
-                          fontsize=10)
-    else:
-        axes[5].text(0.5, 0.5, 'No GT', ha='center', va='center',
-                     fontsize=14, transform=axes[5].transAxes)
-        axes[5].set_facecolor('#f0f0f0')
-        axes[5].set_title('GT (N/A)', fontsize=10)
-    axes[5].axis('off')
-
-    plt.suptitle(f'Frame {k:04d}    t = {rc.t_start + k*rc.frame_duration:.3f} s'
-                 f'    {rc.model}   dFR={rc.params["delta_FR"]:.2f}'
-                 + (f"  dAnchor={rc.params['delta_IMU']:.2f}"
-                    if getattr(rc, 'use_imu', False) else '')
-                 + f'   dt={1000*rc.frame_duration:.0f} ms  {rc.distortion_mode}',
-                 fontsize=10)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f'frame_{k:04d}.png'), dpi=100)
-    plt.close(fig)
+    with use_style('screen'):
+        fig, axes = plt.subplots(1, 6, figsize=(SCREEN_WIDTH, 2.6))
+        draw_map(axes[0], 'V', V, scale=v_scale)
+        draw_map(axes[1], 'I', I, scale=rng, title='I in-loop\n' + f'std {I.std():.3f}   ' + fmt_r(r_in))
+        draw_map(axes[2], 'I', I_ro, title='I from G (exact)\n' + fmt_r(r_ro))
+        draw_map(axes[3], 'G', G, scale=g_scale)
+        draw_map(axes[4], 'F', F, scale=f_scale, title=f'flow $F$\n|ω| {w:.0f} °/s')
+        if gt_images:
+            t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
+            draw_map(axes[5], 'aps', plt.imread(path),
+                     title=f'APS (log)\nΔt {1000 * abs(t_aps - t_mid):.0f} ms')
+        else:
+            draw_map(axes[5], 'aps', np.zeros((H, W)), title='APS (n/a)')
+        anchor = f'   δ_anchor {rc.params["delta_IMU"]:.2f}' if rc.use_imu else ''
+        fig.suptitle(f'{MODELS[rc.model][0]}   frame {k:04d}   t {t_rel:.3f} s '
+                     f'(segment start {rc.t_start:.3f} s)   δ_FR {rc.params["delta_FR"]:.2f}'
+                     f'{anchor}   dt {1000 * rc.frame_duration:.0f} ms   {rc.distortion_mode}')
+        save(fig, os.path.join(out_dir, f'frame_{k:04d}.png'))
 
 
 # ===========================================================================
@@ -1267,22 +880,25 @@ def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
         print(f"  {label:15s} | init={init_dist:.5f} | final={final_dist:.5f} | "
               f"{'✓' if converged else '✗'}")
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for r in results:
-        color = 'green' if r['converged'] else 'red'
-        ax.scatter(r['init_dist'], r['final_dist'], c=color, s=100, zorder=5)
-        ax.annotate(r['label'], (r['init_dist'], r['final_dist']), fontsize=8)
-    max_d = max(r['init_dist'] for r in results) * 1.1
-    ax.plot([0, max_d], [0, max_d], 'k--', alpha=0.3, label='no improvement')
-    ax.set_xlabel('Initial ||R - R_gt||')
-    ax.set_ylabel('Final ||R - R_gt||')
-    ax.set_title(f'Basin of Attraction ({rc.model}, {rc.dataset})')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(rc.output_dir, 'exp6_basin.png'), dpi=150)
-    plt.close()
+    # Plot: distances as angular-velocity error in deg/s; filled = converged
+    color = MODELS[rc.model][1]
+    to_w = lambda d: to_deg_s(d / rc.frame_duration)
+    with use_style('screen'):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for r in results:
+            x, y = to_w(r['init_dist']), to_w(r['final_dist'])
+            ax.scatter(x, y, s=80, zorder=5, color=color if r['converged'] else 'none',
+                       edgecolors=color, linewidths=1.5)
+            ax.annotate(r['label'], (x, y), fontsize=8)
+        max_d = to_w(max(r['init_dist'] for r in results)) * 1.1
+        ax.plot([0, max_d], [0, max_d], ls='--', color='0.5', label='no improvement')
+        ax.set_xlabel(r'initial $\|\omega - \omega_{ref}\|$ (°/s)')
+        ax.set_ylabel(r'final $\|\omega - \omega_{ref}\|$ (°/s)')
+        ax.set_title(f'Exp 6: basin of attraction — {MODELS[rc.model][0]}   '
+                     f'[{rc.dataset} {rc.segment_id}, t_start {rc.t_start:.3f} s, '
+                     f'{ref_label("imu")}; filled = converged]')
+        ax.legend()
+        save(fig, os.path.join(rc.output_dir, 'exp6_basin.png'))
 
 
 # ===========================================================================

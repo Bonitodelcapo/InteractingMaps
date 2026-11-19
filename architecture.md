@@ -86,15 +86,15 @@ Selected by the `model` string in the evaluation harness
 | `cook` | `InteractingMaps` | **Gauss-Seidel** (sequential; each sub-update sees the latest values) | — |
 | `thesis` | `InteractingMapsThesis` | **Jacobi** two-phase (all gradients from one snapshot, then all update) | — |
 | `thesis_imu` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`: a 4th cost pulling `R` toward the gyroscope reading (thesis §6.8.3 sensor fusion) |
-| `thesis_cmax` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`, but the per-frame anchor ω comes from a **CMax** solve on the events, not the gyro (IMU-free in-loop). **See [cmax/cmax.md](cmax/cmax.md).** |
-| `thesis_cmax_v2` | `InteractingMapsThesis` | Jacobi two-phase | `R` driven by **one CMax gradient step per iteration** (kinematics updates `F` only). **See [cmax/cmax.md](cmax/cmax.md).** |
+| `thesis_cmax` | `InteractingMapsThesis` | Jacobi two-phase | + `Cost_IMU`, but the per-frame anchor ω comes from a **CMax** solve on the events, not the gyro (IMU-free in-loop). **See [cmax.md](cmax.md).** |
+| `thesis_cmax_v2` | `InteractingMapsThesis` | Jacobi two-phase | `R` driven by **one CMax gradient step per iteration** (kinematics updates `F` only). **See [cmax.md](cmax.md).** |
 
 `thesis_imu` is the thesis's own fix for the β-ambiguity: the IMU gyro supplies
 an **absolute** angular-velocity reference that anchors the scale/sign, which
 pure vision lacks. The two `thesis_cmax*` variants replace that absolute
 reference with a Contrast-Maximization estimate from the events alone — their
 design and results are documented separately in
-[cmax/cmax.md](cmax/cmax.md); this file covers the first three.
+[cmax.md](cmax.md); this file covers the first three.
 
 ---
 
@@ -148,7 +148,8 @@ InteractingMaps/
 │   ├── camera.py             (3) calibration + kinematic matrix C
 │   ├── network.py            (4) InteractingMaps  (Cook, Gauss-Seidel)
 │   └── network_dissertation.py (5) InteractingMapsThesis (+ Cost_IMU)
-├── evaluation.py             (6) RunConfig + experiments 1–8 + metrics
+├── run_config.py             (6) RunConfig + make_network (run configuration)
+├── evaluation.py             (6) experiments 1–8 + metrics
 ├── find_segments.py          (7) discover constant-ω segments from imu.txt
 ├── demo.py                       live animated demo
 ├── data/<dataset>/
@@ -174,7 +175,10 @@ Pure data + a couple of helpers.
   `delta_FR` kinematics, `delta_IMU` fusion strength).
 - **`ITERS_PER_FRAME = 75`** — inner iterations per frame (thesis uses 50–75).
 - **`get_dataset_paths(name)`** — resolves the 5 data files.
-- **`get_initial_R_from_imu(name)`** — warm-start `R = gyro(t_start)·dt`.
+
+The warm start `R = gyro(t_start)·dt` is computed with
+`eval_io.get_gyro_for_frame(imu, t_start, t_start+dt) * dt` (used by
+`RunConfig` and `demo.py`).
 
 > Note: `sensor_size` is authoritative (240×180 for the DAVIS240C). It is *not*
 > derived from `2·(cx,cy)` because the principal point is offset from center.
@@ -241,7 +245,7 @@ Turns events into V frames.
     native (distorted) pixel grid is back-projected to true undistorted rays and
     the flow is mapped back into distorted-pixel space via the Brown–Conrady
     Jacobian: `C = diag(fx,fy)·J_D(x',y')·A(x',y')`. This matches the
-    distortion-aware warp in `cmax/angular_velocity.py`.
+    distortion-aware warp in `interacting_maps/angular_velocity.py`.
 
   Either way distortion is applied **once** — at the event level (Way 1) or in `C`
   (Way 2), never both.
@@ -305,8 +309,9 @@ before OFCE builds structure), plus tiny noise in `I` to seed `∇I`.
 
 ### 6.6 `evaluation.py`
 
-The harness. `RunConfig` bundles dataset/segment/model/params and derives
-`initial_R` from the IMU. Model built by `make_network`.
+The harness (experiments 1–9). Run configuration lives in `run_config.py`:
+`RunConfig` bundles dataset/segment/model/params and derives `initial_R` from
+the IMU; the model is built by `make_network`. `evaluation.py` imports both.
 
 **Reference & scoring** (the sensor split):
 - `get_gyro_for_frame(imu, t_lo, t_hi)` — averages gyro columns → **model input**.

@@ -17,6 +17,9 @@ data/poster_rotation/images
 data/poster_rotation/images.txt
 data/poster_rotation/calib.txt
 
+EcRot_street
+EcRot_city
+
 
 ###################################
 # Python.gitignore
@@ -254,3 +257,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# run_all.sh logs
+report/logs/
+report/.stamps/
+
+# Cluster outputs: generated on the cluster, downloaded as a zip, never committed
+report/experiments/
+report/figures/
+EcRot_*/
+/diag_*.png
+/diag_*.csv
+/diag_*.npz
+/diag_maps_*/
+/diag_ofce/

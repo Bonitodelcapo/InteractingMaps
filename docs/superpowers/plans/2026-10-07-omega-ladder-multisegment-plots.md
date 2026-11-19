@@ -15,8 +15,8 @@
 - **Segments (4), all dt=20ms:**
   - `city_short` — ds `ecrot_city`, t_start 0.05, 75 frames
   - `city_long` — ds `ecrot_city`, t_start 0.05, 250 frames
-  - `street_short` — ds `street_sinthetic`, t_start 1.001, 75 frames
-  - `street_long` — ds `street_sinthetic`, t_start 1.001, 250 frames
+  - `street_short` — ds `ecrot_street`, t_start 1.001, 75 frames
+  - `street_long` — ds `ecrot_street`, t_start 1.001, 250 frames
   - `sensor_size = (180, 240)` for all; `dist_coeffs=None`, `undistort=False` (pinhole).
 - **Coverage cap:** before running a segment, read its `omega_gt` extent and cap `n_frames` so the window stays within available GT; print a `[warn]` when capped. (Local `ecrot_city` covers only ~1.5 s, so `city_long` caps to ~75 frames locally; the cluster city sequence is expected to be longer.)
 - **Missing data = skip, don't crash:** if a dataset dir / `events.txt` is absent (e.g. street not downloaded locally), print `[skip]` and continue. Lets the city path verify locally while the full 4-segment run happens on the cluster.
@@ -57,8 +57,8 @@ import os
 SEGMENTS = [
     {'name': 'city_short',   'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
     {'name': 'city_long',    'ds': 'ecrot_city',      't_start': 0.05,  'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
-    {'name': 'street_short', 'ds': 'street_sinthetic', 't_start': 1.001, 'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
-    {'name': 'street_long',  'ds': 'street_sinthetic', 't_start': 1.001, 'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
+    {'name': 'street_short', 'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 75,  'sensor_size': (180, 240)},
+    {'name': 'street_long',  'ds': 'ecrot_street', 't_start': 1.001, 'dt': 0.02, 'n_frames': 250, 'sensor_size': (180, 240)},
 ]
 
 

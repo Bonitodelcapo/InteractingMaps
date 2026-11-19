@@ -30,9 +30,12 @@ Requires:  pip install rosbags pyyaml numpy opencv-python
 
 Usage:
   python convert_ecrot.py --bag street.bag --list          # inspect topics only
-  python convert_ecrot.py --bag street.bag --name street_sinthetic
-  python convert_ecrot.py --bag street.bag --name street --calib cam.yaml
-  python convert_ecrot.py --bag big.bag --name big --t-end 5.0   # partial
+  python convert_ecrot.py --bag street.bag                 # -> data/ecrot_street/
+  python convert_ecrot.py --bag street.bag --calib cam.yaml
+  python convert_ecrot.py --bag big.bag --t-end 5.0        # partial
+
+Naming: ECRot datasets are named ecrot_<sequence> (ecrot_city, ecrot_street,
+ecrot_bicycle, ...); --name defaults to that from the bag stem.
 """
 
 import os
@@ -107,7 +110,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--bag', required=True, help='path to the ECRot .bag')
-    ap.add_argument('--name', help='dataset name -> data/<name>/ (default: bag stem)')
+    ap.add_argument('--name', help='dataset name -> data/<name>/ (default: ecrot_<bag stem>)')
     ap.add_argument('--calib', help='calibration YAML -> calib.txt (else read from CameraInfo)')
     ap.add_argument('--no-images', action='store_true', help='skip extracting image_raw frames')
     ap.add_argument('--list', action='store_true', help='only list bag topics/types, then exit')
@@ -121,7 +124,7 @@ def main():
     from rosbags.highlevel import AnyReader
 
     bag = Path(args.bag)
-    name = args.name or bag.stem
+    name = args.name or f'ecrot_{bag.stem.lower()}'
     out = os.path.join(os.path.dirname(__file__), 'data', name)
     img_dir = os.path.join(out, 'images')
 

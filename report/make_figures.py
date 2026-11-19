@@ -5,9 +5,10 @@ Run from the repository root:
     python report/make_figures.py              # all figures
     python report/make_figures.py --only maps  # one of: beta_speed tracking
                                                #         maps appendix distortion
+                                               #         cmax_baseline
 
 Outputs PDFs (used by the LaTeX) and PNGs (for quick inspection) into
-report/figures/.
+report/figures/ via style.save.
 
 Where the data comes from
 -------------------------
@@ -20,8 +21,8 @@ distortion             needs only the raw events.
 
 Configuration
 -------------
-Every figure uses the configuration reported in the paper: delta_FR = 0.1,
-delta_anchor = 0.5, 75 iterations, 20 ms windows, distortion carried in the
+Every figure uses the configuration reported in the paper (THESIS_PARAMS in
+config.py), 75 iterations, 20 ms windows, distortion carried in the
 C matrix (DISTORTION_MODE = 'C_full'). SEGMENTS below are the segments named in
 Table II.
 """
@@ -37,14 +38,15 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-import provenance  # merged run.json reader (after sys.path points at ROOT)
-from viz import grad_to_rgb
+import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
+from interacting_maps.style import (MODELS, PAPER_WIDTH, PAPER_WIDE, NEUTRAL_COLOR, LABEL_BETA,
+                                    frame_times, to_deg_s, use_style, save)
+from interacting_maps.viz import draw_map, draw_omega, map_scale
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -55,17 +57,18 @@ os.makedirs(FIG, exist_ok=True)
 # disagreement that is only a difference of protocol.
 DT, N_TRACK, N_MAPS = 0.02, 75, 75
 # beta-vs-speed pools seven segments, of which only the Table II ones were run
-# at 1.5 s; it uses the 3 s (150-frame) runs of tab:anchor throughout instead.
+# at 1.5 s; it uses the 3 s (150-frame) runs of --what beta throughout instead.
 N_BETA = 150
-TUNED = dict(delta_FR=0.1, delta_IMU=0.5)
+from config import THESIS_PARAMS
+TUNED = {k: THESIS_PARAMS[k] for k in ('delta_FR', 'delta_IMU')}   # adopted, config.py
 
 # (dataset, segment id, t_start, label) — Table II
 SEGMENTS = [
     ('boxes_rotation',    'seg_B', 7.322,  'boxes'),
     ('poster_rotation',   'seg_C', 8.816,  'poster'),
     ('dynamic_rotation',  'seg_D', 1.619,  'dynamic'),
-    ('bycicle_sinthetic', 'seg_A', 1.001,  'bicycle'),
-    ('street_sinthetic',  'seg_A', 1.001,  'street'),
+    ('ecrot_bicycle', 'seg_A', 1.001,  'bicycle'),
+    ('ecrot_street',  'seg_A', 1.001,  'street'),
 ]
 
 # fig_maps rows (index into SEGMENTS, label, frame shown, run root). Every
@@ -82,11 +85,8 @@ MAP_ROWS = [(0, 'boxes\n(real)', N_MAPS, 'results'),
             (2, 'dynamic\n(person in scene)', N_MAPS, 'results'),
             (3, 'bicycle\n(synthetic)', N_MAPS, 'results'),
             (4, 'street\n(synthetic)', N_MAPS, 'results')]
-# the appendix repeats those frames for every model but the CMax-anchor one;
-# names as the report's Table III writes them
+# the appendix repeats those frames for every model but the CMax-anchor one
 APPENDIX_MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax_v2']
-DISPLAY = {'cook': 'cook', 'thesis': 'thesis (no anchor)',
-           'thesis_imu': 'thesis+IMU', 'thesis_cmax_v2': 'CMax-inloop'}
 
 # every segment of the two real sequences — the beta-vs-speed population
 BETA_SEGMENTS = [
@@ -95,17 +95,6 @@ BETA_SEGMENTS = [
     ('poster_rotation', 'seg_A', 14.166), ('poster_rotation', 'seg_C', 8.816),
     ('poster_rotation', 'seg_D', 1.866),
 ]
-
-plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'legend.fontsize': 7,
-                     'xtick.labelsize': 7, 'ytick.labelsize': 7,
-                     'axes.grid': True, 'grid.alpha': 0.3})
-
-
-def _save(fig, name, **kw):
-    for ext in ('pdf', 'png'):
-        fig.savefig(os.path.join(FIG, f'{name}.{ext}'), dpi=190,
-                    bbox_inches='tight', pad_inches=0.02, **kw)
-    print(f'  wrote {name}.pdf / .png')
 
 
 def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
@@ -134,7 +123,7 @@ def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_iters=75,
     pat = f'{root}/{ds}/{model}/{sid}_t{t0}_dt{round(dt * 1000)}ms_n{n_frames}_*'
     for d in sorted(glob.glob(pat)):
         try:
-            cfg = provenance.read_config(d)
+            cfg = experiment_tracking.read_config(d)
             pr = cfg['params']
         except Exception:
             continue
@@ -163,79 +152,113 @@ def reference_omega(E, ds, t0, n=N_TRACK):
     gt = E.load_groundtruth(p['groundtruth'])
     imu = E.load_imu(p['imu'])
     om = E.load_omega_gt(p.get('omega_gt'))
-    return np.array([E.get_reference_omega(gt, imu, t0 + k*DT, t0 + (k+1)*DT, om)[0]
-                     for k in range(n)])
+    refs = [E.get_reference_omega(gt, imu, t0 + k*DT, t0 + (k+1)*DT, om) for k in range(n)]
+    return np.array([w for w, _ in refs]), refs[0][1]
 
 
 # ---------------------------------------------------------------- beta vs speed
 def fig_beta_speed(E):
+    # (model, delta_FR, delta_anchor, filled marker). Fixed on purpose: the
+    # three series are the delta_FR test of the speed dependence, not the
+    # adopted values (they are the BETA_CONFIGS runs of --what beta).
     series = {
-        'default': ('thesis_cmax',    0.5, 0.3, 'o', 'tab:red',
-                    r'CMax-anchor, $\delta_{FR}=0.5$'),
-        'tuned':   ('thesis_cmax',    0.1, 0.5, 's', 'tab:blue',
-                    r'CMax-anchor, $\delta_{FR}=0.1$'),
-        'inloop':  ('thesis_cmax_v2', 0.5, None, '^', 'tab:grey',
-                    r'CMax-inloop'),
+        'default': ('thesis_cmax',    0.5, 0.3,  False),
+        'tuned':   ('thesis_cmax',    0.1, 0.5,  True),
+        'inloop':  ('thesis_cmax_v2', 0.5, None, True),
     }
     data = {k: ([], []) for k in series}
     for ds, sid, t0 in BETA_SEGMENTS:
-        w = np.linalg.norm(reference_omega(E, ds, t0, N_BETA), axis=1).mean()
-        for key, (model, d_fr, d_a, _, _, _) in series.items():
+        w = to_deg_s(np.linalg.norm(reference_omega(E, ds, t0, N_BETA)[0], axis=1).mean())
+        for key, (model, d_fr, d_a, _) in series.items():
             d = find_run(ds, sid, t0, model, d_fr, d_a, n_frames=N_BETA)
             if d is None:
                 print(f'    (missing {ds}/{sid}/{model} dFR={d_fr})')
                 continue
-            b = provenance.read_summary(d)['mean_beta']
             data[key][0].append(w)
-            data[key][1].append(b)
+            data[key][1].append(experiment_tracking.read_summary(d)['mean_beta'])
 
-    fig, ax = plt.subplots(figsize=(3.4, 2.5))
-    for key, (_, _, _, mk, col, lab) in series.items():
-        x, y = np.array(data[key][0]), np.array(data[key][1])
-        if len(x) < 2:
-            continue
-        r = np.corrcoef(x, y)[0, 1]
-        ax.scatter(x, y, marker=mk, s=26, color=col, zorder=3,
-                   edgecolors='white', linewidths=0.4, label=f'{lab}  ($r={r:+.2f}$)')
-        xs = np.linspace(x.min(), x.max(), 20)
-        ax.plot(xs, np.polyval(np.polyfit(x, y, 1), xs), color=col, lw=1.0,
-                alpha=0.55, zorder=2)
-    ax.axhline(1.0, color='k', lw=0.8, ls=':', zorder=1)
-    ax.set_xlabel(r'rotation speed $\|\omega\|$  (rad/s)')
-    ax.set_ylabel(r'scale factor $\beta$')
-    ax.legend(frameon=False, loc='upper left')
-    _save(fig, 'fig_beta_speed')
-    plt.close(fig)
+    with use_style('paper'):
+        fig, ax = plt.subplots(figsize=(PAPER_WIDTH, 2.5))
+        for key, (model, d_fr, _, filled) in series.items():
+            x, y = np.array(data[key][0]), np.array(data[key][1])
+            if len(x) < 2:
+                continue
+            name, col = MODELS[model]
+            r = np.corrcoef(x, y)[0, 1]
+            ax.scatter(x, y, s=26, zorder=3, color=col if filled else 'none', edgecolors=col,
+                       linewidths=0.8, label=rf'{name}, $\delta_{{FR}}={d_fr}$  ($r={r:+.2f}$)')
+            xs = np.linspace(x.min(), x.max(), 20)
+            ax.plot(xs, np.polyval(np.polyfit(x, y, 1), xs), color=col, lw=1.0, alpha=0.55,
+                    ls='-' if filled else '--', zorder=2)
+        ax.axhline(1.0, color=NEUTRAL_COLOR, lw=0.8, ls=':', zorder=1)
+        ax.set_xlabel(r'rotation speed $\|\omega\|$ (°/s)')
+        ax.set_ylabel(LABEL_BETA)
+        ax.legend(loc='upper left')
+        save(fig, os.path.join(FIG, 'fig_beta_speed.png'))
+    print('  wrote fig_beta_speed.pdf / .png')
 
 
 # -------------------------------------------------------------------- tracking
 def fig_tracking(E):
     ds, sid, t0 = 'poster_rotation', 'seg_C', 8.816
-    ref = reference_omega(E, ds, t0)
-    t = np.arange(N_TRACK) * DT
-    runs = [('CMax-anchor', find_run(ds, sid, t0, 'thesis_cmax', 0.1, 0.5), 'tab:blue'),
-            ('thesis (no anchor)', find_run(ds, sid, t0, 'thesis', 0.1), 'tab:red')]
+    ref, ref_src = reference_omega(E, ds, t0)
+    t = frame_times(DT, N_TRACK)
+    runs = [('thesis_cmax', find_run(ds, sid, t0, 'thesis_cmax', TUNED['delta_FR'],
+                                     TUNED['delta_IMU'])),
+            ('thesis', find_run(ds, sid, t0, 'thesis', TUNED['delta_FR']))]
 
-    fig, axes = plt.subplots(3, 1, figsize=(3.4, 3.6), sharex=True)
-    for i, comp in enumerate('xyz'):
-        axes[i].plot(t, np.degrees(ref[:, i]), color='k', lw=1.2, label='reference')
-        for name, d, col in runs:
+    with use_style('paper'):
+        fig, axes = plt.subplots(3, 1, figsize=(PAPER_WIDTH, 3.6), sharex=True)
+        first = True
+        for model, d in runs:
             if d is None:
-                print(f'    (missing run for {name})')
+                print(f'    (missing run for {MODELS[model][0]})')
                 continue
             rows = list(csv.DictReader(open(os.path.join(d, 'tracking.csv'))))
             est = np.array([[float(r['est_wx']), float(r['est_wy']), float(r['est_wz'])]
                             for r in rows])[:N_TRACK]
-            axes[i].plot(t, np.degrees(est[:, i]), color=col, lw=0.9, alpha=0.85,
-                         label=name)
-        axes[i].set_ylabel(rf'$\omega_{comp}$ ($^\circ$/s)')
-    axes[2].set_xlabel('time (s)')
-    h, l = axes[0].get_legend_handles_labels()
-    fig.legend(h, l, frameon=False, ncol=3, loc='upper center',
-               bbox_to_anchor=(0.55, 1.004), handlelength=1.4, columnspacing=1.0)
-    fig.tight_layout(pad=0.3, rect=(0, 0, 1, 0.945))
-    _save(fig, 'fig_tracking')
-    plt.close(fig)
+            for i in range(3):
+                draw_omega(axes[i], t[:len(est)], est[:, i], axis=i, model=model,
+                           ref=ref[:len(est), i] if first else None, ref_src=ref_src)
+            first = False
+        for ax in axes:
+            ax.label_outer()
+        fig.legend(*axes[0].get_legend_handles_labels(), loc='outside upper center', ncol=3)
+        save(fig, os.path.join(FIG, 'fig_tracking.png'))
+    print('  wrote fig_tracking.pdf / .png')
+
+
+# ------------------------------------------------------- CMax alone vs reference
+def fig_cmax_baseline(E, labels=('boxes', 'bicycle')):
+    """CMax and gyro on their own (no network) vs the reference, plus the CMax
+    IWE at the first / middle / last frame. Reads run_experiments --what baseline."""
+    with use_style('paper'):
+        fig = plt.figure(figsize=(PAPER_WIDE, 5.2))
+        for sub, lab in zip(fig.subfigures(1, len(labels)), labels):
+            path = os.path.join(ROOT, 'report', 'experiments', f'baseline_dt{int(DT*1000)}ms_{lab}.npz')
+            if not os.path.exists(path):
+                print(f'    (missing {path})')
+                continue
+            d = np.load(path)
+            t = frame_times(DT, len(d['ref']))
+            gs = sub.add_gridspec(4, 3, height_ratios=(1, 1, 1, 1.3))
+            for i in range(3):
+                ax = sub.add_subplot(gs[i, :])
+                draw_omega(ax, t, d['cmax'][:, i], ref=d['ref'][:, i], imu=d['gyro'][:, i],
+                           axis=i, model='thesis_cmax', ref_src=str(d['ref_src']),
+                           label='CMax alone')
+                for k in d['frames']:
+                    ax.axvline(t[k], color=NEUTRAL_COLOR, lw=0.6, ls='--')
+                if i < 2:
+                    ax.tick_params(labelbottom=False)
+                    ax.set_xlabel('')
+            for j, k in enumerate(d['frames']):
+                draw_map(sub.add_subplot(gs[3, j]), 'IWE', d['iwe'][j],
+                         title=f'IWE  t = {t[k]:.2f} s')
+            sub.suptitle(lab)
+            sub.legend(*sub.axes[0].get_legend_handles_labels(), loc='outside lower center', ncol=3)
+        save(fig, os.path.join(FIG, 'fig_cmax_baseline.png'))
+    print('  wrote fig_cmax_baseline.pdf / .png')
 
 
 # ------------------------------------------------------------------- map panels
@@ -248,7 +271,7 @@ def compute_maps(E, model):
     showed an unanchored network under a caption naming the anchored one.
     A sequence without a completed run comes back as None.
     """
-    from data_loader import EventFrameSequence
+    from interacting_maps.data_loader import EventFrameSequence
     from interacting_maps.network_dissertation import solve_poisson_exact
     d_anchor = TUNED['delta_IMU'] if model in ('thesis_imu', 'thesis_cmax') else None
     maps = []
@@ -268,71 +291,82 @@ def compute_maps(E, model):
         m = np.load(os.path.join(d, 'maps_final.npz'))
         # The exact read-out of Eq. 6.64 as well: every reconstruction number
         # in the report refers to that, not to the in-loop map.
-        maps.append((V, m['I'], m['G'], m['F'], solve_poisson_exact(m['G'], 'fft')))
+        maps.append((V, m['I'], solve_poisson_exact(m['G'], 'fft'), m['G'], m['F']))
         print(f'    {label}/{model} ({os.path.basename(d)})')
     return maps
 
 
-def _direction_key(ax):
-    """Colour wheel beside a panel title: the hue each vector direction gets."""
-    yy, xx = np.mgrid[-1:1:65j, -1:1:65j]
-    wheel = grad_to_rgb(np.stack([xx, yy], -1), pct=100)
-    key = ax.inset_axes([0.0, 1.01, 0.2, 0.22])
-    key.imshow(np.dstack([wheel, np.hypot(xx, yy) <= 1]))
-    key.set_anchor('W')
-    key.axis('off')
+_MAP_COLUMNS = [('V', r'events $V$ (input)'), ('I', r'intensity $I$ (in-loop)'),
+                ('I', r'intensity $I$ (read-out)'), ('G', r'gradient $G$'),
+                ('F', r'flow $F$')]
 
 
 def _draw_maps(maps, labels, name, height_per_row=1.62, title=None):
     labels = [lab for m, lab in zip(maps, labels) if m is not None]
     maps = [m for m in maps if m is not None]
-    fig, axes = plt.subplots(len(labels), 5,
-                             figsize=(8.6, height_per_row * len(labels)))
-    axes = np.atleast_2d(axes)
-    for r, ((V, I, G, F, I_ro), lab) in enumerate(zip(maps, labels)):
-        m = np.percentile(np.abs(V), 99.5) or 1e-6
-        axes[r, 0].imshow(V, cmap='bwr', vmin=-m, vmax=m)          # V is signed
-        lo, hi = np.percentile(I, [1, 99])
-        axes[r, 1].imshow(I, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
-        lo, hi = np.percentile(I_ro, [1, 99])
-        axes[r, 2].imshow(I_ro, cmap='gray', vmin=lo, vmax=max(hi, lo + 1e-6))
-        axes[r, 3].imshow(grad_to_rgb(G))           # hue = direction
-        ang = (np.arctan2(F[..., 1], F[..., 0]) + np.pi) / (2 * np.pi)
-        mag = np.linalg.norm(F, axis=-1)
-        mag = mag / (np.percentile(mag, 99) + 1e-9)
-        axes[r, 4].imshow(mcolors.hsv_to_rgb(
-            np.stack([ang, np.clip(mag, 0, 1), np.ones_like(ang)], -1)))
-        for c in range(5):
-            axes[r, c].set_xticks([]); axes[r, c].set_yticks([])
-            axes[r, c].grid(False)
-        axes[r, 0].set_ylabel(lab, fontsize=7)
-    for c, ttl in enumerate([r'events  $V$ (input)', r'intensity  $I$ (in-loop)',
-                             r'intensity  $I$ (read-out)',
-                             r'gradient  $G$', r'flow  $F$']):
-        axes[0, c].set_title(ttl, fontsize=8, pad=4, y=1.0)  # y: ignore the key
-    if title:
-        fig.suptitle(title, fontsize=9)
-    fig.tight_layout(pad=0.25)
-    _direction_key(axes[0, 3])
-    _save(fig, name)
-    plt.close(fig)
+    if not maps:
+        print(f'  {name}: no runs found, skipped')
+        return
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(maps), len(_MAP_COLUMNS),
+                                 figsize=(PAPER_WIDE, height_per_row * len(maps)))
+        axes = np.atleast_2d(axes)
+        for r, (arrs, lab) in enumerate(zip(maps, labels)):
+            for c, ((kind, ttl), arr) in enumerate(zip(_MAP_COLUMNS, arrs)):
+                draw_map(axes[r, c], kind, arr, title=ttl if r == 0 else '')
+            axes[r, 0].set_ylabel(lab)
+        if title:
+            fig.suptitle(title)
+        save(fig, os.path.join(FIG, f'{name}.png'))
+    print(f'  wrote {name}.pdf / .png')
 
 
 def fig_maps(E):
-    _draw_maps(compute_maps(E, 'thesis_cmax'), [r[1] for r in MAP_ROWS],
-               'fig_maps')
+    _draw_maps(compute_maps(E, 'thesis_cmax'), [r[1] for r in MAP_ROWS], 'fig_maps')
 
 
 def fig_appendix(E):
     """The frames of fig_maps for every other model, one figure each."""
     for model in APPENDIX_MODELS:
         _draw_maps(compute_maps(E, model), [r[1] for r in MAP_ROWS],
-                   f'fig_appendix_maps_{model}', title=DISPLAY[model])
+                   f'fig_appendix_maps_{model}', title=MODELS[model][0])
 
 
 # ------------------------------------------------------------------ distortion
+def distortion_numbers(calib, H, W):
+    """Where undistortion sends the sensor pixels (numbers of Lens Distortion).
+
+    occupied  distinct frame pixels that the H*W sensor pixels land on after
+              undistortion, binned as events_to_vframe bins
+    spacing   largest distance between the undistorted positions of two
+              neighbouring sensor pixels that both land inside the frame
+    Printed and written to report/experiments/distortion_numbers.csv.
+    """
+    import cv2
+    K = np.array([[calib.fx, 0, calib.cx], [0, calib.fy, calib.cy], [0, 0, 1]])
+    ys, xs = np.mgrid[0:H, 0:W]
+    pts = np.stack([xs.ravel(), ys.ravel()], -1).astype(np.float64).reshape(-1, 1, 2)
+    u = cv2.undistortPoints(pts, K, calib.dist.astype(np.float64), P=K)
+    u = u[:, 0, :].reshape(H, W, 2)
+    c = u.astype(np.int32)
+    hit = (c[..., 0] >= 0) & (c[..., 0] < W) & (c[..., 1] >= 0) & (c[..., 1] < H)
+    inside = (u[..., 0] >= 0) & (u[..., 0] < W) & (u[..., 1] >= 0) & (u[..., 1] < H)
+    dx = np.linalg.norm(u[:, 1:] - u[:, :-1], axis=-1)[inside[:, 1:] & inside[:, :-1]]
+    dy = np.linalg.norm(u[1:] - u[:-1], axis=-1)[inside[1:] & inside[:-1]]
+    num = {'sensor_pixels': H * W,
+           'occupied_undistorted': int(np.unique(c[hit][:, 1] * W + c[hit][:, 0]).size),
+           'max_spacing_px': round(float(max(dx.max(), dy.max())), 3)}
+    out = os.path.join(ROOT, 'report', 'experiments')
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, 'distortion_numbers.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(num.keys())
+        w.writerow(num.values())
+    print('   ', ', '.join(f'{k} {v}' for k, v in num.items()))
+
+
 def fig_distortion(E):
-    from data_loader import (CameraCalibration, load_events_fast,
+    from interacting_maps.data_loader import (CameraCalibration, load_events_fast,
                              undistort_events, events_to_vframe)
     ds, t0, dur, H, W = 'poster_rotation', 8.816, 0.20, 180, 240
     p = E.get_dataset_paths(ds)
@@ -342,23 +376,22 @@ def fig_distortion(E):
     V_raw = events_to_vframe(ev, H, W, clip_value=40.0, normalise=True)
     V_und = events_to_vframe(undistort_events(ev, calib), H, W,
                              clip_value=40.0, normalise=True)
+    distortion_numbers(calib, H, W)
 
-    fig, ax = plt.subplots(1, 3, figsize=(7.0, 2.15))
     panels = [(V_raw, r'raw events (lens modelled in $\mathcal{C}$)'),
               (V_und, 'undistorted events'),
               (V_und[10:80, 140:230], 'detail (undistorted)')]
-    for a, (img, ttl) in zip(ax, panels):
-        m = np.percentile(np.abs(img), 99.5) or 1e-6
-        a.imshow(img, cmap='bwr', vmin=-m, vmax=m, interpolation='nearest')
-        a.set_title(ttl, fontsize=8, pad=4)
-        a.set_xticks([]); a.set_yticks([]); a.grid(False)
-    fig.subplots_adjust(left=0.01, right=0.99, top=0.86, bottom=0.02, wspace=0.06)
-    _save(fig, 'fig_distortion')
-    plt.close(fig)
+    scale = map_scale('V', V_und)
+    with use_style('paper'):
+        fig, ax = plt.subplots(1, 3, figsize=(PAPER_WIDE, 2.15))
+        for a, (img, ttl) in zip(ax, panels):
+            draw_map(a, 'V', img, title=ttl, scale=scale)
+        save(fig, os.path.join(FIG, 'fig_distortion.png'))
+    print('  wrote fig_distortion.pdf / .png')
 
 
 FIGURES = {'beta_speed': fig_beta_speed, 'tracking': fig_tracking,
-           'maps': fig_maps, 'appendix': fig_appendix,
+           'maps': fig_maps, 'appendix': fig_appendix, 'cmax_baseline': fig_cmax_baseline,
            'distortion': fig_distortion}
 
 

@@ -16,7 +16,7 @@ file only adds the operational layer (commands, knobs, workflow) and flags where
 the code has moved past architecture.md.
 
 The CMax work (event-based, IMU-free angular-velocity anchor) has its own
-reference: [cmax/cmax.md](cmax/cmax.md).
+reference: [cmax.md](cmax.md).
 
 ## Environment & commands
 
@@ -56,7 +56,9 @@ sqlite:///mlflow.db`). `IM_MLFLOW=0` disables; `IM_MLFLOW_ALL=1` also logs sweep
 `python find_segments.py`.
 
 **Convert ECRot/ESIM ROSbags** into the pipeline format:
-`python convert_ecrot.py --bag <path> --name <dataset>`.
+`python convert_ecrot.py --bag <path>`. ECRot datasets are named
+`ecrot_<sequence>` (`ecrot_city`, `ecrot_street`, `ecrot_bicycle`); `--name`
+defaults to `ecrot_<bag stem>`.
 
 ## Tests
 

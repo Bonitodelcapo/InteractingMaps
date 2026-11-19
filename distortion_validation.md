@@ -88,5 +88,5 @@ correspondence); the two-way ω comparison is reported as **context**, not a gat
 | File | Role |
 |---|---|
 | `test_distortion_cmax.py` | the validation (checks A/B geometry gate + C context) |
-| `cmax/angular_velocity.py` | `CMaxAngularVelocity(dist_coeffs=…)` — Way 2 warp |
+| `interacting_maps/angular_velocity.py` | `CMaxAngularVelocity(dist_coeffs=…)` — Way 2 warp |
 | `interacting_maps/camera.py` | `build_kinematic_matrix` — the distortion-aware C matrix under test |

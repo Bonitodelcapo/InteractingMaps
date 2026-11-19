@@ -43,13 +43,14 @@ import matplotlib.pyplot as plt
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from config import DATASET_SEGMENTS
-from data_loader import (CameraCalibration, EventFrameSequence,
+from interacting_maps.data_loader import (CameraCalibration, EventFrameSequence,
                          load_events_fast, undistort_events)
-from evaluation import (RunConfig, make_network, load_imu, get_gyro_for_frame,
-                        gt_omega_body, compute_metrics)
+from run_config import RunConfig, make_network
+from interacting_maps.eval_io import load_imu, get_gyro_for_frame, gt_omega_body
+from interacting_maps.metrics import compute_metrics
 from interacting_maps.network_dissertation import (Cost_OFCE, Cost_Spatial,
                                                    Cost_Kinematics)
-from cmax import CMaxAngularVelocity
+from interacting_maps.angular_velocity import CMaxAngularVelocity
 
 RAD = 180.0 / np.pi
 OUT = 'results/debug'

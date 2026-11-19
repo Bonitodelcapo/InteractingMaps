@@ -18,7 +18,7 @@ the anchor.
 **Status.**
 | Step | What | State |
 |---|---|---|
-| **1a** | Standalone CMax front-end (`cmax/angular_velocity.py`) | ✅ done, validated |
+| **1a** | Standalone CMax front-end (`interacting_maps/angular_velocity.py`) | ✅ done, validated |
 | **1b (V1)** | Feed CMax ω into the message passing (`model='thesis_cmax'`) | ✅ implemented, small-sample OK |
 | **2 (V2)** | CMax as the in-loop R-update rule (`model='thesis_cmax_v2'`) | ✅ implemented, small-sample OK |
 
@@ -43,8 +43,8 @@ window = one frame** · bilinear voting (polarity) · Nelder-Mead default · bod
 path, leave `EventFrameSequence` alone) · **frame-0 init from gyro** only · reuse
 `Cost_IMU` as the anchor with target = ω_cmax.
 
-**Files.** `cmax/angular_velocity.py` (estimator), `cmax/__init__.py`, this doc,
-`test_cmax_frontend.py` (1a check), `evaluation.py` (`model='thesis_cmax'`).
+**Files.** `interacting_maps/angular_velocity.py` (estimator), this doc,
+`tests/test_cmax_frontend.py` (1a check), `evaluation.py` (`model='thesis_cmax'`).
 
 ---
 
@@ -227,9 +227,8 @@ Test: `test_cmax_frontend.py` — poster seg_C, 25 frames × 20 ms, warm-started
 
 | File | Purpose |
 |---|---|
-| `cmax/angular_velocity.py` | `CMaxAngularVelocity` — the front-end estimator |
-| `cmax/__init__.py` | exports `CMaxAngularVelocity` |
-| `cmax/cmax.md` | this document |
-| `test_cmax_frontend.py` (root) | Step-1a verification vs GT & IMU |
+| `interacting_maps/angular_velocity.py` | `CMaxAngularVelocity` — the front-end estimator |
+| `cmax.md` (root) | this document |
+| `tests/test_cmax_frontend.py` | Step-1a verification vs GT & IMU |
 | `evaluation.py` | `model='thesis_cmax'` (V1), `'thesis_cmax_v2'` (V2) |
 | `interacting_maps/network_dissertation.py` | `Cost_CMax`, `Cost_Kinematics(update_r)`, `enable_cmax_r_update`, `step(events=…)` (V2) |

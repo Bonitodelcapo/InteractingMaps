@@ -19,9 +19,10 @@ import numpy as np
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 from config import get_dataset_paths
-from data_loader import CameraCalibration, load_events_fast, undistort_events
-from evaluation import gt_omega_body, get_gyro_for_frame, load_imu, compute_metrics
-from cmax import CMaxAngularVelocity
+from interacting_maps.data_loader import CameraCalibration, load_events_fast, undistort_events
+from interacting_maps.eval_io import gt_omega_body, get_gyro_for_frame, load_imu
+from interacting_maps.metrics import compute_metrics
+from interacting_maps.angular_velocity import CMaxAngularVelocity
 
 
 # ---------------------------------------------------------------------------
