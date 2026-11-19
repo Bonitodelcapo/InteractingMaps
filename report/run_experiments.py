@@ -5,9 +5,9 @@ Run from the repository root:
     python report/run_experiments.py --what window      # dt / n_frames choice
     python report/run_experiments.py --what main        # Table III, 5 models
     python report/run_experiments.py --what converge    # per-iteration figure data
+    python report/run_experiments.py --what recon       # runs of the reconstruction figure
     python report/run_experiments.py --what baseline    # CMax / gyro alone, no network
     python report/run_experiments.py --what beta        # runs behind fig_beta_speed
-    python report/run_experiments.py --what imgfig      # fig_image_settings
     python report/run_experiments.py --what sweep \
         --vary 'delta_GI=0.05,0.5,1.0;poisson=iterative,fft,dct' \
         --base 'delta_FR=0.10,delta_IMU=0.50' --mode coord
@@ -53,34 +53,14 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
-from interacting_maps.style import MODELS as MODEL_STYLE, PAPER_WIDTH, PAPER_WIDE, use_style, save
+from interacting_maps.style import PAPER_WIDE, use_style, save
 from interacting_maps.viz import draw_map, map_scale, net_maps
 from interacting_maps.metrics import abs_corr, crop_interior
-from interacting_maps.eval_io import load_aps_list, nearest_aps
-from config import THESIS_PARAMS
+from report_runs import (SEGMENTS, MODELS, ADOPTED, BETA_SEGMENTS, BETA_CONFIGS,
+                         run_cfg, recon_cfg, converge_path, aps_frame)
 
-# the adopted step sizes of config.py, for the commands that fix them
-ADOPTED = {k: THESIS_PARAMS[k] for k in ('delta_FR', 'delta_IMU')}
-
-# the segments reported in Table II -- do not substitute others
-SEGMENTS = [
-    ('boxes_rotation',    'seg_B', 7.322,  'boxes'),
-    ('poster_rotation',   'seg_C', 8.816,  'poster'),
-    ('dynamic_rotation',  'seg_D', 1.619,  'dynamic'),
-    ('ecrot_bicycle', 'seg_A', 1.001,  'bicycle'),
-    ('ecrot_street',  'seg_A', 1.001,  'street'),
-]
-MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
 OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 os.makedirs(OUTDIR, exist_ok=True)
-FIGDIR = os.path.join(ROOT, 'report', 'figures')
-
-
-def _cfg(E, ds, sid, t0, model, dt, nf, out_root=None, **kw):
-    seg = {'id': sid, 't_start': t0, 'frame_duration': dt, 'n_frames': nf,
-           'initial_R': None, 'sensor_size': (180, 240)}
-    return E.RunConfig(dataset=ds, model=model, segment=seg, n_frames=nf,
-                       distortion_mode='C_full', out_root=out_root, **kw)
 
 
 def _root(args, default):
@@ -257,7 +237,7 @@ def cmd_main(E, args):
         print(f"\n### {lab}/{sid}  floor {floor:.2f} deg/s", flush=True)
         for model in models:
             try:
-                rc = _cfg(E, ds, sid, t0, model, args.dt, nf,
+                rc = run_cfg(ds, sid, t0, model, args.dt, nf,
                           poisson=poisson, deltas=dict(extra))
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                 wr.writerow([ds, sid, model, round(s['mean_err_deg_s'], 2),
@@ -289,12 +269,9 @@ def cmd_converge(E, args):
     experiment 1 re-implements the loop inline and never sets the anchor target,
     so the anchored models there are pulled towards omega = 0.)
 
-    Rows are models, columns are iteration checkpoints. One real and one
-    synthetic sequence.
+    Stores I at every checkpoint, per model, in converge_path(); the figure is
+    make_figures.fig_converge (rows: models, columns: checkpoints).
     """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
     from interacting_maps.data_loader import (EventFrameSequence, CameraCalibration,
                              load_events_fast, undistort_events)
     from interacting_maps.angular_velocity import CMaxAngularVelocity
@@ -309,7 +286,7 @@ def cmd_converge(E, args):
         calib = CameraCalibration(p['calib'])
         rows = {}
         for model in MODELS:
-            rc = _cfg(E, ds, sid, t0, model, args.dt, nf)
+            rc = run_cfg(ds, sid, t0, model, args.dt, nf)
             seq = EventFrameSequence(p['events'], p['calib'],
                                      frame_duration=args.dt, t_start=t0,
                                      n_frames=nf, clip_value=10.0,
@@ -353,18 +330,11 @@ def cmd_converge(E, args):
             rows[model] = snaps
             print(f"  {lab}/{model} done", flush=True)
 
-        with use_style('paper'):
-            fig, axes = plt.subplots(len(MODELS), len(checkpoints),
-                                     figsize=(PAPER_WIDE, 1.0 * len(MODELS) + 0.4))
-            for r, model in enumerate(MODELS):
-                for c, it in enumerate(checkpoints):
-                    draw_map(axes[r, c], 'I', rows[model][it],
-                             title=f'iter {it}' if r == 0 else '')
-                axes[r, 0].set_ylabel(MODEL_STYLE[model][0])
-            fig.suptitle(f'{lab} {sid}: intensity map across message-passing '
-                         f'iterations (frame {args.frame})')
-            save(fig, os.path.join(FIGDIR, f'fig_converge_{lab}.png'))
-        print(f"-> fig_converge_{lab}.pdf / .png")
+        out = converge_path(lab, args.frame)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        np.savez_compressed(out, checkpoints=checkpoints, segment=sid,
+                            **{f'{m}_{it}': rows[m][it] for m in MODELS for it in checkpoints})
+        print(f"-> {out}")
 
 
 # -------------------------------------------------------------- generic sweep
@@ -406,7 +376,7 @@ def cmd_sweep(E, args):
             # hold the tracked duration fixed, not the frame count
             nfr = int(round(args.duration / dt))
             try:
-                rc = _cfg(E, ds, sid, t0, args.model, dt, nfr,
+                rc = run_cfg(ds, sid, t0, args.model, dt, nfr,
                           out_root=root, poisson=poisson, deltas=deltas,
                           n_iters=n_iters)
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
@@ -475,14 +445,14 @@ def cmd_poisson(E, args):
     for ds, sid, t0, lab in seqs:
         maps = {}
         for mode in args.modes.split(','):
-            rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
+            rc = run_cfg(ds, sid, t0, args.model, args.dt, nf,
                       out_root=root, poisson=mode, deltas=dict(base))
             npz = os.path.join(rc.output_dir, 'maps_final.npz')
             print(f"  running {lab}/{mode} ...", flush=True)
             _run(E, rc, not args.no_frames, args.frame_stride)
             maps[mode] = np.load(npz)
 
-        panels = [('APS reference', _aps(E, ds, t0 + nf * args.dt), 'aps')]
+        panels = [('APS reference', aps_frame(ds, t0 + nf * args.dt), 'aps')]
         for m in maps:
             panels.append((f'{m} in-loop' if m != 'iterative'
                            else 'iterative (Eq. 6.61)', maps[m]['I'], 'I'))
@@ -506,275 +476,22 @@ def cmd_poisson(E, args):
         print(f"  -> {out}")
 
 
-def _aps(E, ds, t):
-    """The APS frame nearest time t, for visual reference."""
-    return nearest_aps(load_aps_list(E.get_dataset_paths(ds)['data_dir']), t)
-
-
-# --------------------------------------------- report figure: reconstruction
+# ------------------------------------------------ runs of the reconstruction figure
 def cmd_recon(E, args):
-    """Figure for Sec. 'Reconstruction Quality': what the intensity map depends on.
+    """Runs behind make_figures.fig_recon: CMax-anchor at dt = 20 and 10 ms.
 
-    Two sequences, four columns: the APS reference, the iterative update at
-    dt=20ms and at dt=10ms (the accumulation window, i.e. how far the scene
-    smears inside one event frame), and the exact frequency-domain read-out at
-    dt=10ms. Reading across a row separates the two effects -- halving the
-    window cleans up G, and solving the Poisson equation exactly recovers the
-    low frequencies the iterative update leaves out of it.
+    The figure separates two effects on the intensity map: halving the
+    accumulation window cleans up G, and solving the Poisson equation exactly
+    recovers the low frequencies the iterative update leaves out of it.
     """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from interacting_maps.network_dissertation import solve_poisson_exact
-
     root = _root(args, 'recon_figure')
     seqs = [s for s in SEGMENTS
             if not args.sequences or s[3] in args.sequences.split(',')]
-    base = dict(ADOPTED)
-    dur = args.duration
-
-    with use_style('paper'):
-        fig, axes = plt.subplots(len(seqs), 4, figsize=(PAPER_WIDE, 1.85 * len(seqs)))
-        axes = np.atleast_2d(axes)
-        for row, (ds, sid, t0, lab) in enumerate(seqs):
-            got = {}
-            for dt in (0.02, 0.01):
-                nf = int(round(dur / dt))
-                rc = _cfg(E, ds, sid, t0, args.model, dt, nf, out_root=root,
-                          poisson='iterative', deltas=dict(base))
-                npz = os.path.join(rc.output_dir, 'maps_final.npz')
-                print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
-                _run(E, rc, not args.no_frames, args.frame_stride)
-                got[dt] = np.load(npz)
-            aps = _aps(E, ds, t0 + dur)
-            ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
-            panels = [
-                ('APS', aps, 'aps'),
-                (r'iterative, $\Delta t = 20$ ms', got[0.02]['I'], 'I'),
-                (r'iterative, $\Delta t = 10$ ms', got[0.01]['I'], 'I'),
-                (r'exact read-out, $\Delta t = 10$ ms',
-                 solve_poisson_exact(got[0.01]['G'], 'fft'), 'I'),
-            ]
-            for col, (ttl, img, kind) in enumerate(panels):
-                a = axes[row, col]
-                if img is None:
-                    a.set_axis_off()
-                    continue
-                draw_map(a, kind, img, title=ttl if row == 0 else '')
-                if col == 0:
-                    a.set_ylabel(lab)
-                if col > 0 and ref is not None:
-                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
-            print(f"  {lab}: done", flush=True)
-        save(fig, os.path.join(FIGDIR, 'fig_recon.png'))
-    print(f"-> fig_recon.pdf / .png")
-
-
-# --------------------------- report figure: good omega is not a good picture
-def cmd_dissoc(E, args):
-    """Figure: the model with the best picture has nearly the worst omega.
-
-    On the synthetic sequences the unanchored network reconstructs better than
-    any anchored one while its angular velocity is an order of magnitude worse.
-    Showing the two reconstructions side by side, each labelled with both of its
-    numbers, makes the dissociation a picture rather than a cross-reference
-    between two columns of a table.
-
-    Reuses the runs behind Table III; nothing is recomputed.
-    """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from interacting_maps.network_dissertation import solve_poisson_exact
-
-    nf = int(round(args.duration / args.dt))
-    seqs = [s for s in SEGMENTS
-            if not args.sequences or s[3] in args.sequences.split(',')]
-    models = (args.models or 'thesis,thesis_cmax,thesis_imu').split(',')
-    cols = len(models) + 1
-    with use_style('paper'):
-        fig, axes = plt.subplots(len(seqs), cols, figsize=(PAPER_WIDE, 1.65 * len(seqs)))
-        axes = np.atleast_2d(axes)
-        for r_i, (ds, sid, t0, lab) in enumerate(seqs):
-            aps = _aps(E, ds, t0 + nf * args.dt)
-            panels = [('APS', aps, None, 'aps')]
-            for m in models:
-                # Exact path from RunConfig, not a glob: results/ holds dozens of
-                # runs per model that differ only in parameters the pattern would
-                # not distinguish, and the oldest of them predate maps_final.npz.
-                rc = _cfg(E, ds, sid, t0, m, args.dt, nf)
-                npz = os.path.join(rc.output_dir, 'maps_final.npz')
-                img = st = None
-                if os.path.exists(npz):
-                    img = solve_poisson_exact(np.load(npz)['G'], 'fft')
-                    # numbers from this same run, not from a table of another length;
-                    # |r| from tracking.csv, since older summaries hold a signed mean
-                    st = _track_stats(rc.output_dir)
-                else:
-                    print(f'    missing: {npz}', flush=True)
-                panels.append((MODEL_STYLE[m][0], img, st, 'I'))
-            for c_i, (title, img, st, kind) in enumerate(panels):
-                a = axes[r_i, c_i]
-                if img is None:
-                    a.set_axis_off()
-                    continue
-                draw_map(a, kind, img, title=title if r_i == 0 else '')
-                if c_i == 0:
-                    a.set_ylabel(lab)
-                if st is not None:
-                    a.set_xlabel(f"$|r|={st[0]:.2f}$,  $\\omega$ err $={st[1]:.1f}$ °/s")
-            print(f'  {lab}: done', flush=True)
-        save(fig, os.path.join(FIGDIR, 'fig_dissociation.png'))
-    print('-> fig_dissociation.pdf / .png')
-
-
-# ------------------------------------------ report figure: regulariser ablation
-def cmd_regfig(E, args):
-    """Figure for Sec. 'Regularising the Maps': what each term does to the image.
-
-    One row per sequence, one column per configuration, all showing the same
-    quantity -- the exact read-out of Eq. 6.64 from that run's final G, which
-    is what the ablation table scores. Reuses the runs made by
-
-        --what sweep --name ablation
-
-    and does not recompute them, so the pictures are the runs the numbers came
-    from rather than a fresh set that might differ.
-    """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from interacting_maps.network_dissertation import solve_poisson_exact
-
-    root = os.path.join('experiments', args.name or 'ablation')
-    seqs = [s for s in SEGMENTS
-            if not args.sequences or s[3] in args.sequences.split(',')]
-    # (column label, the regulariser that ablation job set)
-    cols = [('APS', None), ('none', {}),
-            (r'$\delta_{\mathrm{shrink}I}{=}1$', {'delta_shrinkI': 1.0}),
-            (r'$\delta_{\mathrm{map}}{=}0.03$', {'delta_map': 0.03}),
-            (r'$\delta_{\mathrm{curl}}{=}0.6$', {'delta_curl': 0.6})]
-    nf = int(round(args.duration / args.dt))
-
-    with use_style('paper'):
-        fig, axes = plt.subplots(len(seqs), len(cols), figsize=(PAPER_WIDE, 1.5 * len(seqs)))
-        axes = np.atleast_2d(axes)
-        for row, (ds, sid, t0, lab) in enumerate(seqs):
-            ref = None
-            aps = _aps(E, ds, t0 + nf * args.dt)
-            if aps is not None:
-                ref = np.log(aps.astype(np.float64) + 1.0)
-            for col, (title, deltas) in enumerate(cols):
-                a = axes[row, col]
-                kind, img = 'aps', aps
-                if col > 0:
-                    kind, img = 'I', None
-                    # exact folder of the ablation run: a glob would also match
-                    # older runs at other dFR / anchor values and pick the first
-                    rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf, out_root=root,
-                              deltas=dict(deltas))
-                    npz = os.path.join(rc.output_dir, 'maps_final.npz')
-                    if os.path.exists(npz):
-                        img = solve_poisson_exact(np.load(npz)['G'], 'fft')
-                if img is None:
-                    a.set_axis_off()
-                    continue
-                draw_map(a, kind, img, title=title if row == 0 else '')
-                if col == 0:
-                    a.set_ylabel(lab)
-                elif ref is not None and ref.shape == img.shape:
-                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
-            print(f'  {lab}: done', flush=True)
-        save(fig, os.path.join(FIGDIR, 'fig_regularisers.png'))
-    print('-> fig_regularisers.pdf / .png')
-
-
-# ------------------------------------- report figure: settings for the image
-#: (model, dt, delta_curl) searched for image quality. The 20 ms points are
-#: the runs of Table III and of the curl table; the 10 ms ones are made by
-#:   --what sweep --vary 'dt=0.01;delta_curl=0,0.6' --mode grid --name best_image
-IMG_SEARCH = [(m, dt, c) for m in ('thesis', 'thesis_cmax')
-              for dt in (0.02, 0.01) for c in (0.0, 0.6)]
-SYNTHETIC = ('bicycle', 'street')
-
-
-def _track_stats(d):
-    """(track mean |r| of the read-out, mean omega error) of one run."""
-    rows = list(csv.DictReader(open(os.path.join(d, 'tracking.csv'))))
-    r = np.abs([float(x['recon_r']) for x in rows])
-    return float(np.nanmean(r)), experiment_tracking.read_summary(d)['mean_err_deg_s']
-
-
-def image_search(E, duration, name=''):
-    """{(kind, cfg): (mean |r|, mean err)} over IMG_SEARCH, and the best cfg per kind.
-
-    kind is 'real' or 'synthetic'; the best configuration of a kind is the
-    IMG_SEARCH point with the highest mean |r|. Nothing is recomputed.
-    """
-    img_root = os.path.join('experiments', name or 'best_image')
-
-    def run_dir(ds, sid, t0, model, dt, curl):
-        return _cfg(E, ds, sid, t0, model, dt, int(round(duration / dt)),
-                    out_root=None if dt == 0.02 else img_root,
-                    deltas={'delta_curl': curl} if curl else None).output_dir
-
-    kinds = {k: [s for s in SEGMENTS if (s[3] in SYNTHETIC) == (k == 'synthetic')]
-             for k in ('real', 'synthetic')}
-    score, best = {}, {}
-    for kind, seqs in kinds.items():
-        for cfg in IMG_SEARCH:
-            try:
-                score[kind, cfg] = np.mean([_track_stats(run_dir(ds, sid, t0, *cfg))
-                                            for ds, sid, t0, _ in seqs], axis=0)
-            except OSError:
-                print(f'    missing runs for {kind} {cfg}')
-        best[kind] = max((c for c in IMG_SEARCH if (kind, c) in score),
-                         key=lambda c: score[kind, c][0])
-    return score, best, run_dir
-
-
-def cmd_imgfig(E, args):
-    """Figure for 'Settings for the Image' (its table: make_tables.table_image).
-
-    Table params minimise the omega error; the picture wants other settings,
-    and different ones on real and synthetic data. Every sequence is drawn at
-    the omega configuration next to the image configuration of its kind.
-    Nothing is recomputed.
-    """
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from interacting_maps.network_dissertation import solve_poisson_exact
-
-    score, best, run_dir = image_search(E, args.duration, args.name)
-    print('best:', best)
-    omega_cfg = ('thesis_cmax', 0.02, 0.0)            # Table params
-    with use_style('paper'):
-        fig, axes = plt.subplots(len(SEGMENTS), 3, figsize=(1.5 * PAPER_WIDTH, 1.62 * len(SEGMENTS)))
-        for row, (ds, sid, t0, lab) in enumerate(SEGMENTS):
-            kind = 'synthetic' if lab in SYNTHETIC else 'real'
-            panels = [('APS', _aps(E, ds, t0 + args.duration), None, 'aps')]
-            for ttl, cfg in ((r'configured for $\omega$', omega_cfg),
-                             ('configured for the image', best[kind])):
-                d = run_dir(ds, sid, t0, *cfg)
-                img = solve_poisson_exact(np.load(os.path.join(d, 'maps_final.npz'))['G'], 'fft')
-                panels.append((ttl, img, _track_stats(d) + cfg, 'I'))
-            for c, (ttl, img, st, kind_) in enumerate(panels):
-                a = axes[row, c]
-                if img is None:
-                    a.set_axis_off()
-                    continue
-                draw_map(a, kind_, img, title=ttl if row == 0 else '')
-                if c == 0:
-                    a.set_ylabel(f'{lab}\n({kind})')
-                if st is not None:
-                    r, err, model, dt, curl = st
-                    a.set_xlabel(f'{MODEL_STYLE[model][0]}\n{dt*1000:.0f} ms, '
-                                 f'$\\delta_{{curl}}={curl:g}$\n'
-                                 f'$|r|={r:.2f}$,  $\\omega$ err $={err:.1f}$')
-            print(f'  {lab}: done', flush=True)
-        save(fig, os.path.join(FIGDIR, 'fig_image_settings.png'))
-    print('-> fig_image_settings.pdf / .png')
+    for ds, sid, t0, lab in seqs:
+        for dt in (0.02, 0.01):
+            rc = recon_cfg(ds, sid, t0, args.model, dt, args.duration, root)
+            print(f"  running {lab} dt={dt*1000:.0f}ms ...", flush=True)
+            _run(E, rc, not args.no_frames, args.frame_stride)
 
 
 # ------------------------------------------------- fft vs dct, as a read-out
@@ -819,12 +536,12 @@ def cmd_readout(E, args):
     for ds, sid, t0, lab in seqs:
         for dur in durations:
             nf = int(round(dur / args.dt))
-            rc = _cfg(E, ds, sid, t0, args.model, args.dt, nf,
+            rc = run_cfg(ds, sid, t0, args.model, args.dt, nf,
                       out_root=root, poisson='iterative', deltas=dict(base))
             npz = os.path.join(rc.output_dir, 'maps_final.npz')
             _run(E, rc, not args.no_frames, args.frame_stride)
             m = np.load(npz)
-            aps = _aps(E, ds, t0 + nf * args.dt)
+            aps = aps_frame(ds, t0 + nf * args.dt)
             if aps is None:
                 print(f"  {lab}: no APS, skipped"); continue
             ref = np.log(aps.astype(np.float64) + 1.0)
@@ -923,18 +640,6 @@ def cmd_baseline(E, args):
 
 
 # ------------------------------------------------------- runs for fig_beta_speed
-#: every segment of the two real sequences -- must equal make_figures.BETA_SEGMENTS
-BETA_SEGMENTS = [
-    ('boxes_rotation', 'seg_A', 9.972), ('boxes_rotation', 'seg_B', 7.322),
-    ('boxes_rotation', 'seg_C', 4.422), ('boxes_rotation', 'seg_D', 1.922),
-    ('poster_rotation', 'seg_A', 14.166), ('poster_rotation', 'seg_C', 8.816),
-    ('poster_rotation', 'seg_D', 1.866),
-]
-#: (model, delta_FR, delta_anchor) -- the three series of fig_beta_speed
-BETA_CONFIGS = [('thesis_cmax', 0.5, 0.3), ('thesis_cmax', 0.1, 0.5),
-                ('thesis_cmax_v2', 0.5, None)]
-
-
 def cmd_beta(E, args):
     """Runs behind fig_beta_speed: every real-sequence segment, three anchor settings."""
     nf = int(round(args.duration / args.dt))
@@ -942,7 +647,7 @@ def cmd_beta(E, args):
     if args.index >= 0:
         runs = [runs[args.index]]
     for (ds, sid, t0), (model, d_fr, d_anc) in runs:
-        rc = _cfg(E, ds, sid, t0, model, args.dt, nf, delta_FR=d_fr, delta_IMU=d_anc)
+        rc = run_cfg(ds, sid, t0, model, args.dt, nf, delta_FR=d_fr, delta_IMU=d_anc)
         s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
         print(f"  {ds}/{sid} {model} dFR={d_fr} anchor={d_anc}: "
               f"beta={s['mean_beta']:.3f} ({secs:.0f}s)", flush=True)
@@ -951,9 +656,7 @@ def cmd_beta(E, args):
 COMMANDS = {'window': cmd_window, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
-            'readout': cmd_readout, 'recon': cmd_recon,
-            'regfig': cmd_regfig, 'dissoc': cmd_dissoc, 'beta': cmd_beta,
-            'imgfig': cmd_imgfig}
+            'readout': cmd_readout, 'recon': cmd_recon, 'beta': cmd_beta}
 
 
 def main():

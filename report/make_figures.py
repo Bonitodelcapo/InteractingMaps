@@ -4,8 +4,9 @@ make_figures.py — regenerate every figure in the report from committed code.
 Run from the repository root:
     python report/make_figures.py              # all figures
     python report/make_figures.py --only maps  # one of: beta_speed tracking
-                                               #         maps appendix distortion
-                                               #         cmax_baseline
+                                               #   maps appendix distortion cmax_baseline
+                                               #   converge recon dissociation
+                                               #   regularisers image_settings
 
 Outputs PDFs (used by the LaTeX) and PNGs (for quick inspection) into
 report/figures/ via style.save.
@@ -18,6 +19,11 @@ maps, appendix         read the final maps (maps_final.npz) of the Table III
                        runs in results/: CMax-anchor for maps, one figure per
                        other model for appendix.
 distortion             needs only the raw events.
+converge               the I snapshots of run_experiments --what converge.
+recon                  the runs of run_experiments --what recon.
+dissociation           the Table III runs in results/.
+regularisers           the ablation runs (experiments/ablation, run_all.sh).
+image_settings         the Table III and curl runs, and experiments/best_image.
 
 Configuration
 -------------
@@ -46,6 +52,9 @@ import experiment_tracking  # merged run.json reader (after sys.path points at R
 from interacting_maps.style import (MODELS, PAPER_WIDTH, PAPER_WIDE, NEUTRAL_COLOR, LABEL_BETA,
                                     frame_times, to_deg_s, use_style, save)
 from interacting_maps.viz import draw_map, draw_omega, map_scale
+from interacting_maps.metrics import abs_corr, crop_interior
+from report_runs import (SEGMENTS, SYNTHETIC, BETA_SEGMENTS, run_cfg, recon_cfg,
+                         converge_path, aps_frame, track_stats, image_search)
 sys.argv = [sys.argv[0]] + sys.argv[1:]          # evaluation.py parses argv
 
 FIG = os.path.join(ROOT, 'report', 'figures')
@@ -60,15 +69,6 @@ DT, N_TRACK, N_MAPS = 0.02, 75, 75
 N_BETA = 150
 from config import THESIS_PARAMS
 TUNED = {k: THESIS_PARAMS[k] for k in ('delta_FR', 'delta_IMU')}   # adopted, config.py
-
-# (dataset, segment id, t_start, label) — Table II
-SEGMENTS = [
-    ('boxes_rotation',    'seg_B', 7.322,  'boxes'),
-    ('poster_rotation',   'seg_C', 8.816,  'poster'),
-    ('dynamic_rotation',  'seg_D', 1.619,  'dynamic'),
-    ('ecrot_bicycle', 'seg_A', 1.001,  'bicycle'),
-    ('ecrot_street',  'seg_A', 1.001,  'street'),
-]
 
 # fig_maps rows (index into SEGMENTS, label, frame shown, run root). Every
 # sequence at the last frame of its Table III run, except poster: its last
@@ -87,13 +87,15 @@ MAP_ROWS = [(0, 'boxes\n(real)', N_MAPS, 'results'),
 # the appendix repeats those frames for every model but the CMax-anchor one
 APPENDIX_MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax_v2']
 
-# every segment of the two real sequences — the beta-vs-speed population
-BETA_SEGMENTS = [
-    ('boxes_rotation', 'seg_A', 9.972), ('boxes_rotation', 'seg_B', 7.322),
-    ('boxes_rotation', 'seg_C', 4.422), ('boxes_rotation', 'seg_D', 1.922),
-    ('poster_rotation', 'seg_A', 14.166), ('poster_rotation', 'seg_C', 8.816),
-    ('poster_rotation', 'seg_D', 1.866),
-]
+# what the reconstruction-section figures show (the report's choices)
+CONVERGE = [('dynamic', 45), ('bicycle', 40)]           # (sequence, frame)
+RECON = dict(sequences=('boxes', 'poster'), duration=0.8, model='thesis_cmax',
+             root=os.path.join('experiments', 'recon_figure'))
+DISSOC = dict(sequences=('boxes', 'bicycle', 'street'), duration=1.5,
+              models=('thesis', 'thesis_cmax', 'thesis_imu'))
+REGULARISERS = dict(sequences=('boxes', 'poster', 'dynamic', 'bicycle'), duration=1.5,
+                    model='thesis_cmax', root=os.path.join('experiments', 'ablation'))
+IMAGE_DURATION = 1.5
 
 
 def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_frames=N_TRACK, root='results'):
@@ -350,9 +352,192 @@ def fig_distortion(E):
     print('  wrote fig_distortion.pdf / .png')
 
 
+# ----------------------------------------------- convergence within one frame
+def fig_converge(E):
+    """I across the message-passing iterations of one frame, every model
+    (rows) at every checkpoint (columns); from run_experiments --what converge."""
+    from report_runs import MODELS as ORDER
+    for lab, frame in CONVERGE:
+        path = converge_path(lab, frame)
+        if not os.path.exists(path):
+            print(f'    (missing {path})')
+            continue
+        z = np.load(path)
+        checkpoints = [int(c) for c in z['checkpoints']]
+        with use_style('paper'):
+            fig, axes = plt.subplots(len(ORDER), len(checkpoints),
+                                     figsize=(PAPER_WIDE, 1.0 * len(ORDER) + 0.4))
+            for r, model in enumerate(ORDER):
+                for c, it in enumerate(checkpoints):
+                    draw_map(axes[r, c], 'I', z[f'{model}_{it}'],
+                             title=f'iter {it}' if r == 0 else '')
+                axes[r, 0].set_ylabel(MODELS[model][0])
+            fig.suptitle(f'{lab} {z["segment"]}: intensity map across message-passing '
+                         f'iterations (frame {frame})')
+            save(fig, os.path.join(FIG, f'fig_converge_{lab}.png'))
+        print(f'  wrote fig_converge_{lab}.pdf / .png')
+
+
+# --------------------------------------------- what the intensity map depends on
+def fig_recon(E):
+    """APS, the iterative update at dt = 20 and 10 ms, and the exact read-out at
+    10 ms: halving the window cleans up G, and solving the Poisson equation
+    exactly recovers the low frequencies the iterative update leaves out."""
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    seqs = [s for s in SEGMENTS if s[3] in RECON['sequences']]
+    dur = RECON['duration']
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), 4, figsize=(PAPER_WIDE, 1.85 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for row, (ds, sid, t0, lab) in enumerate(seqs):
+            got = {dt: np.load(os.path.join(recon_cfg(ds, sid, t0, RECON['model'], dt, dur,
+                                                      RECON['root']).output_dir,
+                                            'maps_final.npz'))
+                   for dt in (0.02, 0.01)}
+            aps = aps_frame(ds, t0 + dur)
+            ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
+            panels = [
+                ('APS', aps, 'aps'),
+                (r'iterative, $\Delta t = 20$ ms', got[0.02]['I'], 'I'),
+                (r'iterative, $\Delta t = 10$ ms', got[0.01]['I'], 'I'),
+                (r'exact read-out, $\Delta t = 10$ ms',
+                 solve_poisson_exact(got[0.01]['G'], 'fft'), 'I'),
+            ]
+            for col, (ttl, img, kind) in enumerate(panels):
+                a = axes[row, col]
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=ttl if row == 0 else '')
+                if col == 0:
+                    a.set_ylabel(lab)
+                if col > 0 and ref is not None:
+                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
+        save(fig, os.path.join(FIG, 'fig_recon.png'))
+    print('  wrote fig_recon.pdf / .png')
+
+
+# --------------------------------------------- good omega is not a good picture
+def fig_dissociation(E):
+    """The read-out of the Table III runs, each labelled with its track-mean |r|
+    and omega error: the unanchored network reconstructs better on the synthetic
+    sequences while its omega is an order of magnitude worse."""
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    nf = int(round(DISSOC['duration'] / DT))
+    seqs = [s for s in SEGMENTS if s[3] in DISSOC['sequences']]
+    models = DISSOC['models']
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), len(models) + 1,
+                                 figsize=(PAPER_WIDE, 1.65 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for r_i, (ds, sid, t0, lab) in enumerate(seqs):
+            panels = [('APS', aps_frame(ds, t0 + nf * DT), None, 'aps')]
+            for m in models:
+                d = run_cfg(ds, sid, t0, m, DT, nf).output_dir
+                npz = os.path.join(d, 'maps_final.npz')
+                img = st = None
+                if os.path.exists(npz):
+                    img = solve_poisson_exact(np.load(npz)['G'], 'fft')
+                    # |r| from tracking.csv, since older summaries hold a signed mean
+                    st = track_stats(d)
+                else:
+                    print(f'    missing: {npz}', flush=True)
+                panels.append((MODELS[m][0], img, st, 'I'))
+            for c_i, (title, img, st, kind) in enumerate(panels):
+                a = axes[r_i, c_i]
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=title if r_i == 0 else '')
+                if c_i == 0:
+                    a.set_ylabel(lab)
+                if st is not None:
+                    a.set_xlabel(f"$|r|={st[0]:.2f}$,  $\\omega$ err $={st[1]:.1f}$ °/s")
+        save(fig, os.path.join(FIG, 'fig_dissociation.png'))
+    print('  wrote fig_dissociation.pdf / .png')
+
+
+# -------------------------------------------------- what each regulariser does
+def fig_regularisers(E):
+    """The read-out of each ablation run's final G (what the ablation table
+    scores), one row per sequence, one column per regulariser."""
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    seqs = [s for s in SEGMENTS if s[3] in REGULARISERS['sequences']]
+    # (column label, the regulariser that ablation job set)
+    cols = [('APS', None), ('none', {}),
+            (r'$\delta_{\mathrm{shrink}I}{=}1$', {'delta_shrinkI': 1.0}),
+            (r'$\delta_{\mathrm{map}}{=}0.03$', {'delta_map': 0.03}),
+            (r'$\delta_{\mathrm{curl}}{=}0.6$', {'delta_curl': 0.6})]
+    nf = int(round(REGULARISERS['duration'] / DT))
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(seqs), len(cols), figsize=(PAPER_WIDE, 1.5 * len(seqs)))
+        axes = np.atleast_2d(axes)
+        for row, (ds, sid, t0, lab) in enumerate(seqs):
+            aps = aps_frame(ds, t0 + nf * DT)
+            ref = np.log(aps.astype(np.float64) + 1.0) if aps is not None else None
+            for col, (title, deltas) in enumerate(cols):
+                a = axes[row, col]
+                kind, img = 'aps', aps
+                if col > 0:
+                    kind, img = 'I', None
+                    rc = run_cfg(ds, sid, t0, REGULARISERS['model'], DT, nf,
+                                 out_root=REGULARISERS['root'], deltas=dict(deltas))
+                    npz = os.path.join(rc.output_dir, 'maps_final.npz')
+                    if os.path.exists(npz):
+                        img = solve_poisson_exact(np.load(npz)['G'], 'fft')
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind, img, title=title if row == 0 else '')
+                if col == 0:
+                    a.set_ylabel(lab)
+                elif ref is not None and ref.shape == img.shape:
+                    a.set_xlabel(f'$|r|={abs_corr(crop_interior(img), crop_interior(ref)):.2f}$')
+        save(fig, os.path.join(FIG, 'fig_regularisers.png'))
+    print('  wrote fig_regularisers.pdf / .png')
+
+
+# ------------------------------------------------------- settings for the image
+def fig_image_settings(E):
+    """Every sequence at the omega configuration next to the image configuration
+    of its kind (real or synthetic); the search is report_runs.image_search."""
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    score, best, run_dir = image_search(IMAGE_DURATION)
+    print('    best:', best)
+    omega_cfg = ('thesis_cmax', 0.02, 0.0)            # Table params
+    with use_style('paper'):
+        fig, axes = plt.subplots(len(SEGMENTS), 3,
+                                 figsize=(1.5 * PAPER_WIDTH, 1.62 * len(SEGMENTS)))
+        for row, (ds, sid, t0, lab) in enumerate(SEGMENTS):
+            kind = 'synthetic' if lab in SYNTHETIC else 'real'
+            panels = [('APS', aps_frame(ds, t0 + IMAGE_DURATION), None, 'aps')]
+            for ttl, cfg in ((r'configured for $\omega$', omega_cfg),
+                             ('configured for the image', best[kind])):
+                d = run_dir(ds, sid, t0, *cfg)
+                img = solve_poisson_exact(np.load(os.path.join(d, 'maps_final.npz'))['G'], 'fft')
+                panels.append((ttl, img, track_stats(d) + cfg, 'I'))
+            for c, (ttl, img, st, kind_) in enumerate(panels):
+                a = axes[row, c]
+                if img is None:
+                    a.set_axis_off()
+                    continue
+                draw_map(a, kind_, img, title=ttl if row == 0 else '')
+                if c == 0:
+                    a.set_ylabel(f'{lab}\n({kind})')
+                if st is not None:
+                    r, err, model, dt, curl = st
+                    a.set_xlabel(f'{MODELS[model][0]}\n{dt*1000:.0f} ms, '
+                                 f'$\\delta_{{curl}}={curl:g}$\n'
+                                 f'$|r|={r:.2f}$,  $\\omega$ err $={err:.1f}$')
+        save(fig, os.path.join(FIG, 'fig_image_settings.png'))
+    print('  wrote fig_image_settings.pdf / .png')
+
+
 FIGURES = {'beta_speed': fig_beta_speed, 'tracking': fig_tracking,
            'maps': fig_maps, 'appendix': fig_appendix, 'cmax_baseline': fig_cmax_baseline,
-           'distortion': fig_distortion}
+           'distortion': fig_distortion, 'converge': fig_converge, 'recon': fig_recon,
+           'dissociation': fig_dissociation, 'regularisers': fig_regularisers,
+           'image_settings': fig_image_settings}
 
 
 def main():

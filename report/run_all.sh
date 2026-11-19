@@ -94,6 +94,10 @@ runs() {   # one line per independent run: "name|group|command"
     echo "sens_imu_$s|REPORT|$R --what sweep --name sens --mode coord --model thesis_imu --duration 1.5 --sequences $s --vary 'delta_IMU=0.1,0.3,0.5,0.7,0.9' --out sens_imu_$s.csv"
     echo "sens_rates_$s|REPORT|$R --what sweep --name sens --mode coord --model thesis_cmax --duration 1.5 --sequences $s --vary 'delta_VFG=0.03,0.06,0.12,0.24,0.48;delta_IG=0.03,0.1,0.2,0.4;delta_GI=0.02,0.05,0.1,0.2;delta_RF=0.01,0.02,0.05,0.1,0.2' --out sens_rates_$s.csv"
   done
+  # fig_converge_*: I at the iteration checkpoints of one frame; fig_recon: its runs
+  echo "converge_dynamic|REPORT|$R --what converge --sequences dynamic --frame 45"
+  echo "converge_bicycle|REPORT|$R --what converge --sequences bicycle --frame 40"
+  echo "recon|REPORT|$R --what recon --sequences boxes,poster --duration 0.8"
   # tab:recon: the three read-outs of the same G at 20 and 10 ms (0.4, 0.8, 1.2 s)
   echo "readout_20ms|REPORT|$R --what readout --sequences boxes,poster,bicycle,street"
   echo "readout_10ms|REPORT|$R --what readout --sequences boxes,poster,bicycle,street --dt 0.01 --name readout_dt10ms"
@@ -128,13 +132,6 @@ runs() {   # one line per independent run: "name|group|command"
 OFCE_VARIANTS=$(python -c "import diag_omega_ladder as d; print(*d.OFCE_VARIANTS)")
 
 figures() {
-  local F="python report/run_experiments.py"
-  echo "converge_dynamic|FIGURES|$F --what converge --sequences dynamic --frame 45"
-  echo "converge_bicycle|FIGURES|$F --what converge --sequences bicycle --frame 40"
-  echo "recon|FIGURES|$F --what recon --sequences boxes,poster --duration 0.8 --no-frames"
-  echo "dissoc|FIGURES|$F --what dissoc --sequences boxes,bicycle,street --duration 1.5"
-  echo "regfig|FIGURES|$F --what regfig --sequences boxes,poster,dynamic,bicycle --duration 1.5"
-  echo "imgfig|FIGURES|$F --what imgfig --duration 1.5"
   echo "make_figures|FIGURES|python report/make_figures.py"
   echo "make_tables|FIGURES|python report/make_tables.py"
   echo "ofce_summary|FIGURES|python diag_omega_ladder.py --mode ofce_summary"

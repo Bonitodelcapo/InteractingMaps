@@ -400,19 +400,15 @@ def table_regularisers():
 
 
 def table_image():
-    """tab:image: the image-quality search of run_experiments.image_search, 1.5 s."""
-    sys.path.insert(0, os.path.join(ROOT, 'report'))
-    argv, sys.argv = sys.argv, [sys.argv[0]]       # evaluation.py parses argv
-    import evaluation as E
-    import run_experiments as RX
-    sys.argv = argv
-    score, best, _ = RX.image_search(E, 1.5)
+    """tab:image: the image-quality search of report_runs.image_search, 1.5 s."""
+    from report_runs import IMG_SEARCH, image_search
+    score, best, _ = image_search(1.5)
     body = []
     for model, title in (('thesis', r'none (\texttt{thesis})'),
                          ('thesis_cmax', r'\texttt{CMax-anchor}')):
         if body:
             body.append(r'\midrule')
-        for i, cfg in enumerate(c for c in RX.IMG_SEARCH if c[0] == model):
+        for i, cfg in enumerate(c for c in IMG_SEARCH if c[0] == model):
             cells = []
             for kind in ('real', 'synthetic'):
                 if (kind, cfg) not in score:
