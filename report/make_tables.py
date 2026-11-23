@@ -83,6 +83,21 @@ def fmt(v, nd=1):
     return '---' if np.isnan(v) else f'{v:.{nd}f}'
 
 
+def mark_best(cells, key, mark=r'\textbf'):
+    """cells: {name: displayed string}. Wrap the best value(s) in `mark`.
+
+    `key` maps a displayed value to a score, lower is better. Ties on the
+    displayed value are all marked, so the mark never depends on digits the
+    table does not show. '---' cells are never marked.
+    """
+    num = {k: float(v) for k, v in cells.items() if v != '---'}
+    if not num:
+        return dict(cells)
+    best = min(key(v) for v in num.values())
+    return {k: (rf'{mark}{{{v}}}' if k in num and key(num[k]) == best else v)
+            for k, v in cells.items()}
+
+
 def floor_label(ds):
     return r'\emph{gyro vs ref.}'
 
@@ -131,15 +146,27 @@ def table_main():
         body += [r'\midrule',
                  r'\multirow{6}{*}{\shortstack[l]{' + r'\\'.join(head) + '}}']
         floor = None
+        # displayed cells per model; bold marks the best of the five models on
+        # this sequence: lowest err and dir, beta closest to 1, highest |r|
+        cols = {c: {} for c in ('err', 'dir', 'beta', 'recon')}
         for mdisp, key in MODELS:
             r = rows.get((ds, key))
             if r is None:
-                body.append(f' & {mdisp:<22}& --- & --- & --- & --- \\\\')
                 continue
             floor = (r['floor'], r['floor_dir'])
-            body.append(f' & {mdisp:<22}& {fmt(r["err"])} & {fmt(r["dir"])} & '
-                        f'{fmt(r["beta"], 0 if float(r["beta"]) >= 100 else 2)} & '
-                        f'{fmt(r["recon"], 2)} \\\\')
+            cols['err'][key], cols['dir'][key] = fmt(r['err']), fmt(r['dir'])
+            cols['beta'][key] = fmt(r['beta'], 0 if float(r['beta']) >= 100 else 2)
+            cols['recon'][key] = fmt(r['recon'], 2)
+        cols = {'err': mark_best(cols['err'], lambda v: v),
+                'dir': mark_best(cols['dir'], lambda v: v),
+                'beta': mark_best(cols['beta'], lambda v: abs(v - 1.0)),
+                'recon': mark_best(cols['recon'], lambda v: -v)}
+        for mdisp, key in MODELS:
+            if key not in cols['err']:
+                body.append(f' & {mdisp:<22}& --- & --- & --- & --- \\\\')
+                continue
+            body.append(f' & {mdisp:<22}& {cols["err"][key]} & {cols["dir"][key]} & '
+                        f'{cols["beta"][key]} & {cols["recon"][key]} \\\\')
         if floor:
             nd = 2 if float(floor[0]) < 1 else 1      # sub-degree floors keep two digits
             body.append(f' & {floor_label(ds):<22}& \\emph{{{fmt(floor[0], nd)}}} & '
@@ -176,12 +203,16 @@ def table_curl():
     body = []
     for ds, disp, _lab, _extra in SEQS:
         body.append(r'\midrule')
+        g = lambda r, k, nd: fmt(r[k], nd) if r else '---'
+        # bold: on each sequence, the lowest error and the highest |r| of the ten runs
+        err = mark_best({(key, w): g(src.get((ds, key)), 'err', 1) for _, key in MODELS
+                         for w, src in (('none', none), ('curl', curl))}, lambda v: v)
+        rec = mark_best({(key, w): g(src.get((ds, key)), 'recon', 2) for _, key in MODELS
+                         for w, src in (('none', none), ('curl', curl))}, lambda v: -v)
         for j, (mdisp, key) in enumerate(MODELS):
-            a, b = none.get((ds, key)), curl.get((ds, key))
-            g = lambda r, k, nd: fmt(r[k], nd) if r else '---'
             body.append(f'{disp if j == 0 else "":<22}& {mdisp:<22}& '
-                        f'{g(a, "err", 1)} & {g(b, "err", 1)} & '
-                        f'{g(a, "recon", 2)} & {g(b, "recon", 2)} \\\\')
+                        f'{err[key, "none"]} & {err[key, "curl"]} & '
+                        f'{rec[key, "none"]} & {rec[key, "curl"]} \\\\')
     head = [r' & & \multicolumn{2}{c}{$\wvec$ err [$^\circ$/s]} & \multicolumn{2}{c}{$|r|$} \\',
             r'\cmidrule(lr){3-4}\cmidrule(lr){5-6}',
             r'Sequence & Model & none & curl & none & curl \\']
@@ -249,25 +280,33 @@ def table_sweep():
     base = dict({k: THESIS_PARAMS[k] for k in SENS_KEYS[:6]},
                 n_iters=ITERS_PER_FRAME, dt_ms=20.0)
 
-    def line(label, key, bold):
-        rs = cell.get(key, {})
-        lab = rf'$\mathbf{{{label}}}$' if bold else f'${label}$'
-        vals = ' & '.join(f'{fmt(rs[ds]["err"])} & {fmt(rs[ds]["dir"])}' if ds in rs
-                          else '--- & ---' for ds, *_ in SEQS)
-        return f'& {lab:<20}& {vals} \\\\'
-
+    # The adopted value of each block is bold; the lowest error of each block
+    # on each sequence is underlined (ties on the displayed value share it),
+    # leaving out the ablation row, which is not a setting one would choose.
     def block(title, model, name, values, fmt_label=lambda v: f'{v:g}'):
         out = [r'\midrule', rf'\multicolumn{{12}}{{@{{}}l}}{{{title}}}\\']
+        rows = []
         for v in values:
             p = dict(base, **{name: v})
-            key = (model,) + tuple(round(float(p[k]), 6) for k in SENS_KEYS)
-            out.append(line(fmt_label(v), key, abs(v - base[name]) < 1e-9))
+            rows.append((v, cell.get((model,) + tuple(round(float(p[k]), 6) for k in SENS_KEYS), {})))
+        err = {}
+        for ds, *_ in SEQS:
+            e = mark_best({v: fmt(rs[ds]['err']) if ds in rs else '---'
+                           for v, rs in rows if not (name == 'delta_IMU' and v == 0)},
+                          lambda x: x, mark=r'\underline')
+            err[ds] = e
+        for v, rs in rows:
+            label = fmt_label(v)
+            lab = rf'$\mathbf{{{label}}}$' if abs(v - base[name]) < 1e-9 else f'${label}$'
+            vals = ' & '.join((f'{err[ds].get(v, fmt(rs[ds]["err"]))} & {fmt(rs[ds]["dir"])}')
+                              if ds in rs else '--- & ---' for ds, *_ in SEQS)
+            out.append(f'& {lab:<20}& {vals} \\\\')
         return out
 
-    ms = lambda v: rf'{v:g}$\,ms$'
+    ms = lambda v: rf'{v:g}\,\mathrm{{ms}}'
     body = (block(r'\emph{anchor weight} $\delta_{\text{anchor}}$, contrast anchor', 'thesis_cmax',
                   'delta_IMU', [0.0, 0.1, 0.3, 0.5, 0.7, 0.9],
-                  lambda v: '0$ (abl.)$' if v == 0 else f'{v:g}')
+                  lambda v: r'0\ \text{(abl.)}' if v == 0 else f'{v:g}')
             + block(r'\emph{anchor weight} $\delta_{\text{anchor}}$, gyroscope', 'thesis_imu',
                     'delta_IMU', [0.1, 0.3, 0.5, 0.7, 0.9])
             + block(r'\emph{kinematic weight} $\delta_{F\!R}$', 'thesis_cmax',

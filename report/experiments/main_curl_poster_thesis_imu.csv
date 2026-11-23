@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+poster_rotation,seg_C,thesis_imu,8.76,8.17,6.05,1.04,0.3215,0.2784,0.0,8.78,6.02,242

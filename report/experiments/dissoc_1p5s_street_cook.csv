@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+ecrot_street,seg_A,cook,73.77,72.57,60.35,325.182,0.0903,0.0096,0.0,0.68,0.29,141

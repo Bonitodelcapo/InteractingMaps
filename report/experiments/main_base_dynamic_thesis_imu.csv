@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+dynamic_rotation,seg_D,thesis_imu,8.04,6.8,12.09,1.005,0.3346,0.2575,0.02,8.31,12.14,302

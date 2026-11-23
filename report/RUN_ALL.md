@@ -12,7 +12,7 @@ Two stages, each a list of independent jobs run up to `PARALLEL` at a time:
 | stage | jobs | what they produce |
 |---|---|---|
 | `runs` | `main_*`, `dissoc_*`, `curl_*`, `sweep_*`, `grid_*`, `sens_*`, `anchor_*`, `ablation_*`, `beta_*`, `readout_*`, `poisson`, `best_image_*`, `maps_poster_*`, `converge_*`, `recon`, `baseline`, `window`, `distortion_test`, `ofce_*` | tracking runs and the CSVs behind every table |
-| `figures` | `make_figures`, `make_tables`, `ofce_summary` | `report/figures/*`, `report/experiments/table_*.tex` |
+| `figures` | `make_figures`, `make_tables`, `text_numbers`, `ofce_summary` | `report/figures/*`, `report/experiments/table_*.tex`, `report/experiments/text_numbers.txt` |
 
 The `figures` stage starts only if every `runs` job succeeded.
 
@@ -35,7 +35,7 @@ fingerprint means unchanged numbers.
 
 | group | files hashed | used by |
 |---|---|---|
-| `HASH_REPORT` | every `*.py` except `tests/`, `diag_*.py`, `report/make_figures.py`, `report/make_tables.py` | all `runs` jobs except `ofce_*` |
+| `HASH_REPORT` | every `*.py` except `tests/`, `diag_*.py`, `report/make_figures.py`, `report/make_tables.py`, `report/text_numbers.py` | all `runs` jobs except `ofce_*` |
 | `HASH_DIAG` | `interacting_maps/*.py`, `config.py`, `diag_omega_ladder.py` | `ofce_*` |
 | `HASH_FIGURES` | every `*.py` except `tests/`, plus the contents of all run stamps | all `figures` jobs |
 
@@ -96,7 +96,7 @@ Run these in this order:
 ```bash
 git pull
 ADOPT=1 bash report/run_all.sh
-rm -f report/.stamps/{make_figures,make_tables,ofce_summary}
+rm -f report/.stamps/{make_figures,make_tables,text_numbers,ofce_summary}
 nohup bash report/run_all.sh > run_all.out 2>&1 &
 ```
 
@@ -173,6 +173,12 @@ file times, so the age of each output stays visible.
 params, grid, recon, regularisers, image. `report/bare_jrnl.tex` still holds typed
 copies of them; switching each to `\input{experiments/table_<name>}` is the
 remaining manual step.
+
+`text_numbers.py` recomputes every number the text quotes that no table holds
+(the reversal frame, the anchor gaps, the kappa optima, the beta fit, the
+intensity ranges, ...) and writes them, grouped by the claim they support, to
+`report/experiments/text_numbers.txt`. The text still holds typed copies of
+these too; compare them after each run.
 
 ## 10. Rules that keep the stamps honest
 

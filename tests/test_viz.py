@@ -39,7 +39,7 @@ def test_style():
     check('omega_label y', style.omega_label(1) == r'$\omega_y$ (°/s)')
     with style.use_style('paper'):
         inside = matplotlib.rcParams['font.size']
-    check('use_style is scoped', inside == 8 and matplotlib.rcParams['font.size'] != 8)
+    check('use_style is scoped', inside == 9 and matplotlib.rcParams['font.size'] != 9)
     check('pdf only under report/figures',
           style._wants_pdf(os.path.join('report', 'figures', 'x.png'))
           and not style._wants_pdf(os.path.join('experiments', 'x.png')))

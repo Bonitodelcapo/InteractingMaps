@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+dynamic_rotation,seg_D,cook,50.53,42.09,91.01,1.076,0.3437,0.1336,0.0,8.31,12.14,252

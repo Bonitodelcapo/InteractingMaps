@@ -1,4 +1,6 @@
 .claude
+_before_19.11/
+results_19.11/
 data/shapes_rotation/events.txt
 data/shapes_rotation/groundtruth.txt
 data/shapes_rotation/imu.txt

@@ -6,7 +6,7 @@ Run from the repository root:
     python report/make_figures.py --only maps  # one of: beta_speed tracking
                                                #   maps appendix distortion cmax_baseline
                                                #   converge recon dissociation
-                                               #   regularisers image_settings
+                                               #   regularisers image_settings sensitivity
 
 Outputs PDFs (used by the LaTeX) and PNGs (for quick inspection) into
 report/figures/ via style.save.
@@ -24,6 +24,7 @@ recon                  the runs of run_experiments --what recon.
 dissociation           the Table III runs in results/.
 regularisers           the ablation runs (experiments/ablation, run_all.sh).
 image_settings         the Table III and curl runs, and experiments/best_image.
+sensitivity            the sweep and grid runs (experiments/sens, experiments/grid).
 
 Configuration
 -------------
@@ -75,11 +76,12 @@ TUNED = {k: THESIS_PARAMS[k] for k in ('delta_FR', 'delta_IMU')}   # adopted, co
 # frame falls in the anchored excursion, so it is shown at POSTER_FRAME, the
 # frame of highest |r| for CMax-anchor and also for the mean over all five
 # models, from runs stopped there (run_experiments --what sweep --name
-# maps_poster --duration 0.88). The runs are deterministic, so that frame is
-# the Table III run's own frame 44.
+# maps_poster --duration 0.88, i.e. 44 frames). The runs are deterministic, so
+# that frame is the Table III run's own frame 43, counted from 0 as
+# tracking.csv and the text count frames.
 POSTER_FRAME = 44
 MAP_ROWS = [(0, 'boxes\n(real)', N_MAPS, 'results'),
-            (1, f'poster\n(real, frame {POSTER_FRAME})', POSTER_FRAME,
+            (1, f'poster\n(real, frame {POSTER_FRAME - 1})', POSTER_FRAME,
              'experiments/maps_poster'),
             (2, 'dynamic\n(person in scene)', N_MAPS, 'results'),
             (3, 'bicycle\n(synthetic)', N_MAPS, 'results'),
@@ -96,6 +98,24 @@ DISSOC = dict(sequences=('boxes', 'bicycle', 'street'), duration=1.5,
 REGULARISERS = dict(sequences=('boxes', 'poster', 'dynamic', 'bicycle'), duration=1.5,
                     model='thesis_cmax', root=os.path.join('experiments', 'ablation'))
 IMAGE_DURATION = 1.5
+
+
+# Every image panel is a sensor frame, 180 x 240 on all five sequences. With a
+# fixed height per row the panels keep that aspect and leave blank space between
+# the rows, so the image grids take their height from the panel width instead.
+SENSOR_ASPECT = 180 / 240
+TEXT_LINE = 0.15            # one line of 9 pt text, inches
+LABEL_LINE = 0.19           # one line of x-label under a panel (mathtext is taller)
+
+
+def grid_size(n_rows, n_cols, width=PAPER_WIDE, below=0, label_lines=2, title_lines=1):
+    """Figure size of a grid of sensor images whose rows nearly touch:
+    `title_lines` lines of column titles on top, `below` lines of x-label under
+    every row, and `label_lines` lines of row label on the left."""
+    panel_w = (width - label_lines * TEXT_LINE - 0.05) / n_cols - 0.03
+    row_h = panel_w * SENSOR_ASPECT + below * LABEL_LINE + 0.03
+    top = title_lines * TEXT_LINE
+    return width, n_rows * row_h + top
 
 
 def find_run(ds, sid, t0, model, d_fr, d_anchor=None, n_frames=N_TRACK, root='results'):
@@ -263,7 +283,7 @@ _MAP_COLUMNS = [('V', r'events $V$ (input)'), ('I', r'intensity $I$ (in-loop)'),
                 ('F', r'flow $F$')]
 
 
-def _draw_maps(maps, labels, name, height_per_row=1.62, title=None):
+def _draw_maps(maps, labels, name):
     labels = [lab for m, lab in zip(maps, labels) if m is not None]
     maps = [m for m in maps if m is not None]
     if not maps:
@@ -271,14 +291,12 @@ def _draw_maps(maps, labels, name, height_per_row=1.62, title=None):
         return
     with use_style('paper'):
         fig, axes = plt.subplots(len(maps), len(_MAP_COLUMNS),
-                                 figsize=(PAPER_WIDE, height_per_row * len(maps)))
+                                 figsize=grid_size(len(maps), len(_MAP_COLUMNS)))
         axes = np.atleast_2d(axes)
         for r, (arrs, lab) in enumerate(zip(maps, labels)):
             for c, ((kind, ttl), arr) in enumerate(zip(_MAP_COLUMNS, arrs)):
                 draw_map(axes[r, c], kind, arr, title=ttl if r == 0 else '')
             axes[r, 0].set_ylabel(lab)
-        if title:
-            fig.suptitle(title)
         save(fig, os.path.join(FIG, f'{name}.png'))
     print(f'  wrote {name}.pdf / .png')
 
@@ -288,10 +306,11 @@ def fig_maps(E):
 
 
 def fig_appendix(E):
-    """The frames of fig_maps for every other model, one figure each."""
+    """The frames of fig_maps for every other model, one figure each. Like
+    every report figure it has no title of its own: the caption names the model."""
     for model in APPENDIX_MODELS:
         _draw_maps(compute_maps(E, model), [r[1] for r in MAP_ROWS],
-                   f'fig_appendix_maps_{model}', title=MODELS[model][0])
+                   f'fig_appendix_maps_{model}')
 
 
 # ------------------------------------------------------------------ distortion
@@ -340,12 +359,14 @@ def fig_distortion(E):
                              clip_value=40.0, normalise=True)
     distortion_numbers(calib, H, W)
 
-    panels = [(V_raw, r'raw events (lens modelled in $\mathcal{C}$)'),
-              (V_und, 'undistorted events'),
-              (V_und[10:80, 140:230], 'detail (undistorted)')]
+    panels = [(V_raw, 'raw events\n' r'(lens in $\mathcal{C}$)'),
+              (V_und, 'undistorted\nevents'),
+              (V_und[10:80, 140:230], 'detail\n(undistorted)')]
     scale = map_scale('V', V_und)
     with use_style('paper'):
-        fig, ax = plt.subplots(1, 3, figsize=(PAPER_WIDE, 2.15))
+        # drawn at the column width the report prints it at, so its text
+        # prints at the font size of the style
+        fig, ax = plt.subplots(1, 3, figsize=(PAPER_WIDTH, 1.25))
         for a, (img, ttl) in zip(ax, panels):
             draw_map(a, 'V', img, title=ttl, scale=scale)
         save(fig, os.path.join(FIG, 'fig_distortion.png'))
@@ -366,14 +387,13 @@ def fig_converge(E):
         checkpoints = [int(c) for c in z['checkpoints']]
         with use_style('paper'):
             fig, axes = plt.subplots(len(ORDER), len(checkpoints),
-                                     figsize=(PAPER_WIDE, 1.0 * len(ORDER) + 0.4))
+                                     figsize=grid_size(len(ORDER), len(checkpoints),
+                                                       label_lines=1))
             for r, model in enumerate(ORDER):
                 for c, it in enumerate(checkpoints):
                     draw_map(axes[r, c], 'I', z[f'{model}_{it}'],
                              title=f'iter {it}' if r == 0 else '')
                 axes[r, 0].set_ylabel(MODELS[model][0])
-            fig.suptitle(f'{lab} {z["segment"]}: intensity map across message-passing '
-                         f'iterations (frame {frame})')
             save(fig, os.path.join(FIG, f'fig_converge_{lab}.png'))
         print(f'  wrote fig_converge_{lab}.pdf / .png')
 
@@ -387,7 +407,8 @@ def fig_recon(E):
     seqs = [s for s in SEGMENTS if s[3] in RECON['sequences']]
     dur = RECON['duration']
     with use_style('paper'):
-        fig, axes = plt.subplots(len(seqs), 4, figsize=(PAPER_WIDE, 1.85 * len(seqs)))
+        fig, axes = plt.subplots(len(seqs), 4, figsize=grid_size(len(seqs), 4, below=1,
+                                                                  label_lines=1))
         axes = np.atleast_2d(axes)
         for row, (ds, sid, t0, lab) in enumerate(seqs):
             got = {dt: np.load(os.path.join(recon_cfg(ds, sid, t0, RECON['model'], dt, dur,
@@ -428,7 +449,8 @@ def fig_dissociation(E):
     models = DISSOC['models']
     with use_style('paper'):
         fig, axes = plt.subplots(len(seqs), len(models) + 1,
-                                 figsize=(PAPER_WIDE, 1.65 * len(seqs)))
+                                 figsize=grid_size(len(seqs), len(models) + 1, below=1,
+                                                   label_lines=1))
         axes = np.atleast_2d(axes)
         for r_i, (ds, sid, t0, lab) in enumerate(seqs):
             panels = [('APS', aps_frame(ds, t0 + nf * DT), None, 'aps')]
@@ -470,7 +492,8 @@ def fig_regularisers(E):
             (r'$\delta_{\mathrm{curl}}{=}0.6$', {'delta_curl': 0.6})]
     nf = int(round(REGULARISERS['duration'] / DT))
     with use_style('paper'):
-        fig, axes = plt.subplots(len(seqs), len(cols), figsize=(PAPER_WIDE, 1.5 * len(seqs)))
+        fig, axes = plt.subplots(len(seqs), len(cols),
+                                 figsize=grid_size(len(seqs), len(cols), below=1, label_lines=1))
         axes = np.atleast_2d(axes)
         for row, (ds, sid, t0, lab) in enumerate(seqs):
             aps = aps_frame(ds, t0 + nf * DT)
@@ -507,12 +530,13 @@ def fig_image_settings(E):
     omega_cfg = ('thesis_cmax', 0.02, 0.0)            # Table params
     with use_style('paper'):
         fig, axes = plt.subplots(len(SEGMENTS), 3,
-                                 figsize=(1.5 * PAPER_WIDTH, 1.62 * len(SEGMENTS)))
+                                 figsize=grid_size(len(SEGMENTS), 3, width=PAPER_WIDTH,
+                                                   below=2, title_lines=2))
         for row, (ds, sid, t0, lab) in enumerate(SEGMENTS):
             kind = 'synthetic' if lab in SYNTHETIC else 'real'
             panels = [('APS', aps_frame(ds, t0 + IMAGE_DURATION), None, 'aps')]
-            for ttl, cfg in ((r'configured for $\omega$', omega_cfg),
-                             ('configured for the image', best[kind])):
+            for ttl, cfg in (('configured\n' r'for $\omega$', omega_cfg),
+                             ('configured\nfor the image', best[kind])):
                 d = run_dir(ds, sid, t0, *cfg)
                 img = solve_poisson_exact(np.load(os.path.join(d, 'maps_final.npz'))['G'], 'fft')
                 panels.append((ttl, img, track_stats(d) + cfg, 'I'))
@@ -525,19 +549,139 @@ def fig_image_settings(E):
                 if c == 0:
                     a.set_ylabel(f'{lab}\n({kind})')
                 if st is not None:
-                    r, err, model, dt, curl = st
-                    a.set_xlabel(f'{MODELS[model][0]}\n{dt*1000:.0f} ms, '
-                                 f'$\\delta_{{curl}}={curl:g}$\n'
-                                 f'$|r|={r:.2f}$,  $\\omega$ err $={err:.1f}$')
+                    r, err = st[:2]
+                    # model, window and curl weight of each column are in the caption
+                    a.set_xlabel(f'$|r|={r:.2f}$\n$\\omega$ err ${err:.1f}$ °/s')
         save(fig, os.path.join(FIG, 'fig_image_settings.png'))
     print('  wrote fig_image_settings.pdf / .png')
+
+
+# ----------------------------------------------------------------- sensitivity
+# The one-at-a-time sweep (experiments/sens) and the 5x5 grid of delta_FR and
+# delta_anchor (experiments/grid), both CMax-anchor over 1.5 s (run_all.sh).
+# Each panel shows the mean over the three real and over the two synthetic
+# sequences; Table sweep in the appendix gives every sequence.
+SENS_REAL = ('boxes_rotation', 'poster_rotation', 'dynamic_rotation')
+SENS_SYN = ('ecrot_bicycle', 'ecrot_street')
+SENS_BASE = {'dt_ms': 20.0, 'n_iters': 75.0,
+             **{k: THESIS_PARAMS[k] for k in ('delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF',
+                                              'delta_FR', 'delta_IMU')}}
+# (csv column, x-axis label) of every one-at-a-time panel, left to right
+SENS_AXES = [('delta_VFG', r'flow constraint $\delta_{VFG}$'),
+             ('delta_RF', r'flow from $\omega$, $\delta_{RF}$'),
+             ('delta_IG', r'$G$ from $I$, $\delta_{IG}$'),
+             ('delta_GI', r'$I$ from $G$, $\delta_{GI}$'),
+             ('n_iters', 'iterations per frame'),
+             ('dt_ms', r'window $\Delta t$ (ms)')]
+SENS_ERR_TOP = 36.0          # °/s; points above it are drawn at the top and labelled
+
+
+def _csv_rows(pattern):
+    import glob
+    out = []
+    for p in sorted(glob.glob(os.path.join(ROOT, pattern))):
+        out += list(csv.DictReader(open(p)))
+    return out
+
+
+def sensitivity_data():
+    """{panel: {value: {'real'|'syn': (err, |r|)}}} and the no-anchor point.
+    'kappa' is delta_FR / delta_anchor over the grid, averaged over the
+    settings that share it (they agree to 0.1 °/s and 0.01 in |r|)."""
+    def mean(rows):
+        out = {}
+        for kind, seqs in (('real', SENS_REAL), ('syn', SENS_SYN)):
+            sel = [r for r in rows if r['sequence'] in seqs]
+            if sel:
+                out[kind] = (np.mean([float(r['err']) for r in sel]),
+                             np.mean([float(r['recon_mean']) for r in sel]))
+        return out
+    data = {}
+    grid = [r for r in _csv_rows('experiments/grid/*.csv') if r['model'] == 'thesis_cmax']
+    by_k = {}
+    for r in grid:
+        by_k.setdefault(round(float(r['delta_FR']) / float(r['delta_IMU']), 4), []).append(r)
+    data['kappa'] = {k: mean(v) for k, v in sorted(by_k.items())}
+    sens = [r for r in _csv_rows('experiments/sens/sens_*.csv') if r['model'] == 'thesis_cmax']
+    for key, _ in SENS_AXES + [('delta_IMU', '')]:
+        by_v = {}
+        for r in sens:
+            if all(abs(float(r[k]) - v) < 1e-9 for k, v in SENS_BASE.items() if k != key):
+                by_v.setdefault(float(r[key]), []).append(r)
+        data[key] = {v: mean(rs) for v, rs in sorted(by_v.items())}
+    no_anchor = data.pop('delta_IMU').get(0.0)          # delta_anchor = 0 is thesis
+    return data, no_anchor
+
+
+def fig_sensitivity(E):
+    data, no_anchor = sensitivity_data()
+    name, col = MODELS['thesis_cmax']
+    style = {'real': dict(ls='-', marker='o', mfc=col, label='real (mean of 3)'),
+             'syn': dict(ls='--', marker='o', mfc='white', label='synthetic (mean of 2)')}
+    panels = [('kappa', r'$\kappa=\delta_{FR}/\delta_{\mathrm{anchor}}$')] + SENS_AXES
+    adopted = {'kappa': SENS_BASE['delta_FR'] / SENS_BASE['delta_IMU'], **SENS_BASE}
+    INF = 12.0                                  # x position of the no-anchor point (kappa = inf)
+    with use_style('paper'):
+        fig, axes = plt.subplots(2, len(panels), figsize=(PAPER_WIDE, 3.0), sharey='row',
+                                 gridspec_kw={'width_ratios': [1.6] + [1] * len(SENS_AXES)})
+        for c, (key, xlabel) in enumerate(panels):
+            ax_e, ax_r = axes[0, c], axes[1, c]
+            pts = data.get(key, {})
+            for kind in ('real', 'syn'):
+                xs = [v for v in pts if kind in pts[v]]
+                for ax, j in ((ax_e, 0), (ax_r, 1)):
+                    ys = np.array([pts[v][kind][j] for v in xs])
+                    shown = np.minimum(ys, SENS_ERR_TOP) if j == 0 else ys
+                    ax.plot(xs, shown, color=col, lw=1.0, ms=3.2, mec=col, mew=0.8,
+                            **{k: v for k, v in style[kind].items() if k != 'label'},
+                            label=style[kind]['label'] if c == 0 and j == 0 else None)
+                    for x, y in zip(xs, ys):
+                        if j == 0 and y > SENS_ERR_TOP:
+                            ax.annotate(f'{y:.0f}', (x, SENS_ERR_TOP), xytext=(3, -8),
+                                        textcoords='offset points', fontsize=6.5)
+                if key == 'kappa' and no_anchor and kind in no_anchor:
+                    e, r = no_anchor[kind]
+                    ax_e.plot([INF], [min(e, SENS_ERR_TOP)], color=col, ls='none', mew=0.8,
+                              mec=col, ms=3.2, **{k: v for k, v in style[kind].items()
+                                                  if k in ('marker', 'mfc')})
+                    ax_r.plot([INF], [r], color=col, ls='none', mew=0.8, mec=col, ms=3.2,
+                              **{k: v for k, v in style[kind].items() if k in ('marker', 'mfc')})
+            for ax in (ax_e, ax_r):
+                ax.set_xscale('log')
+                ax.axvline(adopted[key], color=NEUTRAL_COLOR, lw=0.8, ls=':', zorder=0)
+                ax.minorticks_off()
+            vals = sorted(pts) + ([INF] if key == 'kappa' else [])
+            ticks = vals if len(vals) <= 5 else [vals[0], adopted[key], vals[-1]]
+            if key == 'kappa':
+                ticks = [0.02, 0.2, 1, 5, INF]
+            elif key == 'delta_VFG':
+                ticks = [0.03, 0.12, 0.48]
+            lab = lambda v: r'$\infty$' if v == INF else (f'{v:g}' if v >= 0.1 or key == 'dt_ms'
+                                                          else f'{v:g}'.lstrip('0'))
+            ax_r.set_xticks(ticks)
+            ax_r.set_xticklabels([lab(v) for v in ticks], fontsize=7)
+            ax_e.set_xticks(ticks)
+            ax_e.set_xticklabels([])
+            ax_r.set_xlabel(xlabel, fontsize=7.5)
+        axes[0, 0].set_ylim(0, SENS_ERR_TOP)
+        axes[1, 0].set_ylim(0, 0.62)
+        axes[0, 0].set_ylabel(r'$\omega$ error (°/s)')
+        axes[1, 0].set_ylabel(r'$|r|$ of the read-out')
+        if no_anchor:
+            e = '/'.join(f"{no_anchor[k][0]:.0f}" for k in ('real', 'syn') if k in no_anchor)
+            axes[0, 0].annotate(e, (INF, SENS_ERR_TOP), xytext=(-4, -9), ha='right',
+                                textcoords='offset points', fontsize=6.5)
+        fig.legend(*axes[0, 0].get_legend_handles_labels(), loc='outside upper center',
+                   ncol=2, fontsize=7.5, handlelength=2.4)
+        save(fig, os.path.join(FIG, 'fig_sensitivity.png'))
+    print('  wrote fig_sensitivity.pdf / .png')
 
 
 FIGURES = {'beta_speed': fig_beta_speed, 'tracking': fig_tracking,
            'maps': fig_maps, 'appendix': fig_appendix, 'cmax_baseline': fig_cmax_baseline,
            'distortion': fig_distortion, 'converge': fig_converge, 'recon': fig_recon,
            'dissociation': fig_dissociation, 'regularisers': fig_regularisers,
-           'image_settings': fig_image_settings}
+           'image_settings': fig_image_settings, 'sensitivity': fig_sensitivity}
 
 
 def main():

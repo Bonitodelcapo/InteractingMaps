@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+ecrot_bicycle,seg_A,thesis_cmax_v2,48.82,44.51,25.93,1.091,0.179,0.033,0.0,0.68,0.29,2253

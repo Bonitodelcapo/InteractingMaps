@@ -46,8 +46,8 @@ _BASE = {'axes.grid': True, 'grid.alpha': 0.3, 'axes.spines.top': False,
          'mathtext.fontset': 'stix',
          'figure.constrained_layout.use': True}
 _PRESETS = {
-    'paper':  {'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 8,
-               'legend.fontsize': 7, 'xtick.labelsize': 7, 'ytick.labelsize': 7},
+    'paper':  {'font.size': 9, 'axes.labelsize': 9, 'axes.titlesize': 9,
+               'legend.fontsize': 8, 'xtick.labelsize': 8, 'ytick.labelsize': 8},
     'screen': {'font.size': 10, 'axes.labelsize': 10, 'axes.titlesize': 10,
                'legend.fontsize': 9, 'xtick.labelsize': 9, 'ytick.labelsize': 9},
 }

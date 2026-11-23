@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+dynamic_rotation,seg_D,thesis_cmax,9.56,8.79,12.49,0.862,0.2934,0.2074,0.0267,7.23,9.73,233

@@ -75,6 +75,7 @@ PYTHONPATH=. python tests/test_cmax_frontend.py      # CMax step-1a validation v
 PYTHONPATH=. python tests/test_distortion_cmax.py
 PYTHONPATH=. python tests/test_ecrot_convert.py      # ROSbag converter on a tiny synthetic bag
 PYTHONPATH=. python tests/test_cmax_v1_vs_v2.py
+PYTHONPATH=. python tests/test_cmax_gradient.py      # analytic contrast gradient vs finite differences
 ```
 
 ## Configuration lives in config.py
@@ -104,15 +105,16 @@ Two global switches control the model (both documented in architecture.md §6.2/
 The LaTeX report (`report/bare_jrnl.tex`) is driven by `report/run_all.sh`
 (guide: [report/RUN_ALL.md](report/RUN_ALL.md)), run from the repo root. It runs
 every job in parallel, skips the ones whose code, data and command are unchanged,
-then draws and tabulates. Three scripts, one job each:
+then draws and tabulates. Four scripts, one job each:
 
 ```bash
 python report/run_experiments.py --what main     # runs (one --what per experiment)
 python report/make_figures.py                     # draws every report figure
 python report/make_tables.py                      # writes every table, table_<name>.tex
+python report/text_numbers.py                     # every number in the text no table holds
 ```
 
-`report/report_runs.py` holds what the three must agree on: the Table II
+`report/report_runs.py` holds what the four must agree on: the Table II
 segments, where each run's folder is, the APS lookup and the image-settings
 search. Figures use the report's font (Times, `interacting_maps/style.py`).
 

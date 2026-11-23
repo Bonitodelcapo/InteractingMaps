@@ -1,0 +1,299 @@
+
+== Evaluation: the gyroscope against a one-frame and a +-50 ms reference (75 frames)
+boxes_rotation seg_B: gyro vs one-frame reference 11.52 deg/s, vs +-50 ms  6.25
+poster_rotatio seg_C: gyro vs one-frame reference 18.92 deg/s, vs +-50 ms  8.78
+dynamic_rotati seg_D: gyro vs one-frame reference  9.56 deg/s, vs +-50 ms  7.23
+boxes_rotation seg_A: gyro vs one-frame reference 17.01 deg/s, vs +-50 ms  9.49
+boxes_rotation seg_C: gyro vs one-frame reference 11.54 deg/s, vs +-50 ms  6.28
+boxes_rotation seg_D: gyro vs one-frame reference 13.40 deg/s, vs +-50 ms  7.63
+poster_rotatio seg_A: gyro vs one-frame reference 22.20 deg/s, vs +-50 ms 10.64
+poster_rotatio seg_D: gyro vs one-frame reference  7.68 deg/s, vs +-50 ms  5.20
+ecrot_bicycle  seg_A: gyro vs one-frame reference  0.07 deg/s, vs +-50 ms  0.68
+ecrot_street   seg_A: gyro vs one-frame reference  0.07 deg/s, vs +-50 ms  0.68
+
+== Evaluation: gyroscope speed of every candidate segment over 150 frames (* = reported)
+boxes_rotation seg_A  mean |w|   70.3 deg/s, std/mean 0.49, range   4.1-156.5
+boxes_rotation seg_B* mean |w|   51.7 deg/s, std/mean 0.59, range   1.9-135.3
+boxes_rotation seg_C  mean |w|   36.3 deg/s, std/mean 0.50, range   2.4- 85.0
+boxes_rotation seg_D  mean |w|   32.4 deg/s, std/mean 0.49, range   3.7- 72.8
+   median-speed segment(s): seg_C, seg_B; reported: seg_B
+poster_rotatio seg_A  mean |w|   96.9 deg/s, std/mean 0.73, range   1.6-237.1
+poster_rotatio seg_B  mean |w|  115.0 deg/s, std/mean 0.39, range   3.8-201.6
+poster_rotatio seg_C* mean |w|   53.3 deg/s, std/mean 0.46, range   1.7-108.4
+poster_rotatio seg_D  mean |w|   24.9 deg/s, std/mean 0.47, range   2.2- 49.5
+poster_rotatio seg_E  mean |w|   30.5 deg/s, std/mean 0.42, range   3.6- 60.5
+   median-speed segment(s): seg_C; reported: seg_C
+dynamic_rotati seg_A  mean |w|  108.9 deg/s, std/mean 0.48, range   7.1-238.3
+dynamic_rotati seg_B  mean |w|  136.9 deg/s, std/mean 0.42, range  12.3-273.5
+dynamic_rotati seg_C  mean |w|   78.5 deg/s, std/mean 0.39, range   4.1-145.4
+dynamic_rotati seg_D* mean |w|   43.7 deg/s, std/mean 0.46, range   3.4- 96.6
+   median-speed segment(s): seg_C, seg_A; reported: seg_D
+
+== Comparison: unanchored models (cook, thesis), 1.5 s runs of Table main
+boxes    cook    |w| within   2.4% of frame 0, direction within   3.6 deg; frame 0 |w|/gyro = 0.999; last/first |w| = 0.976
+boxes    thesis  |w| within   7.5% of frame 0, direction within   5.3 deg; frame 0 |w|/gyro = 0.822; last/first |w| = 0.925
+boxes    reference: axis turns up to 178.4 deg, speed 0.08-1.44 rad/s
+poster   cook    |w| within   0.8% of frame 0, direction within   1.2 deg; frame 0 |w|/gyro = 1.000; last/first |w| = 1.008
+poster   thesis  |w| within   7.6% of frame 0, direction within   4.2 deg; frame 0 |w|/gyro = 0.858; last/first |w| = 0.924
+poster   reference: axis turns up to 174.8 deg, speed 0.13-1.56 rad/s
+dynamic  cook    |w| within   8.8% of frame 0, direction within   3.4 deg; frame 0 |w|/gyro = 0.997; last/first |w| = 0.912
+dynamic  thesis  |w| within  23.8% of frame 0, direction within  10.0 deg; frame 0 |w|/gyro = 0.954; last/first |w| = 0.762
+dynamic  reference: axis turns up to 167.2 deg, speed 0.06-1.21 rad/s
+bicycle  cook    |w| within  98.7% of frame 0, direction within 163.2 deg; frame 0 |w|/gyro = 0.293; last/first |w| = 0.014
+bicycle  thesis  |w| within  17.7% of frame 0, direction within   2.8 deg; frame 0 |w|/gyro = 0.461; last/first |w| = 0.827
+bicycle  reference: axis turns up to  66.0 deg, speed 0.92-1.66 rad/s
+street   cook    |w| within  99.4% of frame 0, direction within 134.7 deg; frame 0 |w|/gyro = 0.293; last/first |w| = 0.007
+street   thesis  |w| within  13.4% of frame 0, direction within   7.9 deg; frame 0 |w|/gyro = 0.461; last/first |w| = 0.883
+street   reference: axis turns up to  66.0 deg, speed 0.92-1.66 rad/s
+
+== Comparison: the frame of largest CMax-anchor error on each real segment
+boxes    frame 33: |w_ref| = 0.083 rad/s (dominant axis reverses within 3 frames; 4 frames of the track at <= 0.2 rad/s); err CMax-anchor  122.2, thesis+IMU  3.3 deg/s; mean without it: CMax-anchor  5.73, thesis+IMU  5.87, gap -0.14 (all frames: gap  1.44)
+poster   frame 43: |w_ref| = 0.201 rad/s (dominant axis reverses within 3 frames; 1 frames of the track at <= 0.2 rad/s); err CMax-anchor   53.6, thesis+IMU  4.5 deg/s; mean without it: CMax-anchor 10.48, thesis+IMU  8.74, gap  1.74 (all frames: gap  2.37)
+dynamic  frame 38: |w_ref| = 0.186 rad/s (dominant axis reverses within 3 frames; 7 frames of the track at <= 0.2 rad/s); err CMax-anchor   50.2, thesis+IMU  2.9 deg/s; mean without it: CMax-anchor  9.01, thesis+IMU  7.11, gap  1.90 (all frames: gap  2.51)
+
+== Comparison: the two anchors at every anchor weight (sens sweep, 1.5 s)
+boxes    CMax minus gyro: 0.1: +0.6, 0.3: +1.1, 0.5: +1.4, 0.7: +1.6, 0.9: +1.7;  no anchor: 49.0
+poster   CMax minus gyro: 0.1: -1.6, 0.3: +1.0, 0.5: +2.4, 0.7: +3.1, 0.9: +3.5;  no anchor: 54.2
+dynamic  CMax minus gyro: 0.1: +0.6, 0.3: +1.9, 0.5: +2.5, 0.7: +2.8, 0.9: +3.0;  no anchor: 43.3
+bicycle  CMax minus gyro: 0.1: +0.5, 0.3: +0.7, 0.5: +0.8, 0.7: +0.9, 0.9: +1.0;  no anchor: 52.4
+street   CMax minus gyro: 0.1: +0.5, 0.3: +0.7, 0.5: +0.8, 0.7: +0.9, 0.9: +1.0;  no anchor: 51.2
+largest |CMax - gyro| on the real sequences: 3.5 deg/s
+
+== Comparison: the poster segments, 3 s (fastest-segment gap, error relative to speed)
+boxes_ seg_A: |w| 1.21 rad/s; CMax-anchor 10.96 deg/s = 15.8% of |w|; gyro floor 9.89 = 14.2%
+boxes_ seg_B: |w| 0.88 rad/s; CMax-anchor  9.05 deg/s = 18.0% of |w|; gyro floor 6.73 = 13.4%
+boxes_ seg_C: |w| 0.61 rad/s; CMax-anchor  7.73 deg/s = 22.0% of |w|; gyro floor 6.24 = 17.8%
+boxes_ seg_D: |w| 0.55 rad/s; CMax-anchor  8.50 deg/s = 26.9% of |w|; gyro floor 7.16 = 22.6%
+poster seg_A: |w| 1.67 rad/s; CMax-anchor 16.46 deg/s = 17.2% of |w|; gyro floor 11.59 = 12.1%; thesis+IMU 11.78, gap 4.68
+poster seg_C: |w| 0.91 rad/s; CMax-anchor 11.32 deg/s = 21.8% of |w|; gyro floor 9.04 = 17.4%; thesis+IMU  8.85, gap 2.47
+poster seg_D: |w| 0.42 rad/s; CMax-anchor  8.52 deg/s = 35.2% of |w|; gyro floor 5.51 = 22.8%; thesis+IMU  5.44, gap 3.07
+
+== Comparison: CMax-inloop omega in runs that differ only in the maps
+boxes    curl 0 vs 0.6 (1.5 s): max |dw| = 0.00e+00 rad/s
+poster   curl 0 vs 0.6 (1.5 s): max |dw| = 0.00e+00 rad/s
+dynamic  curl 0 vs 0.6 (1.5 s): max |dw| = 0.00e+00 rad/s
+bicycle  curl 0 vs 0.6 (1.5 s): max |dw| = 0.00e+00 rad/s
+street   curl 0 vs 0.6 (1.5 s): max |dw| = 0.00e+00 rad/s
+boxes_ seg_B: dFR 0.5 vs 0.1 (3 s): max |dw| = 0.00e+00 rad/s
+poster seg_C: dFR 0.5 vs 0.1 (3 s): max |dw| = 0.00e+00 rad/s
+
+== What the maps add: network against its own anchor (baseline, 1.5 s)
+boxes    CMax alone 8.41 (median 5.72), network 7.28 (median 5.23): mean +13%, median +9%
+poster   CMax alone 13.86 (median 12.09), network 11.06 (median 9.53): mean +20%, median +21%
+dynamic  CMax alone 10.96 (median 10.40), network 9.56 (median 8.79): mean +13%, median +15%
+bicycle  CMax alone 2.44 (median 2.12), network 7.14 (median 6.55): mean -193%, median -209%
+street   CMax alone 2.42 (median 2.17), network 7.09 (median 6.95): mean -193%, median -220%
+delta_VFG (CMax-anchor):
+  boxes    at 0.03: err 8.36 vs CMax alone 8.41 (diff -0.05); dir range 0.07 deg; beta 0.92 -> 1.01; at 0.48 +15% vs CMax alone
+  poster   at 0.03: err 13.81 vs CMax alone 13.86 (diff -0.05); dir range 0.07 deg; beta 0.84 -> 0.95; at 0.48 +37% vs CMax alone
+  dynamic  at 0.03: err 10.92 vs CMax alone 10.96 (diff -0.04); dir range 0.05 deg; beta 0.83 -> 0.93; at 0.48 +26% vs CMax alone
+  bicycle  at 0.03: err 2.45 vs CMax alone 2.44 (diff +0.01); dir range 0.35 deg; beta 1.01 -> 1.17; at 0.48 -361% vs CMax alone
+  street   at 0.03: err 2.43 vs CMax alone 2.42 (diff +0.01); dir range 0.50 deg; beta 1.01 -> 1.17; at 0.48 -366% vs CMax alone
+
+== What the maps add: kappa in the one-at-a-time sweep
+boxes    anchor 0.1 vs dFR 0.5 (kappa 1): 7.72 vs 7.76; beta over dFR 0.02-0.9: 0.93 -> 1.05, rises at every step
+poster   anchor 0.1 vs dFR 0.5 (kappa 1): 9.44 vs 9.50; beta over dFR 0.02-0.9: 0.85 -> 1.08, rises at every step
+dynamic  anchor 0.1 vs dFR 0.5 (kappa 1): 8.32 vs 8.42; beta over dFR 0.02-0.9: 0.84 -> 0.96, rises at every step
+bicycle  anchor 0.1 vs dFR 0.5 (kappa 1): 20.46 vs 20.47; beta over dFR 0.02-0.9: 1.02 -> 1.51, rises at every step
+street   anchor 0.1 vs dFR 0.5 (kappa 1): 20.49 vs 20.50; beta over dFR 0.02-0.9: 1.02 -> 1.51, rises at every step
+
+== What the maps add: beta against speed, seven segments, 3 s (fig_beta_speed)
+thesis_cmax dFR 0.5 anchor 0.3: r = +0.96 (p = 0.000661, n = 7), beta 0.80-1.18, beta at slowest 0.80, at fastest 1.18; speeds 0.42-1.67 rad/s
+thesis_cmax dFR 0.1 anchor 0.5: r = +0.60 (p = 0.157, n = 7), beta 0.79-0.97, beta at slowest 0.79, at fastest 0.89; speeds 0.42-1.67 rad/s
+thesis_cmax_v2 dFR 0.5 anchor None: r = -0.47 (p = 0.287, n = 7), beta 0.77-1.05, beta at slowest 0.80, at fastest 0.77; speeds 0.42-1.67 rad/s
+original fit predicts beta 1.09 at the synthetic 1.32 rad/s
+boxes_ seg_A: dir CMax-anchor 10.2 / 11.1, CMax-inloop 15.9; err CMax-anchor 13.0 / 11.0, CMax-inloop 15.2 (original / adopted)
+boxes_ seg_B: dir CMax-anchor 10.4 / 10.7, CMax-inloop 16.9; err CMax-anchor 10.5 / 9.1, CMax-inloop 10.5 (original / adopted)
+boxes_ seg_C: dir CMax-anchor 16.1 / 16.6, CMax-inloop 17.1; err CMax-anchor 7.5 / 7.7, CMax-inloop 9.4 (original / adopted)
+boxes_ seg_D: dir CMax-anchor 11.9 / 13.1, CMax-inloop 15.9; err CMax-anchor 7.8 / 8.5, CMax-inloop 9.1 (original / adopted)
+poster seg_A: dir CMax-anchor 19.4 / 19.3, CMax-inloop 33.9; err CMax-anchor 32.8 / 16.5, CMax-inloop 24.0 (original / adopted)
+poster seg_C: dir CMax-anchor 12.5 / 12.3, CMax-inloop 16.6; err CMax-anchor 11.4 / 11.3, CMax-inloop 13.4 (original / adopted)
+poster seg_D: dir CMax-anchor 12.2 / 13.5, CMax-inloop 14.3; err CMax-anchor 7.5 / 8.5, CMax-inloop 8.9 (original / adopted)
+
+== What the maps add: synthetic beta at the original step sizes (sweep base point, 3 s)
+bicycle  dFR 0.5 anchor 0.3: beta 1.485, err 25.71
+street   dFR 0.5 anchor 0.3: beta 1.482, err 25.61
+
+== Sensitivity: the 5x5 grid of delta_FR and delta_anchor (CMax-anchor, 1.5 s)
+boxes    best kappa 0.429 (6.94); smallest kappa 0.022 (8.24); adopted 7.28; kappa 0.6 (0.3/0.5) 7.09; start (0.5/0.3) 8.65; equal-kappa spread 0.04
+poster   best kappa 0.6 (9.02); smallest kappa 0.022 (13.47); adopted 11.06; kappa 0.6 (0.3/0.5) 9.02; start (0.5/0.3) 11.26; equal-kappa spread 0.06
+dynamic  best kappa 1 (8.38); smallest kappa 0.022 (10.77); adopted 9.56; kappa 0.6 (0.3/0.5) 8.48; start (0.5/0.3) 8.71; equal-kappa spread 0.10
+bicycle  best kappa 0.022 (2.69); smallest kappa 0.022 (2.69) error rises with kappa throughout; adopted 7.14; kappa 0.6 (0.3/0.5) 15.34; start (0.5/0.3) 25.72; equal-kappa spread 0.01
+street   best kappa 0.022 (2.67); smallest kappa 0.022 (2.67) error rises with kappa throughout; adopted 7.09; kappa 0.6 (0.3/0.5) 15.33; start (0.5/0.3) 25.78; equal-kappa spread 0.01
+largest spread between settings of equal kappa: 0.10 deg/s
+real mean: adopted 9.30, start 9.54, kappa 0.6 8.20
+synthetic mean: adopted 7.12, start 25.75, kappa 0.6 15.34
+
+== Sensitivity: which end of each range is best (one-at-a-time sweep, CMax-anchor)
+delta_FR   boxes best 0.3 (range 1.69); poster best 0.3 (range 4.14); dynamic best 0.5 (range 2.20); bicycle best 0.02 (range 23.46); street best 0.02 (range 23.57)
+delta_IMU  boxes best 0.3 (range 0.74); poster best 0.1 (range 2.67); dynamic best 0.1 (range 1.77); bicycle best 0.9 (range 15.69); street best 0.9 (range 15.76)
+delta_VFG  boxes best 0.24 (range 1.43); poster best 0.48 (range 5.05); dynamic best 0.48 (range 2.85); bicycle best 0.03 (range 8.80); street best 0.03 (range 8.84)
+delta_RF   boxes best 0.01 (range 0.86); poster best 0.01 (range 1.88); dynamic best 0.01 (range 0.85); bicycle best 0.2 (range 3.03); street best 0.2 (range 3.04)
+delta_IG   boxes best 0.4 (range 0.18); poster best 0.4 (range 0.46); dynamic best 0.4 (range 0.36); bicycle best 0.03 (range 0.51); street best 0.03 (range 0.51)
+delta_GI   boxes best 0.2 (range 0.09); poster best 0.2 (range 0.11); dynamic best 0.2 (range 0.17); bicycle best 0.02 (range 0.24); street best 0.02 (range 0.49)
+n_iters    boxes best 25 (range 0.14); poster best 150 (range 0.16); dynamic best 25 (range 0.18); bicycle best 25 (range 0.14); street best 25 (range 0.18)
+dt_ms      boxes best 40 (range 39.58); poster best 40 (range 15.71); dynamic best 40 (range 26.37); bicycle best 40 (range 67.21); street best 40 (range 62.54)
+
+== Sensitivity: anchor weight (sens sweep, 1.5 s)
+thesis_cmax boxes    0: 49.0, 0.1: 7.7, 0.3: 7.0, 0.5: 7.3, 0.7: 7.5, 0.9: 7.7
+thesis_cmax poster   0: 54.2, 0.1: 9.4, 0.3: 9.9, 0.5: 11.1, 0.7: 11.7, 0.9: 12.1
+thesis_cmax dynamic  0: 43.3, 0.1: 8.3, 0.3: 9.0, 0.5: 9.6, 0.7: 9.9, 0.9: 10.1
+thesis_cmax bicycle  0: 52.4, 0.1: 20.5, 0.3: 10.3, 0.5: 7.1, 0.7: 5.6, 0.9: 4.8
+thesis_cmax street   0: 51.2, 0.1: 20.5, 0.3: 10.3, 0.5: 7.1, 0.7: 5.6, 0.9: 4.7
+thesis_imu  boxes    0.1: 7.1, 0.3: 5.8, 0.5: 5.8, 0.7: 5.9, 0.9: 5.9
+thesis_imu  poster   0.1: 11.1, 0.3: 8.9, 0.5: 8.7, 0.7: 8.6, 0.9: 8.6
+thesis_imu  dynamic  0.1: 7.7, 0.3: 7.1, 0.5: 7.0, 0.7: 7.1, 0.9: 7.1
+thesis_imu  bicycle  0.1: 20.0, 0.3: 9.6, 0.5: 6.3, 0.7: 4.7, 0.9: 3.8
+thesis_imu  street   0.1: 20.0, 0.3: 9.6, 0.5: 6.3, 0.7: 4.7, 0.9: 3.8
+thesis_cmax synthetic mean: 0: 51.8, 0.1: 20.5, 0.3: 10.3, 0.5: 7.1, 0.7: 5.6, 0.9: 4.8
+thesis_imu synthetic mean: 0.1: 20.0, 0.3: 9.6, 0.5: 6.3, 0.7: 4.7, 0.9: 3.8
+
+== Sensitivity: delta_GI and the reconstruction; the accumulation window
+delta_GI 0.02 -> 0.2: |r| boxes 0.41->0.49, poster 0.18->0.22, dynamic 0.29->0.44, bicycle 0.13->0.15, street 0.33->0.39; mean 0.27 -> 0.34; curl share on the real ones 11% -> 7%
+iterations per frame (err deg/s | read-out |r| | in-loop |r|):
+  boxes    25:  7.14 0.41 0.14 | 50:  7.26 0.39 0.18 | 75:  7.28 0.41 0.21 | 150:  7.25 0.38 0.26
+  poster   25: 11.07 0.20 0.10 | 50: 11.08 0.19 0.13 | 75: 11.06 0.19 0.14 | 150: 10.92 0.20 0.18
+  dynamic  25:  9.38 0.29 0.13 | 50:  9.52 0.32 0.17 | 75:  9.56 0.29 0.21 | 150:  9.54 0.33 0.27
+  bicycle  25:  7.03 0.13 0.02 | 50:  7.11 0.12 0.03 | 75:  7.14 0.13 0.04 | 150:  7.17 0.12 0.05
+  street   25:  6.96 0.35 0.05 | 50:  7.07 0.30 0.07 | 75:  7.09 0.32 0.08 | 150:  7.14 0.31 0.11
+  largest change over the iteration counts: err 0.18 deg/s, read-out |r| 0.046; in-loop |r| rises with the count on every sequence: True
+dt 5 ms real     : err   34.8, beta     0.776, |r| 0.41, curl share boxes 6%, poster 5%, dynamic 20%
+dt 5 ms synthetic: err   71.8, beta  1.97e+04, |r| 0.06, curl share bicycle 0%, street 0%
+dt 10 ms real     : err   14.3, beta     0.841, |r| 0.49, curl share boxes 3%, poster 8%, dynamic 3%
+dt 10 ms synthetic: err   33.0, beta      1.01, |r| 0.51, curl share bicycle 6%, street 4%
+dt 20 ms real     : err    9.3, beta     0.896, |r| 0.30, curl share boxes 6%, poster 20%, dynamic 3%
+dt 20 ms synthetic: err    7.1, beta      1.09, |r| 0.23, curl share bicycle 29%, street 18%
+dt 40 ms real     : err    7.6, beta     0.911, |r| 0.12, curl share boxes 13%, poster 6%, dynamic 12%
+dt 40 ms synthetic: err    6.9, beta       1.1, |r| 0.14, curl share bicycle 31%, street 30%
+
+== Intensity: poster track of the anchored and the unanchored network (1.5 s)
+CMax-anchor I std 0.03-1.59; thesis (no anchor) 0.02-0.05
+CMax-anchor omega error on the 13 frames with I std above 5x its median 11.2 deg/s, on the other 62 frames 11.0 deg/s
+CMax-anchor I std: median 0.10, above 5x the median at frames 56-68, peak 1.59 at frame 61
+CMax-anchor |r|: highest at frame 43 (0.75), track mean 0.19
+frames with I std above 5x its median, per model (Table main runs, 1.5 s):
+  boxes    cook 0/75, thesis 0/75, thesis_imu 3/75, thesis_cmax 4/75, thesis_cmax_v2 3/75
+  poster   cook 0/75, thesis 0/75, thesis_imu 8/75, thesis_cmax 13/75, thesis_cmax_v2 10/75
+  dynamic  cook 0/75, thesis 0/75, thesis_imu 0/75, thesis_cmax 2/75, thesis_cmax_v2 3/75
+  bicycle  cook 0/75, thesis 0/75, thesis_imu 0/75, thesis_cmax 0/75, thesis_cmax_v2 0/75
+  street   cook 0/75, thesis 0/75, thesis_imu 0/75, thesis_cmax 0/75, thesis_cmax_v2 0/75
+mean |r| over the five models: highest at frame 43
+curl share of G, CMax-anchor at the adopted configuration (sens base point):
+  boxes    6%
+  poster   20%
+  dynamic  3%
+  bicycle  29%
+  street   18%
+image travel per 20 ms window, centre pixel (real): 3.4 px
+image travel per 20 ms window, centre pixel (synthetic): 5.0 px
+
+== Intensity: 10 against 20 ms on the same read-outs (readout jobs)
+iterative: 10 ms better on 11/12 runs; mean 0.13 -> 0.28
+fft      : 10 ms better on 12/12 runs; mean 0.28 -> 0.55
+dct      : 10 ms better on 10/12 runs; mean 0.25 -> 0.31
+20 ms: fft beats iterative on 10/12
+20 ms: dct beats iterative on 10/12
+20 ms: fft beats dct on 7/12
+10 ms: fft beats iterative on 11/12
+10 ms: dct beats iterative on 5/12
+10 ms: fft beats dct on 11/12
+
+== Intensity update: iterative, fft and dct inside the loop (poisson job)
+poster   iterative (3.0 s): err 11.32, low-freq share of the final I 0.111, track-mean |r| in-loop 0.19 read-out 0.30, median I std 0.09, blow-up 0.12
+poster   fft       (3.0 s): err 11.31, low-freq share of the final I 0.229, track-mean |r| in-loop 0.41 read-out 0.31, median I std 0.14, blow-up 0.31
+poster   dct       (3.0 s): err 11.33, low-freq share of the final I 0.396, track-mean |r| in-loop 0.21 read-out 0.24, median I std 0.90, blow-up 0.16
+poster   APS frame at the end of the track: low-freq share 0.164
+bicycle  iterative (3.0 s): err 7.22, low-freq share of the final I 0.021, track-mean |r| in-loop 0.03 read-out 0.15, median I std 0.42, blow-up 0.00
+bicycle  fft       (3.0 s): err 7.29, low-freq share of the final I 0.218, track-mean |r| in-loop 0.11 read-out 0.12, median I std 2.42, blow-up 0.00
+bicycle  dct       (3.0 s): err 7.28, low-freq share of the final I 0.265, track-mean |r| in-loop 0.19 read-out 0.13, median I std 2.66, blow-up 0.00
+
+== Regularisation: each term alone, per sequence (ablation job)
+boxes    none       err   7.28  |r| read-out 0.409  in-loop 0.210  blow-up 0.05  curl share 0.06
+boxes    shrinkI=1  err   7.30  |r| read-out 0.419  in-loop 0.133  blow-up 0.01  curl share 0.12
+boxes    map=0.01   err   7.29  |r| read-out 0.416  in-loop 0.229  blow-up 0.01  curl share 0.08
+boxes    map=0.03   err   7.28  |r| read-out 0.397  in-loop 0.240  blow-up 0.00  curl share 0.14
+boxes    curl=0.3   err   7.16  |r| read-out 0.420  in-loop 0.221  blow-up 0.07  curl share 0.01
+boxes    curl=0.6   err   7.07  |r| read-out 0.508  in-loop 0.237  blow-up 0.03  curl share 0.00
+poster   none       err  11.06  |r| read-out 0.194  in-loop 0.143  blow-up 0.17  curl share 0.20
+poster   shrinkI=1  err  11.06  |r| read-out 0.200  in-loop 0.119  blow-up 0.16  curl share 0.49
+poster   map=0.01   err  11.07  |r| read-out 0.213  in-loop 0.183  blow-up 0.09  curl share 0.46
+poster   map=0.03   err  11.19  |r| read-out 0.214  in-loop 0.205  blow-up 0.00  curl share 0.42
+poster   curl=0.3   err  10.67  |r| read-out 0.181  in-loop 0.173  blow-up 0.24  curl share 0.82
+poster   curl=0.6   err  10.20  |r| read-out 0.271  in-loop 0.216  blow-up 0.16  curl share 0.96
+dynamic  none       err   9.56  |r| read-out 0.293  in-loop 0.207  blow-up 0.03  curl share 0.03
+dynamic  shrinkI=1  err   9.56  |r| read-out 0.294  in-loop 0.087  blow-up 0.03  curl share 0.11
+dynamic  map=0.01   err   9.54  |r| read-out 0.275  in-loop 0.220  blow-up 0.00  curl share 0.07
+dynamic  map=0.03   err   9.50  |r| read-out 0.264  in-loop 0.229  blow-up 0.00  curl share 0.16
+dynamic  curl=0.3   err   9.29  |r| read-out 0.352  in-loop 0.260  blow-up 0.00  curl share 0.00
+dynamic  curl=0.6   err   9.00  |r| read-out 0.413  in-loop 0.277  blow-up 0.00  curl share 0.00
+bicycle  none       err   7.14  |r| read-out 0.130  in-loop 0.036  blow-up 0.00  curl share 0.29
+bicycle  shrinkI=1  err   6.67  |r| read-out 0.136  in-loop 0.118  blow-up 0.00  curl share 0.43
+bicycle  map=0.01   err   6.97  |r| read-out 0.133  in-loop 0.054  blow-up 0.00  curl share 0.39
+bicycle  map=0.03   err   6.80  |r| read-out 0.134  in-loop 0.173  blow-up 0.00  curl share 0.44
+bicycle  curl=0.3   err   7.33  |r| read-out 0.159  in-loop 0.060  blow-up 0.00  curl share 0.36
+bicycle  curl=0.6   err   7.72  |r| read-out 0.217  in-loop 0.110  blow-up 0.00  curl share 0.56
+curl share of the final G, CMax-anchor, Table curl runs (none -> curl 0.6):
+  boxes    0.06 -> 0.00
+  poster   0.20 -> 0.96
+  dynamic  0.03 -> 0.00
+  bicycle  0.29 -> 0.56
+  street   0.18 -> 0.35
+
+== Track length: mean error [deg/s] and read-out |r| over the first N frames of the 3 s runs
+cook
+  boxes    0.5s   14.5 0.57  1.0s   43.8 0.62  1.5s   53.8 0.62  2.0s   51.5 0.59  3.0s   63.2 0.46
+  poster   0.5s   15.6 0.52  1.0s   26.7 0.56  1.5s   57.0 0.53  2.0s   53.5 0.52  3.0s   56.8 0.45
+  dynamic  0.5s   22.2 0.25  1.0s   34.1 0.35  1.5s   46.6 0.34  2.0s   41.7 0.32  3.0s   50.5 0.34
+  bicycle  0.5s   65.4 0.23  1.0s   69.7 0.20  1.5s   74.0 0.16  2.0s   76.2 0.15  3.0s   74.7 0.12
+  street   0.5s   64.8 0.17  1.0s   69.4 0.11  1.5s   73.8 0.09  2.0s   76.0 0.08  3.0s   74.6 0.09
+thesis
+  boxes    0.5s   21.2 0.56  1.0s   41.9 0.62  1.5s   49.0 0.63  2.0s   45.5 0.59  3.0s   57.4 0.46
+  poster   0.5s   22.4 0.52  1.0s   27.5 0.56  1.5s   54.2 0.53  2.0s   51.1 0.52  3.0s   53.2 0.45
+  dynamic  0.5s   23.6 0.27  1.0s   33.0 0.37  1.5s   43.3 0.36  2.0s   39.4 0.35  3.0s   47.1 0.37
+  bicycle  0.5s   41.8 0.63  1.0s   47.4 0.57  1.5s   52.4 0.60  2.0s   64.7 0.52  3.0s   74.0 0.53
+  street   0.5s   41.0 0.64  1.0s   46.1 0.64  1.5s   51.2 0.56  2.0s   64.3 0.45  3.0s   74.7 0.47
+thesis_imu
+  boxes    0.5s    5.6 0.22  1.0s    5.9 0.37  1.5s    5.8 0.45  2.0s    5.7 0.50  3.0s    6.5 0.50
+  poster   0.5s    7.6 0.13  1.0s    7.5 0.30  1.5s    8.7 0.26  2.0s    9.2 0.27  3.0s    8.9 0.35
+  dynamic  0.5s    6.1 0.26  1.0s    7.3 0.36  1.5s    7.0 0.35  2.0s    6.6 0.32  3.0s    8.0 0.33
+  bicycle  0.5s    5.4 0.15  1.0s    5.8 0.13  1.5s    6.3 0.13  2.0s    6.6 0.16  3.0s    6.5 0.16
+  street   0.5s    5.4 0.35  1.0s    5.8 0.37  1.5s    6.3 0.33  2.0s    6.6 0.31  3.0s    6.4 0.33
+thesis_cmax
+  boxes    0.5s    5.7 0.23  1.0s    8.1 0.36  1.5s    7.3 0.41  2.0s    9.1 0.45  3.0s    9.1 0.46
+  poster   0.5s   10.0 0.11  1.0s   10.8 0.25  1.5s   11.1 0.19  2.0s   12.0 0.21  3.0s   11.3 0.30
+  dynamic  0.5s    7.6 0.20  1.0s   10.3 0.30  1.5s    9.6 0.29  2.0s    9.2 0.27  3.0s   10.4 0.27
+  bicycle  0.5s    6.1 0.15  1.0s    6.8 0.13  1.5s    7.1 0.13  2.0s    7.4 0.15  3.0s    7.2 0.15
+  street   0.5s    6.1 0.35  1.0s    6.7 0.36  1.5s    7.1 0.32  2.0s    7.2 0.31  3.0s    7.1 0.32
+thesis_cmax_v2
+  boxes    0.5s    7.1 0.21  1.0s    7.8 0.35  1.5s    8.3 0.38  2.0s    8.8 0.43  3.0s   10.5 0.43
+  poster   0.5s   13.9 0.09  1.0s   12.7 0.22  1.5s   14.5 0.17  2.0s   14.8 0.18  3.0s   13.4 0.25
+  dynamic  0.5s   10.8 0.17  1.0s   12.1 0.27  1.5s   11.3 0.26  2.0s   11.0 0.24  3.0s   11.5 0.25
+  bicycle  0.5s   56.3 0.27  1.0s   41.8 0.19  1.5s   45.3 0.19  2.0s   50.0 0.20  3.0s   48.8 0.18
+  street   0.5s  457.3 0.21  1.0s  381.2 0.21  1.5s  399.8 0.18  2.0s  547.4 0.15  3.0s  795.0 0.13
+first 75 frames of the 3 s runs identical to the 1.5 s runs: 25 of 25
+anchored (thesis_imu, thesis_cmax), largest change of the error from 1.5 to 3 s: 1.8 deg/s
+order of the three anchored models the same at 0.5, 1.5 and 3 s on every sequence: True
+unanchored on the real sequences over 0.5 s: 14.5-23.6 deg/s
+unanchored on the real sequences over 1.5 s: 43.3-57.0 deg/s
+unanchored on the real sequences over 3 s: 47.1-63.2 deg/s
+unanchored direction error on the real sequences over 0.5 s: 6-20 deg
+unanchored direction error on the real sequences over 1.5 s: 76-85 deg
+unanchored error over 1.5 s as a share of the 3 s value, real sequences: at least 85%
+anchored read-out lowest over 0.5 s on every real sequence: True; largest change from 1.5 to 3 s 0.10
+best read-out over 3 s per sequence: boxes thesis_imu 0.50, poster thesis 0.45, dynamic thesis 0.37, bicycle thesis 0.53, street thesis 0.47
+sign changes of the dominant axis of the reference (run_experiments window): boxes 0.5 s 0, 1.5 s 2, 3.0 s 14; poster 0.5 s 0, 1.5 s 1, 3.0 s 14; dynamic 0.5 s 0, 1.5 s 1, 3.0 s 3
+
+== Image configuration: track-mean |r| of the read-out at 20 -> 10 ms, per sequence (best_image job)
+  boxes    thesis curl 0: 0.63 -> 0.59 | thesis curl 0.6: 0.65 -> 0.62 | thesis_cmax curl 0: 0.41 -> 0.59 | thesis_cmax curl 0.6: 0.51 -> 0.63
+  poster   thesis curl 0: 0.53 -> 0.50 | thesis curl 0.6: 0.55 -> 0.52 | thesis_cmax curl 0: 0.19 -> 0.46 | thesis_cmax curl 0.6: 0.27 -> 0.49
+  dynamic  thesis curl 0: 0.36 -> 0.32 | thesis curl 0.6: 0.38 -> 0.31 | thesis_cmax curl 0: 0.29 -> 0.43 | thesis_cmax curl 0.6: 0.41 -> 0.52
+  bicycle  thesis curl 0: 0.60 -> 0.57 | thesis curl 0.6: 0.64 -> 0.62 | thesis_cmax curl 0: 0.13 -> 0.54 | thesis_cmax curl 0.6: 0.22 -> 0.54
+  street   thesis curl 0: 0.56 -> 0.52 | thesis curl 0.6: 0.66 -> 0.61 | thesis_cmax curl 0: 0.32 -> 0.48 | thesis_cmax curl 0.6: 0.41 -> 0.52
+
+== Appendix: sign of the read-out at the frames shown, unanchored models
+boxes    cook    frame 74: signed r of the read-out +0.69, cosine between estimated and true omega +0.94
+boxes    thesis  frame 74: signed r of the read-out +0.70, cosine between estimated and true omega +0.93
+poster   cook    frame 43: signed r of the read-out -0.72, cosine between estimated and true omega -0.82
+poster   thesis  frame 43: signed r of the read-out -0.76, cosine between estimated and true omega -0.84
+dynamic  cook    frame 74: signed r of the read-out -0.26, cosine between estimated and true omega -0.73
+dynamic  thesis  frame 74: signed r of the read-out -0.27, cosine between estimated and true omega -0.64

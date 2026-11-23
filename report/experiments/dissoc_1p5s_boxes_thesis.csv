@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+boxes_rotation,seg_B,thesis,48.97,43.09,84.13,1.128,0.6263,0.2113,0.0,6.25,6.94,124

@@ -1,0 +1,2 @@
+sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
+boxes_rotation,seg_B,cook,53.78,42.5,84.31,0.89,0.6231,0.2343,0.0,6.25,6.94,121
