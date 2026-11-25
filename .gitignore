@@ -120,8 +120,8 @@ mlruns/
 mlartifacts/
 
 # exploratory runs: parameter searches, solver comparisons.
-# Anchored to the repo root -- report/experiments/ holds committed csv results
-# and an unanchored pattern would swallow those too.
+# Anchored to the repo root, so it matches only this folder and not
+# report/experiments/ (ignored separately below).
 /experiments/
 data/
 
@@ -265,9 +265,9 @@ report/logs/
 report/.stamps/
 run_all.out
 
-# report/experiments/ and report/figures/ are tracked: the PDF needs the
-# figures, and the tables are generated from the csv files there.
-report/experiments/_old/
+# report/figures/ is tracked: the PDF needs it. report/experiments/ is not:
+# run results live on each machine (cluster, laptop) and are never committed.
+report/experiments/
 EcRot_*/
 /diag_*.png
 /diag_*.csv

@@ -1,2 +1,0 @@
-sequence,segment,model,err,median,dir,beta,recon,recon_inloop,blowup,floor,floor_dir,secs
-ecrot_bicycle,seg_A,thesis_imu,6.31,6.13,1.0,1.088,0.1285,0.0354,0.0,0.68,0.29,100
