@@ -17,7 +17,7 @@ the thesis version (network_dissertation.py) which uses simultaneous updates.
 
 import numpy as np
 from .camera import (compute_calibration, build_kinematic_matrix,
-                     build_R_normal_equations, solve_R_lstsq, kinematic_residual,
+                     build_R_normal_equations, solve_R_lstsq,
                      CLIP_I, CLIP_G, CLIP_F)
 
 
@@ -286,7 +286,3 @@ class InteractingMaps:
     def residual_GI(self) -> float:
         """Mean absolute residual of the gradient constraint G = ∇I."""
         return float(np.mean(np.abs(self.G - self._grad_I())))
-
-    def residual_FCR(self) -> float:
-        """Mean absolute residual of the kinematic constraint F = C·R."""
-        return kinematic_residual(self._C_mat, self.F, self.R)
