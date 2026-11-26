@@ -100,7 +100,11 @@ def _draw_curve(ax, runs, name, k):
         for r in runs:
             y = r.curves().get(name)
             if y is not None:
-                draw_series(ax, r.times, y, name, model=r.label)
+                if getattr(r, 'color', None):
+                    draw_series(ax, r.times, y, name, label=r.display)
+                    ax.lines[-1].set_color(r.color)
+                else:
+                    draw_series(ax, r.times, y, name, model=r.label)
     ax.axvline(runs[0].times[k], color='k', lw=0.8, ls='--')
     ax.set_xlim(0, runs[0].n_frames * runs[0].dt)
 
@@ -132,7 +136,7 @@ def draw_inspector(runs, k, it=None, panels=MAP_KINDS, curves=('err_deg_s', 'bet
                 draw_map(ax, kind, maps[kind], title=f'{kind} {note}'.strip(),
                          scale=sc.get(kind))
                 if j == 0:
-                    ax.set_ylabel(MODELS.get(r.label, (r.label,))[0])
+                    ax.set_ylabel(getattr(r, 'display', None) or MODELS.get(r.label, (r.label,))[0])
         _draw_raw([fig.add_subplot(gs[len(runs), j]) for j in range(2)],
                   runs[0], k, scales[0].get('V'))
         for c, name in enumerate(curves):
