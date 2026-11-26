@@ -100,6 +100,26 @@ with a progress indication; the window stays responsive.
 - Map panels: `ViewBox`es with linked x/y (zoom/pan together), aspect locked, y pointing down as in
   the notebook (`[...,0]=x` columns, `[...,1]=y` rows).
 
+### Quantity registry (structure for "see everything")
+
+Every viewable quantity is one registry entry, not UI code:
+`Quantity(name, kind, source, compute, render, unit)` with
+- `kind`: `map` (per frame / per iteration image), `curve` (per frame), `iter_curve` (per iteration
+  of a replayed frame), `fullrate` (own time base, e.g. IMU);
+- `source`: `state`, `replay`, `csv`, `raw` (events, APS), `derived` (computed from the others);
+- `compute(cache, run, k, it)` returning the array; `render` = which `viz` renderer / scale rule.
+
+The map panels, the curve list, the iteration plots and the probe are all built from the registry, so
+adding an output or a derived quantity is one entry. **This build** registers what the notebook
+viewer shows today: maps I, G, F; raw V, APS; every numeric `tracking.csv` column; `n_events`;
+`omega_fullrate`; iteration residuals |V+F·G|, |G−∇I|, |ω|; probe I, |G|, |F|.
+
+**Next feature (not this build, recorded so the structure allows it):** derived maps — I read out
+from G (exact solve), residual maps |V+F·G|, G−∇I, F−C·R; derived curves — |F| vs the OFCE
+stability bound b and the fraction of pixels above b; CMax IWE images + contrast (runs with
+`--save-iwe`). Every output a run generates should be viewable; the per-run PNG/MP4 artefacts
+(`video_frames/`, `tracking_plot.png`) are superseded by the app itself.
+
 ### Layout (proposal)
 
 ```
