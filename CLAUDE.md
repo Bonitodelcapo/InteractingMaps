@@ -53,6 +53,16 @@ sqlite:///mlflow.db`). `IM_MLFLOW=0` disables; `IM_MLFLOW_ALL=1` also logs sweep
 
 **Live demo:** `demo.ipynb` (matplotlib animation of all maps).
 
+**Inspection viewer:** `inspect_viewer.ipynb` (`inspect_viewer.py::Inspector`) —
+1–5 runs of one segment: maps at frame k (or one iteration of it), events + APS of
+that window, any `tracking.csv` column as a curve with a frame marker; click a
+curve to jump there; GIF/MP4 export. It reads runs made with per-frame states,
+on the cluster:
+`python report/run_experiments.py --what inspect --sequences poster --replay-frames 6,14`
+(→ `experiments/inspect/`, never `results/`); replay more frames later with
+`python replay_frame.py --run <run_dir> --frame K`. States are opt-in
+(`RunConfig.save_states`, ~1–2 MB/frame).
+
 **Discover new segments** from a dataset's IMU and print a `config.py` block:
 `python interacting_maps/find_segments.py data/<name>/imu.txt`.
 
@@ -75,6 +85,11 @@ PYTHONPATH=. python tests/test_cmax_frontend.py      # CMax step-1a validation v
 PYTHONPATH=. python tests/test_distortion_cmax.py
 PYTHONPATH=. python tests/test_ecrot_convert.py      # ROSbag converter on a tiny synthetic bag
 PYTHONPATH=. python tests/test_cmax_v1_vs_v2.py
+PYTHONPATH=. python tests/test_network_state.py     # get_state/set_state on both networks
+PYTHONPATH=. python tests/test_states_replay.py     # per-frame states, bit-exact replay (smoke runs)
+PYTHONPATH=. python tests/test_inspect_io.py        # viewer loader (tiny generated dataset)
+PYTHONPATH=. python tests/test_inspect_fig.py       # inspector figure, scales, export
+PYTHONPATH=. python tests/test_inspect_viewer.py    # widgets headless: sliders, click, export
 PYTHONPATH=. python tests/test_cmax_gradient.py      # analytic contrast gradient vs finite differences
 ```
 

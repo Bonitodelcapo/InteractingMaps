@@ -359,6 +359,20 @@ in one place. The studies behind the report (convergence within a frame, sweeps,
 grids, the main table) are commands of `report/run_experiments.py`; see
 [report/RUN_ALL.md](report/RUN_ALL.md).
 
+**Per-frame states and replay (inspection viewer).** The per-frame inputs of a
+run — gyro, V1's CMax anchor, V2's event window — are built by
+`interacting_maps/frame_driver.py::FrameDriver`, which also holds the only state
+outside the network (V1's `omega_cmax_prev`). With `RunConfig.save_states` on
+(off by default, not part of the stored config), `experiment_tracking` writes the
+recurrent state `I, G, F, R` (`get_state()` on both networks; the thesis' gradient
+accumulators are reset every iteration, so they are not state) before frame 0 and
+after every frame to `<run>/states/` (`states_io.py`), never under `results/`.
+`replay.py::replay_frame` restarts frame k from state k−1 and stores every
+iteration in `<run>/replay/`; replaying frame k reproduces state k bit-exactly
+(`tests/test_states_replay.py`). `inspect_io.py` (lazy run loader),
+`inspect_fig.py` (`draw_inspector`, fixed per-model map scales, GIF/MP4 export)
+and `inspect_viewer.py`/`.ipynb` (widgets) read these files and compute nothing.
+
 ### 6.7 `find_segments.py` & `demo.ipynb`
 
 - **`interacting_maps/find_segments.py`** — slides a window over `imu.txt`, flags intervals of
