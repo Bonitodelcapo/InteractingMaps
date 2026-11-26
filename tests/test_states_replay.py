@@ -24,6 +24,8 @@ from run_config import RunConfig, make_network, rc_from_run
 from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.frame_driver import FrameDriver
 from interacting_maps import states_io
+from interacting_maps.replay import replay_frame
+from interacting_maps.viz import net_maps
 
 OUT = 'experiments/states_test'
 MODELS = ['cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2']
@@ -58,16 +60,23 @@ def rebuild(run_dir):
     return rc, net, FrameDriver(rc, net, seq.H, seq.W, c), [V for V, _ in seq]
 
 
+class _Net:
+    """Stand-in so a saved state can be cropped with viz.net_maps."""
+    def __init__(self, st):
+        self.I, self.G, self.F = st['I'], st['G'], st['F']
+
+
 def same(a, b):
     return all(np.array_equal(a[k], b[k]) for k in KEYS)
 
 
 shutil.rmtree(OUT, ignore_errors=True)
+dirs = {}
 try:
     for model in MODELS:
         rc = make_rc(model, save=True)
         E.experiment_tracking(rc, save_frames=False)
-        d = rc.output_dir
+        d = dirs[model] = rc.output_dir
         check(f'{model} files', os.path.exists(states_io.state_path(d, -1)) and all(
             os.path.exists(states_io.state_path(d, k)) for k in range(3)))
 
@@ -80,6 +89,22 @@ try:
             drv.step(k, Vs[k], rc2.n_iters)
             ok &= same(net.get_state(), states_io.load_state(d, k)[0])
         check(f'{model} exact replay of frames 1, 2', ok)
+
+    # --- Task 4: iteration replay ---
+    for model in ('cook', 'thesis_cmax'):
+        d = dirs[model]
+        for k in (0, 2):
+            z = np.load(replay_frame(d, k))
+            st = states_io.load_state(d, k)[0]
+            H, W = z['I'].shape[1:]
+            ref = {**{m: v for m, v in net_maps(_Net(st), H, W).items()}, 'R': st['R']}
+            check(f'{model} replay frame {k}: {len(z["R"])} iterations, last == state {k}',
+                  len(z['R']) == 10 and all(np.array_equal(z[key][-1], ref[key]) for key in KEYS))
+    try:
+        replay_frame('results/poster_rotation/cook/x', 0)
+        check('replay refuses results/', False)
+    except ValueError:
+        check('replay refuses results/', True)
 
     rc = make_rc('cook', save=False, n_iters=9)     # own folder, not the run above
     E.experiment_tracking(rc, save_frames=False)
