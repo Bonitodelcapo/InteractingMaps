@@ -20,6 +20,8 @@ from interacting_maps.style import frame_times
 #: fields compared runs must share
 SHARED = ('dataset', 'segment_id', 't_start', 'frame_duration', 'n_frames')
 MAX_RUNS = 5
+#: frames of states kept in memory per run
+CACHE = 8
 
 
 def _numeric_columns(path):
@@ -51,13 +53,20 @@ class RunView:
         self._states, self._V, self._aps, self._curves = {}, None, None, None
 
     # ------------------------------------------------------------ model
-    def state(self, k) -> dict:
-        if k not in self._states:
-            st, _ = states_io.load_state(self.dir, k)
-            H, W = self.H, self.W
-            self._states[k] = {'I': st['I'][:H, :W], 'G': st['G'][:H, :W],
-                               'F': st['F'][:H, :W], 'R': st['R']}
-        return self._states[k]
+    def state(self, k, cache=True) -> dict:
+        """Maps I, G, F cropped to H x W (copies, so the full arrays are freed)
+        and R. Up to CACHE frames are kept; cache=False reads without keeping."""
+        if k in self._states:
+            return self._states[k]
+        st, _ = states_io.load_state(self.dir, k)
+        H, W = self.H, self.W
+        out = {key: st[key][:H, :W].copy() for key in ('I', 'G', 'F')}
+        out['R'] = st['R']
+        if cache:
+            if len(self._states) >= CACHE:
+                self._states.pop(next(iter(self._states)))
+            self._states[k] = out
+        return out
 
     def iterations(self, k):
         path = states_io.replay_path(self.dir, k)

@@ -46,6 +46,26 @@ try:
     check('raw V is the event frame', raw['V'] is not None and raw['V'].shape == (H, W))
     check('n_events curve finite', np.isfinite(rv.curves()['n_events']).all())
 
+    # review fix 1: cached states own their (cropped) memory, and the scale pass does not cache
+    from interacting_maps.inspect_fig import fixed_scales
+    rv2 = load_run(data_root=DATA, run_dir=make_run(ROOT, 'thesis'))
+    fixed_scales([rv2], ['I', 'G'])
+    check('scale pass leaves the state cache empty', len(rv2._states) == 0)
+    st = rv2.state(1)
+    check('cached state owns its memory (not a view of the full array)',
+          all(st[key].base is None for key in ('I', 'G', 'F')))
+    check('state cache is bounded', all(rv2.state(k) is not None for k in range(NF))
+          and len(rv2._states) <= 8)
+
+    # review fix 2: starting a run's states clears old replays
+    dr = rv2.dir
+    os.makedirs(os.path.dirname(states_io.replay_path(dr, 1)), exist_ok=True)
+    np.savez(states_io.replay_path(dr, 1), R=np.zeros((1, 3)))
+    st0, loop0 = states_io.load_state(dr, -1)
+    states_io.start_states(dr, st0, loop0)
+    check('start_states removes stale replays', not os.path.exists(states_io.replay_path(dr, 1))
+          and os.path.exists(states_io.state_path(dr, -1)))
+
     d2 = make_run(ROOT, 'thesis_imu')
     shutil.rmtree(states_io.states_dir(d2))
     check('no states -> FileNotFoundError naming save_states',

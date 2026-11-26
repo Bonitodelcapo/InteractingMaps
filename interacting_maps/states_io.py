@@ -47,6 +47,14 @@ def save_state(run_dir, k, state: dict, loop: dict) -> None:
     np.savez_compressed(state_path(run_dir, k), **arrays)
 
 
+def start_states(run_dir, state: dict, loop: dict) -> None:
+    """Save the initial state of a (re)run and drop replays of an earlier run in
+    the same folder, whose iterations would no longer end at this run's states."""
+    import shutil
+    shutil.rmtree(os.path.dirname(replay_path(run_dir, 0)), ignore_errors=True)
+    save_state(run_dir, -1, state, loop)
+
+
 def load_state(run_dir, k):
     """(state, loop) saved for frame k (k = -1: the initial state)."""
     path = state_path(run_dir, k)

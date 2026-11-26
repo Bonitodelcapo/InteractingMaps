@@ -42,7 +42,7 @@ def _per_frame(run, kind):
         if not run.has_data():
             return []
         return [_finite_scale('V', run.raw(k)['V']) for k in range(run.n_frames)]
-    return [_finite_scale(kind, run.state(k)[kind]) for k in range(run.n_frames)]
+    return [_finite_scale(kind, run.state(k, cache=False)[kind]) for k in range(run.n_frames)]
 
 
 def fixed_scales(runs, kinds, share=False) -> list:

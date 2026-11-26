@@ -54,7 +54,7 @@ for _stream in (sys.stdout, sys.stderr):
 from config import DATASET_SEGMENTS, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.frame_driver import FrameDriver
-from interacting_maps.states_io import save_state, assert_not_results
+from interacting_maps.states_io import save_state, start_states, assert_not_results
 import experiment_tracking as run_store
 
 # Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
@@ -128,7 +128,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     save_states = getattr(rc, 'save_states', False)
     if save_states:                     # inspection viewer: state per frame (states_io)
         assert_not_results(rc.output_dir)
-        save_state(rc.output_dir, -1, net.get_state(), driver.loop_state())
+        start_states(rc.output_dir, net.get_state(), driver.loop_state())
 
     # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
     iwe_dir = None
