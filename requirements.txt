@@ -10,3 +10,5 @@ rosbags
 ipywidgets           # widgets: inspect_viewer, experiments_walkthrough.ipynb
 ipympl               # inspect_viewer: %matplotlib widget (click on a curve)
 nbclient             # executes the notebook headless (tests/test_experiments_walkthrough.py)
+PySide6              # inspect_app (Qt viewer)
+pyqtgraph            # inspect_app (Qt viewer)
