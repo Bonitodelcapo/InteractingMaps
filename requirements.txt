@@ -7,5 +7,6 @@ pyyaml               # ECRot calibration YAML
 imageio              # optional: IWE sequence GIFs (--save-iwe)
 mlflow               # run tracking / provenance mirror (provenance.py)
 rosbags
-ipywidgets           # inspect_viewer: sliders / dropdowns
+ipywidgets           # widgets: inspect_viewer, experiments_walkthrough.ipynb
 ipympl               # inspect_viewer: %matplotlib widget (click on a curve)
+nbclient             # executes the notebook headless (tests/test_experiments_walkthrough.py)

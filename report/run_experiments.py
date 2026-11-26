@@ -151,7 +151,7 @@ def cmd_window(E, args):
     Decides frame_duration and n_frames before the grid is run. Uses ground
     truth only -- no network runs.
     """
-    print(f"{'sequence':<10} {'dur':>5} {'|w|':>6} {'rel.std':>8} {'flips':>6}")
+    print(f"{'sequence':<10} {'dur':>5} {'|w|deg/s':>8} {'rel.std':>8} {'flips':>6}")
     print('-' * 42)
     rows = []
     for ds, sid, t0, lab in SEGMENTS:
@@ -166,7 +166,7 @@ def cmd_window(E, args):
             ax = int(np.argmax(np.abs(w).mean(0)))
             flips = int((np.diff(np.sign(w[:, ax])) != 0).sum())
             rows.append((lab, dur, mag.mean(), mag.std()/mag.mean(), flips))
-            print(f"{lab:<10} {dur:5.1f} {mag.mean():6.3f} "
+            print(f"{lab:<10} {dur:5.1f} {np.degrees(mag.mean()):6.1f} "
                   f"{mag.std()/mag.mean():8.3f} {flips:6d}")
         print()
     with open(os.path.join(OUTDIR, 'window_choice.csv'), 'w', newline='') as f:

@@ -365,7 +365,7 @@ evaluate it.
 \label{sec:input}
 \label{sec:distortion}
 
-Events are read from the text format of~\cite{mueggler2017} and accumulated per window into the signed-count image~\eqref{eq:eventframe}, the event-frame representation common in the literature~\cite{gallego2022survey}. We then clip it to $\pm c$ and divide by $c$ ($c = 10$), giving $\Vmap \in [-1,1]$. The accumulation window $\Delta t$ serves simultaneously as the input window and as the time step relating the network's internal $R$ (rad/frame) to the reported $\wvec = R/\Delta t$ (rad/s).
+Events are read from the text format of~\cite{mueggler2017} and accumulated per window into the signed-count image~\eqref{eq:eventframe}, the event-frame representation common in the literature~\cite{gallego2022survey}. We then clip it to $\pm c$ and divide by $c$ ($c = 10$), giving $\Vmap \in [-1,1]$. The accumulation window $\Delta t$ serves simultaneously as the input window and as the time step relating the network's internal $R$ (rad/frame) to the reported $\wvec = R/\Delta t$, which we give in $^\circ$/s.
 
 Lens distortion can be removed at either end of this path, and both routes are implemented. The first rectifies the event coordinates before accumulation and leaves the kinematic matrix in its ideal pinhole form~\eqref{eq:cmat}. The second keeps the events in their native pixel coordinates and moves the lens into the geometry instead: $\Cmat_{x,y}$ is built from the true undistorted normalised coordinates of each physical pixel and pre-multiplied by the analytic Jacobian $J_D$ of the distortion map, so that the predicted flow is expressed in distorted-pixel units,
 \begin{equation}
@@ -558,14 +558,14 @@ The recorded ones are \texttt{boxes\_rotation}, \texttt{poster\_rotation} and \t
 
 The synthetic ones, \texttt{bicycle} and \texttt{street} of ECRot~\cite{guo2024cmaxslam}, are rendered for a model of the same sensor by rotating a virtual camera inside a panoramic photograph. The scene is therefore static and the simulated lens has no distortion, so~\eqref{eq:cdist} reduces to the pinhole form; the simulator records the exact angular velocity, which its simulated gyroscope matches to about $0.1^\circ$/s, and renders intensity frames in place of the APS frames. The two share one trajectory through different scenes, \texttt{street} with nearly three times as many events, so a difference between their results can only come from the scene. Their motion is faster than on the real sequences, steadier, about all three axes rather than mainly one, and does not reverse within the $1.5$\,s we score.
 
-Each sequence is evaluated on a segment of $150$ frames of $\Delta t = 20$\,ms ($3$\,s); unless stated otherwise, the models run on its first $75$ frames ($1.5$\,s). Within these, the rotation of every real segment already reverses about its dominant axis, so a model must follow the motion to score well. Over all $150$ frames, the models with a reference keep the same order in angular-velocity error. On \texttt{boxes} and \texttt{poster} we report the segment of median speed among those we extracted, a choice made without regard to any model's error. Seven of these segments, from $0.42$ to $1.67$\,rad/s, are run over all $150$ frames to test whether the scale of the estimate depends on the speed (Sec.~\ref{sec:maps_add}).
+Each sequence is evaluated on a segment of $150$ frames of $\Delta t = 20$\,ms ($3$\,s); unless stated otherwise, the models run on its first $75$ frames ($1.5$\,s). Within these, the rotation of every real segment already reverses about its dominant axis, so a model must follow the motion to score well. Over all $150$ frames, the models with a reference keep the same order in angular-velocity error. On \texttt{boxes} and \texttt{poster} we report the segment of median speed among those we extracted, a choice made without regard to any model's error. Seven of these segments, from $24$ to $96^\circ$/s, are run over all $150$ frames to test whether the scale of the estimate depends on the speed (Sec.~\ref{sec:maps_add}).
 
 
 %\subsubsection{Segments}
 %\label{sec:segments}
 %Each sequence is evaluated on a segment of $150$ frames of $\Delta t = 20$\,ms ($3$\,s), starting where the gyroscope shows a nearly constant rotation. $\wvec$ does not stay constant over the segment, nor does it need to, since the constraints of Sec.~\ref{sec:model} hold at every instant: on the three real segments the standard deviation of $\|\wvec\|$ is about half its mean, and the dominant axis reverses within the first $1.5$\,s (on \texttt{poster}, $\omega_x$ changes sign). Unless stated otherwise, the models are run on the first $75$ frames ($1.5$\,s). Over this length the rotation of the real segments already reverses, so a model that only keeps its initial estimate cannot score well, and over all $150$ frames the models compare in the same way.
 
-%During development, conclusions drawn from a single short segment did not survive: a configuration that appeared clearly best on one medium-speed segment behaved qualitatively differently on a faster one. On \texttt{boxes} and \texttt{poster} we therefore report the segment of median rotation speed among those we found, chosen on that criterion alone and not on any model's error. Seven of the segments found on these two sequences, with mean speeds from $0.42$ to $1.67$\,rad/s, serve to test whether the scale of the estimate depends on the rotation speed (Sec.~\ref{sec:maps_add}); for this test the models run on all $150$ frames. On \texttt{dynamic} the segment is instead the stretch in which the person is seated, which is also the slowest of the four we found.
+%During development, conclusions drawn from a single short segment did not survive: a configuration that appeared clearly best on one medium-speed segment behaved qualitatively differently on a faster one. On \texttt{boxes} and \texttt{poster} we therefore report the segment of median rotation speed among those we found, chosen on that criterion alone and not on any model's error. Seven of the segments found on these two sequences, with mean speeds from $24$ to $96^\circ$/s, serve to test whether the scale of the estimate depends on the rotation speed (Sec.~\ref{sec:maps_add}); for this test the models run on all $150$ frames. On \texttt{dynamic} the segment is instead the stretch in which the person is seated, which is also the slowest of the four we found.
 
 \subsubsection{Angular velocity}
 The angular velocity a model estimates at each frame is compared with a
@@ -636,13 +636,13 @@ first $75$ frames ($1.5$\,s) of each segment.}}
 \begin{tabular}{@{}lccc@{}}
 \toprule
 Sequence & $\|\wvec\|$ & Floor & Source \\
- & (rad/s) & ($^\circ$/s) & \\
+ & ($^\circ$/s) & ($^\circ$/s) & \\
 \midrule
-\texttt{boxes\_rotation}   & 0.77 & 6.25 & ECD~\cite{mueggler2017} \\
-\texttt{poster\_rotation}  & 0.99 & 8.78 & ECD~\cite{mueggler2017} \\
-\texttt{dynamic\_rotation} & 0.73 & 7.23 & ECD~\cite{mueggler2017} \\
-\texttt{bicycle}           & 1.32 & 0.68 & ECRot~\cite{guo2024cmaxslam} \\
-\texttt{street}            & 1.32 & 0.68 & ECRot~\cite{guo2024cmaxslam} \\
+\texttt{boxes\_rotation}   & 44.2 & 6.25 & ECD~\cite{mueggler2017} \\
+\texttt{poster\_rotation}  & 56.5 & 8.78 & ECD~\cite{mueggler2017} \\
+\texttt{dynamic\_rotation} & 41.7 & 7.23 & ECD~\cite{mueggler2017} \\
+\texttt{bicycle}           & 75.4 & 0.68 & ECRot~\cite{guo2024cmaxslam} \\
+\texttt{street}            & 75.4 & 0.68 & ECRot~\cite{guo2024cmaxslam} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -657,13 +657,13 @@ This section reports the angular velocity estimated by the five models, scored a
 \label{sec:beta_exp}
 Table~\ref{tab:main} reports every model on the five sequences at the configuration of Table~\ref{tab:params}, and Fig.~\ref{fig:tracking} shows one run in detail. The three real sequences behave alike throughout, so we discuss the real and the synthetic sequences in turn.
 
-Without a reference for $\wvec$, neither network tracks. On the real sequences the angular velocity of \texttt{cook} and \texttt{thesis} hardly moves after the first frame: over the $1.5$\,s its magnitude stays within $25\%$ of its first-frame value and its direction within $10^\circ$, while the reference turns its axis by up to $178^\circ$ and varies its speed between $0.06$ and $1.56$\,rad/s. \texttt{cook} keeps the gyroscope reading it starts from, and \texttt{thesis} shrinks it by $5$--$18\%$ in the first frame and then keeps it. Fig.~\ref{fig:tracking} shows the result, a flat trace through a full reversal of $\omega_x$. The direction errors of $76$--$85^\circ$ and total errors of $43$--$57^\circ$/s follow from the motion, not from a drift of the estimate. Over the first $0.5$\,s, before the rotation reverses, the same estimates score $14$--$24^\circ$/s and $6$--$20^\circ$ in direction, only because the gyroscope reading they start from still fits the motion. Each frame starts from the previous converged state, and the constraints of a frame can apparently be met by adapting the maps to the new events instead, so nothing forces $\wvec$ to follow the motion. The two update schemes fail alike here, the error of \texttt{cook} being $5$--$10\%$ above that of \texttt{thesis}.
+Without a reference for $\wvec$, neither network tracks. On the real sequences the angular velocity of \texttt{cook} and \texttt{thesis} hardly moves after the first frame: over the $1.5$\,s its magnitude stays within $25\%$ of its first-frame value and its direction within $10^\circ$, while the reference turns its axis by up to $178^\circ$ and varies its speed between $3$ and $90^\circ$/s. \texttt{cook} keeps the gyroscope reading it starts from, and \texttt{thesis} shrinks it by $5$--$18\%$ in the first frame and then keeps it. Fig.~\ref{fig:tracking} shows the result, a flat trace through a full reversal of $\omega_x$. The direction errors of $76$--$85^\circ$ and total errors of $43$--$57^\circ$/s follow from the motion, not from a drift of the estimate. Over the first $0.5$\,s, before the rotation reverses, the same estimates score $14$--$24^\circ$/s and $6$--$20^\circ$ in direction, only because the gyroscope reading they start from still fits the motion. Each frame starts from the previous converged state, and the constraints of a frame can apparently be met by adapting the maps to the new events instead, so nothing forces $\wvec$ to follow the motion. The two update schemes fail alike here, the error of \texttt{cook} being $5$--$10\%$ above that of \texttt{thesis}.
 
 On the synthetic sequences the first frame already shrinks the angular velocity, to about half of the gyroscope reading in \texttt{thesis} and to under a third in \texttt{cook}. \texttt{thesis} then keeps that value ($\beta = 2.6$ and $2.5$), whereas \texttt{cook} keeps shrinking it, to under $2\%$ of its first value by the last frame ($\beta = 181$ and $325$), while its maps remain mutually consistent. That one model ends at two such different scales on two sequences rendered along the same trajectory is the $\beta$-ambiguity in its purest form; Sec.~\ref{sec:converge} returns to the difference between the two schemes. The direction error of \texttt{thesis} is lower here (below $30^\circ$) than on real sequences, but not because it tracks: its estimate stays nearly constant, so its direction error is roughly the angle by which the true axis has turned since the first frame, at most $66^\circ$ on the synthetic segments against up to $178^\circ$ on the real ones. In both groups, a reference given once at the start does not anchor the model, whereas the same reference in the cost at every iteration does.
 
 On the real sequences, \texttt{thesis+IMU} and \texttt{CMax-anchor} recover the rotation axis to $6$--$13^\circ$ and bring $\beta$ to within $14\%$ of unity. The error falls, against \texttt{thesis} without an anchor, by a factor of six to eight with the gyroscope as anchor and of $4.5$ to $6.7$ with the contrast estimate. Most of what the anchor provides therefore does not depend on where it comes from, but on total error the two are not interchangeable: the gyroscope is ahead by $1.4^\circ$/s on \texttt{boxes}, $2.4$ on \texttt{poster} and $2.5$ on \texttt{dynamic}. 
 
-Part of each gap is a single frame. On each real segment the camera nearly stops before the rotation reverses, so that few events arrive, and on the worst of these frames, at $0.08$ to $0.20$\,rad/s, the error of \texttt{CMax-anchor} jumps to $122$, $54$ and $50^\circ$/s, while the gyroscope-anchored network stays at $3$--$5^\circ$/s: the contrast estimate fails for one frame and the network follows its anchor. Without that frame the two anchors are level on \texttt{boxes} ($5.7^\circ$/s with the contrast anchor, $5.9$ with the gyroscope), and the gyroscope stays ahead by $1.7$ and $1.9^\circ$/s on \texttt{poster} and \texttt{dynamic}. On the fastest real segment we measured, three seconds of \texttt{poster} at $1.67$\,rad/s, the gap widens to $4.7^\circ$/s. The noise floor of the reference grows with the speed as well, from $5.5^\circ$/s on the slowest \texttt{poster} segment ($0.42$\,rad/s) to $11.6$ on that fastest one, and relative to the speed the error of \texttt{CMax-anchor} falls, from $35\%$ to $17\%$ of $\|\wvec\|$.
+Part of each gap is a single frame. On each real segment the camera nearly stops before the rotation reverses, so that few events arrive, and on the worst of these frames, at $5$ to $12^\circ$/s, the error of \texttt{CMax-anchor} jumps to $122$, $54$ and $50^\circ$/s, while the gyroscope-anchored network stays at $3$--$5^\circ$/s: the contrast estimate fails for one frame and the network follows its anchor. Without that frame the two anchors are level on \texttt{boxes} ($5.7^\circ$/s with the contrast anchor, $5.9$ with the gyroscope), and the gyroscope stays ahead by $1.7$ and $1.9^\circ$/s on \texttt{poster} and \texttt{dynamic}. On the fastest real segment we measured, three seconds of \texttt{poster} at $96^\circ$/s, the gap widens to $4.7^\circ$/s. The noise floor of the reference grows with the speed as well, from $5.5^\circ$/s on the slowest \texttt{poster} segment ($24^\circ$/s) to $11.6$ on that fastest one, and relative to the speed the error of \texttt{CMax-anchor} falls, from $35\%$ to $17\%$ of $\|\wvec\|$.
 
 We do not claim parity: an inertial measurement remains the better anchor. What the comparison establishes is that the contrast estimate can stand in for it, within a few degrees per second of a dedicated sensor, on a quantity the network cannot determine at all on its own, and from the events the network already processes. The gaps between the two anchors are also small next to the noise floor of the reference, $6$--$9^\circ$/s, at which \texttt{thesis+IMU} sits on all three real sequences ($5.8$, $8.7$ and $7.0^\circ$/s, against $6.2$, $8.8$ and $7.2$ for its gyroscope). That it scores slightly below its own gyroscope shows that the visual constraints are not overridden by the inertial signal, not that they improve on it.
 
@@ -700,7 +700,7 @@ onset of the same behaviour.}}
 \toprule
 Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\
 \midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{boxes}\\$0.77$\,rad/s}}
+\multirow{6}{*}{\shortstack[l]{\texttt{boxes}\\$44$\,$^\circ$/s}}
   & \texttt{cook} & 53.8 & 84.3 & 0.89 & 0.62 \\
   & \texttt{thesis} & 49.0 & 84.1 & 1.13 & \textbf{0.63} \\
   & \texttt{thesis+IMU} & \textbf{5.8} & \textbf{6.9} & \textbf{1.03} & 0.45 \\
@@ -708,7 +708,7 @@ Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\
   & \texttt{CMax-inloop} & 8.3 & 10.2 & 0.86 & 0.38 \\
  & \emph{gyro vs ref.}   & \emph{6.2} & \emph{6.9} & --- & --- \\
 \midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{poster}\\$0.99$\,rad/s}}
+\multirow{6}{*}{\shortstack[l]{\texttt{poster}\\$56$\,$^\circ$/s}}
   & \texttt{cook} & 57.0 & 75.9 & 1.16 & \textbf{0.53} \\
   & \texttt{thesis} & 54.2 & 75.7 & 1.45 & \textbf{0.53} \\
   & \texttt{thesis+IMU} & \textbf{8.7} & \textbf{6.0} & \textbf{1.02} & 0.26 \\
@@ -716,7 +716,7 @@ Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\
   & \texttt{CMax-inloop} & 14.5 & 9.2 & 0.88 & 0.17 \\
  & \emph{gyro vs ref.}   & \emph{8.8} & \emph{6.0} & --- & --- \\
 \midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{dynamic}\\$0.73$\,rad/s\\(person)}}
+\multirow{6}{*}{\shortstack[l]{\texttt{dynamic}\\$42$\,$^\circ$/s\\(person)}}
   & \texttt{cook} & 46.5 & 84.3 & 1.03 & 0.34 \\
   & \texttt{thesis} & 43.3 & 84.8 & 1.24 & \textbf{0.36} \\
   & \texttt{thesis+IMU} & \textbf{7.0} & \textbf{9.7} & \textbf{0.99} & 0.35 \\
@@ -724,7 +724,7 @@ Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\
   & \texttt{CMax-inloop} & 11.3 & 14.7 & 0.93 & 0.26 \\
  & \emph{gyro vs ref.}   & \emph{7.2} & \emph{9.7} & --- & --- \\
 \midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{bicycle}\\$1.32$\,rad/s\\(synthetic)}}
+\multirow{6}{*}{\shortstack[l]{\texttt{bicycle}\\$75$\,$^\circ$/s\\(synthetic)}}
   & \texttt{cook} & 74.0 & 74.4 & 181 & 0.16 \\
   & \texttt{thesis} & 52.4 & 28.6 & 2.62 & \textbf{0.60} \\
   & \texttt{thesis+IMU} & \textbf{6.3} & \textbf{1.0} & \textbf{1.09} & 0.13 \\
@@ -732,7 +732,7 @@ Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\
   & \texttt{CMax-inloop} & 45.4 & 27.9 & 1.14 & 0.19 \\
  & \emph{gyro vs ref.}   & \emph{0.68} & \emph{0.3} & --- & --- \\
 \midrule
-\multirow{6}{*}{\shortstack[l]{\texttt{street}\\$1.32$\,rad/s\\(synthetic)}}
+\multirow{6}{*}{\shortstack[l]{\texttt{street}\\$75$\,$^\circ$/s\\(synthetic)}}
   & \texttt{cook} & 73.8 & 60.4 & 325 & 0.09 \\
   & \texttt{thesis} & 51.2 & 27.5 & 2.50 & \textbf{0.56} \\
   & \texttt{thesis+IMU} & \textbf{6.3} & \textbf{1.0} & \textbf{1.09} & 0.33 \\
@@ -877,11 +877,11 @@ How strongly the maps shrink $\|\wvec\|$ is set by the balance between the kinem
 
 The data agree. In Table~\ref{tab:sweep} the rows $\delta_{\text{anchor}} = 0.1$ and $\delta_{F\!R} = 0.5$, which share $\kappa = 1$, agree to within $0.1^\circ$/s on every sequence, and as $\delta_{F\!R}$ grows from $0.02$ to $0.9$ the scale factor rises without exception on every sequence, from $0.93$ to $1.05$ on \texttt{boxes}, $0.85$ to $1.08$ on \texttt{poster} and $1.02$ to $1.51$ on \texttt{bicycle}. Since $\beta$ rises as $\wvec^\star$ gains weight, $\wvec^\star$ is slower than the anchor on every sequence. The constraints leave this open: the anchor constrains $\wvec$, but not how the rescaling~\eqref{eq:beta} splits $\Vmap$ between $\Fmap$ and $\Gmap$, and the relaxation settles that split from the data.
 
-At a large $\kappa$ the shrinkage also depends on speed. Over the seven segments measured on \texttt{boxes} and \texttt{poster}, which span $0.42$ to $1.67$\,rad/s, $\beta$ of \texttt{CMax-anchor} at the step sizes we started from, $\delta_{F\!R} = 0.5$ and $\delta_{\text{anchor}} = 0.3$ ($\kappa = 1.7$), is strongly correlated with rotation speed ($r = +0.96$, $p < 0.001$). It rises from $0.80$ at the slowest segment to $1.18$ at the fastest, i.e.\ from a $25\%$ overestimate to a $15\%$ underestimate of $\|\wvec\|$ (Fig.~\ref{fig:beta_speed}). At the adopted $\kappa = 0.2$ the correlation falls to $+0.60$, no longer significant at $n = 7$, and $\beta$ stays within $0.79$--$0.97$ over the whole range of speeds.
+At a large $\kappa$ the shrinkage also depends on speed. Over the seven segments measured on \texttt{boxes} and \texttt{poster}, which span $24$ to $96^\circ$/s, $\beta$ of \texttt{CMax-anchor} at the step sizes we started from, $\delta_{F\!R} = 0.5$ and $\delta_{\text{anchor}} = 0.3$ ($\kappa = 1.7$), is strongly correlated with rotation speed ($r = +0.96$, $p < 0.001$). It rises from $0.80$ at the slowest segment to $1.18$ at the fastest, i.e.\ from a $25\%$ overestimate to a $15\%$ underestimate of $\|\wvec\|$ (Fig.~\ref{fig:beta_speed}). At the adopted $\kappa = 0.2$ the correlation falls to $+0.60$, no longer significant at $n = 7$, and $\beta$ stays within $0.79$--$0.97$ over the whole range of speeds.
 
 The control is \texttt{CMax-inloop}, in which the kinematic cost does not update $\wvec$. Its $\wvec$ is identical, to the last digit, in every pair of runs we compared that differ only in the step sizes or the regularisation of the maps, so it cannot depend on $\kappa$, and its $\beta$ shows no comparable trend with speed ($r = -0.47$, not significant). The shrinkage therefore appears only where the kinematic update acts on $\wvec$. In exchange, \texttt{CMax-inloop} has the larger direction error on every segment, and at the adopted step sizes \texttt{CMax-anchor} has the lower total error on all seven.
 
-Neither scene content nor speed explains the level of the synthetic sequences. The two, rendered along the same trajectory over scenes that differ in event density, give $\beta = 1.485$ and $1.482$ at the starting step sizes over the same three seconds, and at their $1.32$\,rad/s the trend fitted to the real segments at those step sizes predicts $\beta \approx 1.09$, against the $1.48$ measured. What sets them apart from the real sequences we cannot say.
+Neither scene content nor speed explains the level of the synthetic sequences. The two, rendered along the same trajectory over scenes that differ in event density, give $\beta = 1.485$ and $1.482$ at the starting step sizes over the same three seconds, and at their $75^\circ$/s the trend fitted to the real segments at those step sizes predicts $\beta \approx 1.09$, against the $1.48$ measured. What sets them apart from the real sequences we cannot say.
 
 
 

@@ -135,3 +135,9 @@ def solve_R_lstsq(M_inv, C_mat, F):
     (Cook directly, thesis via a gradient step)."""
     v = np.einsum('hwji,hwj->i', C_mat, F)         # (3,)
     return M_inv @ v
+
+
+def kinematic_residual(C_mat, F, R):
+    """Mean absolute residual of the kinematic constraint F = C_mat·R, over pixels and
+    both flow components. Diagnostic only; used by both networks' residual_FCR."""
+    return float(np.mean(np.abs(F - np.einsum('hwij,j->hwi', C_mat, R))))

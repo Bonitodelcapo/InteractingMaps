@@ -3,6 +3,14 @@ Plot conventions shared by every figure: model names and colours, ω-axis
 colours, reference/IMU line styles, units, time axis, label text, size presets
 and saving. Nothing here draws; viz.py does. Change a convention here and every
 figure follows.
+
+Shared y-limits: axes that show the same quantity share their y-axis, so they
+can be compared at a glance. Within one figure use matplotlib's sharing
+(plt.subplots(..., sharey=True/'row'/'col'), or ax.sharey(other)); limits come
+from the data, never from a fixed range. Separate figures cannot share, so the
+code that draws them also saves the plotted series (CSV) next to the figure, and
+the final comparison is one combined figure drawn from those files. Exceptions
+are decided case by case.
 """
 
 import os
