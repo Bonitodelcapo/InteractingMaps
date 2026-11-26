@@ -7,3 +7,5 @@ pyyaml               # ECRot calibration YAML
 imageio              # optional: IWE sequence GIFs (--save-iwe)
 mlflow               # run tracking / provenance mirror (provenance.py)
 rosbags
+ipywidgets           # inspect_viewer: sliders / dropdowns
+ipympl               # inspect_viewer: %matplotlib widget (click on a curve)
