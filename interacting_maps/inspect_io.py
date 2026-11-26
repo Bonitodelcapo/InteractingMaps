@@ -35,7 +35,7 @@ def _numeric_columns(path):
 
 
 class RunView:
-    def __init__(self, run_dir):
+    def __init__(self, run_dir, data_root=None):
         if not states_io.has_states(run_dir):
             states_io.load_state(run_dir, -1)          # raises with the hint
         self.dir = run_dir
@@ -47,7 +47,7 @@ class RunView:
         self.H, self.W = (int(x) for x in c['sensor_size'])
         self.times = frame_times(self.dt, self.n_frames)
         self.rows = _numeric_columns(os.path.join(run_dir, 'tracking.csv'))
-        self.paths = get_dataset_paths(c['dataset'])
+        self.paths = get_dataset_paths(c['dataset'], base_dir=data_root)
         self._states, self._V, self._aps, self._curves = {}, None, None, None
 
     # ------------------------------------------------------------ model
@@ -131,8 +131,9 @@ class RunView:
                 'gt': np.degrees(np.linalg.norm(ref, axis=1))}
 
 
-def load_run(run_dir) -> RunView:
-    return RunView(run_dir)
+def load_run(run_dir, data_root=None) -> RunView:
+    """data_root: folder holding <dataset>/ (default: the repository's data/)."""
+    return RunView(run_dir, data_root)
 
 
 def check_comparable(runs) -> None:
