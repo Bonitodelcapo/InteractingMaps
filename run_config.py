@@ -71,6 +71,8 @@ class RunConfig:
         self.use_cmax = False       # load raw events + compute per-frame CMax ω
         self.use_cmax_v2 = False    # V2: CMax drives R inside the MP loop
         self.save_iwe = False       # save the final CMax IWE per frame (V1/V2)
+        self.save_states = False    # per-frame states for the inspection viewer
+                                    # (states_io); opt-in, not part of to_dict()
         self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
                                     # ≳5e-4 diverges. Scales with event count² —
                                     # lower it for denser streams (see cmax.md).
@@ -211,6 +213,21 @@ class RunConfig:
 # ===========================================================================
 # HELPERS
 # ===========================================================================
+
+def rc_from_run(run_dir) -> RunConfig:
+    """The RunConfig of a saved run, rebuilt from its run.json."""
+    cfg = experiment_tracking.read_run(run_dir)['config']
+    seg = {'id': cfg['segment_id'], 't_start': cfg['t_start'],
+           'frame_duration': cfg['frame_duration'], 'n_frames': cfg['n_frames'],
+           'initial_R': None, 'sensor_size': tuple(cfg['sensor_size'])}
+    out_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.normpath(run_dir))))
+    rc = RunConfig(dataset=cfg['dataset'], model=cfg['model'], segment=seg,
+                   n_frames=cfg['n_frames'], n_iters=cfg['n_iters'],
+                   distortion_mode=cfg['distortion_mode'], poisson=cfg['poisson'],
+                   deltas=cfg['params'], out_root=out_root)
+    rc.initial_R = np.asarray(cfg['initial_R'], dtype=np.float64)
+    return rc
+
 
 def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     """Create network from RunConfig; distortion handling from rc.distortion_mode."""

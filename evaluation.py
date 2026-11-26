@@ -54,6 +54,7 @@ for _stream in (sys.stdout, sys.stderr):
 from config import DATASET_SEGMENTS, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
 from interacting_maps.frame_driver import FrameDriver
+from interacting_maps.states_io import save_state, assert_not_results
 import experiment_tracking as run_store
 
 # Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
@@ -124,6 +125,10 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     # Per-frame inputs (gyro / CMax anchor / event window) and V1's loop state.
     driver = FrameDriver(rc, net, H, W, seq.calib)
     imu_data = driver.imu_data
+    save_states = getattr(rc, 'save_states', False)
+    if save_states:                     # inspection viewer: state per frame (states_io)
+        assert_not_results(rc.output_dir)
+        save_state(rc.output_dir, -1, net.get_state(), driver.loop_state())
 
     # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
     iwe_dir = None
@@ -154,6 +159,8 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
         omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi, om_data)
 
         driver.step(k, V, rc.n_iters)
+        if save_states:
+            save_state(rc.output_dir, k, net.get_state(), driver.loop_state())
         win, omega_anchor, cmax_est = driver.last_window, driver.last_anchor, driver.cmax_est
 
         omega_est = net.R / rc.frame_duration
