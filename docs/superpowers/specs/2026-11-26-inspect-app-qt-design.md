@@ -18,10 +18,10 @@ Goal: the same tool, on the laptop, that reacts instantly.
 ## Goals
 
 1. A desktop app, `python inspect_app.py`, opening a window. No notebook, no browser.
-2. **Instant interaction:** play at ≥ 25 frames/s and scrub without visible lag with 5 runs ×
+2. **Instant interaction:** play at ≥ 25 frames/s and scrub without visible lag with 10 runs loaded, 5 with maps shown ×
    I, G, F + events + APS + 3 curves loaded (poster seg_C, 150 frames, 180×240).
 3. **Every feature of the notebook viewer**, same behaviour:
-   - Runs: folder to scan, data folder, dataset → segment → run folders (≤ 5, one segment, any
+   - Runs: folder to scan, data folder, dataset → segment → run folders (≤ 10, one segment, any
      models, same model allowed — filterable by model) → load;
      run info table (model, iterations, deltas, git commit/dirty, mean error, β, replayed frames).
    - View: play/pause + speed, ◀ ▶, frame slider, iteration slider (enabled only where a loaded
@@ -143,8 +143,14 @@ through all frames of 5 fake runs averages under 40 ms per frame.
   disk (`<run>/.inspect_cache/`, float32 maps, written on first open, reused when the run's
   `states/` are unchanged — mtime/size check) makes reopening the same runs take seconds. Replays
   are loaded in the same pass (they are part of "everything").
-- **Several runs of the same model in one view — required.** Up to 5 runs of one segment, any mix:
-  e.g. 5 runs of `thesis_imu` from a parameter sweep. The run picker lists **run folders**, not
+- **Up to 10 runs loaded (one constant, `MAX_RUNS = 10`), with two independent checklists:**
+  *curves for* (which runs draw a line in every curve plot — all overlaid; toggling only shows/hides
+  lines) and *maps for* (which runs get an I | G | F row — e.g. 3 of the 10; toggling adds/removes
+  rows from in-memory data, no reload). The info table always lists all loaded runs. The map area
+  scrolls when many rows are ticked. The pixel probe and the residual plots follow *curves for*.
+  The limit of 10 is not the laptop's (≈ 2.6 GB of states for 10 × 150 frames) but screen space.
+- **Several runs of the same model in one view — required.** Up to 10 runs of one segment, any mix:
+  e.g. 10 runs of `thesis_imu` from a parameter sweep. The run picker lists **run folders**, not
   models (filter by model). Each run gets a **label** = model display name + the config fields that
   differ between the loaded runs (deltas, `n_iters`, `poisson`, …), e.g.
   `thesis+IMU dFR=0.10` / `thesis+IMU dFR=0.50`; when nothing differs, the run folder name.
@@ -158,6 +164,8 @@ through all frames of 5 fake runs averages under 40 ms per frame.
   later decision.
 - Exports keep the matplotlib path (report look) rather than pyqtgraph's exporters.
 - Drag-to-scrub and linked zoom are added (cheap in Qt, same purpose).
+- *shared* scale pools over **all loaded** runs (not only those shown), so colours do not shift when
+  a run is ticked on or off.
 - Exports (GIF/MP4/PNG via `draw_inspector`) always show the full frame in the report style,
   independent of the on-screen zoom, without the probe/residual plots — as in the notebook.
   A separate **"screenshot"** button saves exactly what the window shows (Qt `grab()`), zoom,
