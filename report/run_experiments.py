@@ -8,6 +8,8 @@ Run from the repository root:
     python report/run_experiments.py --what recon       # runs of the reconstruction figure
     python report/run_experiments.py --what baseline    # CMax / gyro alone, no network
     python report/run_experiments.py --what beta        # runs behind fig_beta_speed
+    python report/run_experiments.py --what inspect --sequences poster --replay-frames 6,14
+                                                        # states for the viewer
     python report/run_experiments.py --what sweep \
         --vary 'delta_GI=0.05,0.5,1.0;poisson=iterative,fft,dct' \
         --base 'delta_FR=0.10,delta_IMU=0.50' --mode coord
@@ -639,6 +641,34 @@ def cmd_baseline(E, args):
     print('gyro on the synthetic sequences is meaningless (ESIM writes no IMU).')
 
 
+# ------------------------------------------- runs for the inspection viewer
+def cmd_inspect(E, args):
+    """Report segments x models with per-frame states saved, for the viewer.
+
+    Same configuration as --what main, but into experiments/inspect/ (never
+    results/) with RunConfig.save_states on; --replay-frames 6,14 then replays
+    those frames iteration by iteration (interacting_maps/replay.py).
+    """
+    from interacting_maps.replay import replay_frame
+    labels = [x[3] for x in SEGMENTS]
+    want_seq = args.sequences.split(',') if args.sequences else labels
+    want_mod = args.models.split(',') if args.models else MODELS
+    bad = [x for x in want_seq if x not in labels] + [m for m in want_mod if m not in MODELS]
+    if bad:
+        raise SystemExit(f'unknown sequence(s)/model(s) {bad}; '
+                         f'choose from {labels} and {MODELS}')
+    frames = [int(x) for x in args.replay_frames.split(',') if x]
+    nf = int(round(args.duration / args.dt))
+    for ds, sid, t0, lab in [x for x in SEGMENTS if x[3] in want_seq]:
+        for model in [m for m in MODELS if m in want_mod]:
+            rc = run_cfg(ds, sid, t0, model, args.dt, nf, out_root='experiments/inspect')
+            rc.save_states = True
+            s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
+            print(f"  {lab}/{model} err={s['mean_err_deg_s']:.2f} ({secs:.0f}s)", flush=True)
+            for k in frames:
+                print(f"    -> {replay_frame(rc.output_dir, k)}", flush=True)
+
+
 # ------------------------------------------------------- runs for fig_beta_speed
 def cmd_beta(E, args):
     """Runs behind fig_beta_speed: every real-sequence segment, three anchor settings."""
@@ -656,7 +686,8 @@ def cmd_beta(E, args):
 COMMANDS = {'window': cmd_window, 'main': cmd_main,
             'converge': cmd_converge, 'baseline': cmd_baseline,
             'sweep': cmd_sweep, 'poisson': cmd_poisson,
-            'readout': cmd_readout, 'recon': cmd_recon, 'beta': cmd_beta}
+            'readout': cmd_readout, 'recon': cmd_recon, 'beta': cmd_beta,
+            'inspect': cmd_inspect}
 
 
 def main():
@@ -693,6 +724,8 @@ def main():
     ap.add_argument('--modes', default='iterative,fft,dct',
                     help='poisson: which in-loop solvers to include')
     ap.add_argument('--tag', default='', help='poisson: suffix for the figure name')
+    ap.add_argument('--replay-frames', default='',
+                    help='inspect: frames to replay per iteration, e.g. 6,14')
     ap.add_argument('--index', type=int, default=-1,
                     help='beta: run only entry N of BETA_SEGMENTS x BETA_CONFIGS (0-20)')
     args = ap.parse_args()
