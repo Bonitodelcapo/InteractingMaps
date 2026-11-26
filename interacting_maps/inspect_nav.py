@@ -35,11 +35,15 @@ def pixel_series(run, x, y) -> dict:
 def pixel_iterations(run, k, x, y):
     """The same over the iterations of frame k's replay; None without a replay."""
     rep = run.iterations(k)
-    if rep is None:
-        return None
-    return {'I': rep['I'][:, y, x],
-            '|G|': np.hypot(rep['G'][:, y, x, 0], rep['G'][:, y, x, 1]),
-            '|F|': np.hypot(rep['F'][:, y, x, 0], rep['F'][:, y, x, 1])}
+    return None if rep is None else pixel_of_stack(rep, x, y)
+
+
+def pixel_of_stack(stack, x, y) -> dict:
+    """I, |G|, |F| at pixel (x, y) along the first axis of stacked maps
+    ({'I': (n,H,W), 'G': (n,H,W,2), 'F': (n,H,W,2)}): frames or iterations."""
+    return {'I': np.asarray(stack['I'][:, y, x], dtype=np.float64),
+            '|G|': np.hypot(stack['G'][:, y, x, 0], stack['G'][:, y, x, 1]).astype(np.float64),
+            '|F|': np.hypot(stack['F'][:, y, x, 0], stack['F'][:, y, x, 1]).astype(np.float64)}
 
 
 # ------------------------------------------------------------------ residuals
@@ -58,12 +62,16 @@ def iteration_residuals(run, k):
     rep = run.iterations(k)
     if rep is None:
         return None
-    V = run.raw(k)['V']
+    return residuals_of_stack(rep, run.raw(k)['V'], run.dt)
+
+
+def residuals_of_stack(rep, V, dt) -> dict:
+    """The residuals of iteration_residuals, from a replay's arrays."""
     n = len(rep['R'])
     ofce = np.full(n, np.nan)
     if V is not None:
         ofce = np.array([np.mean(np.abs(V + np.einsum('hwk,hwk->hw', rep['F'][i], rep['G'][i])))
                          for i in range(n)])
     gi = np.array([np.mean(np.abs(rep['G'][i] - _grad(rep['I'][i]))) for i in range(n)])
-    w = np.degrees(np.linalg.norm(rep['R'], axis=1) / run.dt)
+    w = np.degrees(np.linalg.norm(rep['R'], axis=1) / dt)
     return {'|V+F·G|': ofce, '|G−∇I|': gi, '|R|': w}
