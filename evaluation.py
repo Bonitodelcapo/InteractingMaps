@@ -231,8 +231,9 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
                 _save_3col_frame(frames_dir, k, V, net, H, W, gt_images, rc)
 
         if (k + 1) % 10 == 0 or k == 0:
+            w_deg = to_deg_s(omega_est)
             print(f"  Frame {k+1:4d}/{rc.n_frames} | "
-                  f"ω_est=({omega_est[0]:+.3f},{omega_est[1]:+.3f},{omega_est[2]:+.3f}) | "
+                  f"ω_est=({w_deg[0]:+.1f},{w_deg[1]:+.1f},{w_deg[2]:+.1f})°/s | "
                   f"err={err:.1f}°/s | dir={dir_err:.1f}°")
 
     # ─── Save CSV ─────────────────────────────────────────────────────
