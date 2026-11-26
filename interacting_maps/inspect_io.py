@@ -145,9 +145,9 @@ def load_run(run_dir, data_root=None) -> RunView:
     return RunView(run_dir, data_root)
 
 
-def check_comparable(runs) -> None:
-    if not 1 <= len(runs) <= MAX_RUNS:
-        raise ValueError(f'compare 1 to {MAX_RUNS} runs, got {len(runs)}')
+def check_comparable(runs, max_runs=MAX_RUNS) -> None:
+    if not 1 <= len(runs) <= max_runs:
+        raise ValueError(f'compare 1 to {max_runs} runs, got {len(runs)}')
     for key in SHARED:
         vals = {str(r.config[key]) for r in runs}
         if len(vals) > 1:

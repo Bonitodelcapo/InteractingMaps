@@ -53,7 +53,8 @@ sqlite:///mlflow.db`). `IM_MLFLOW=0` disables; `IM_MLFLOW_ALL=1` also logs sweep
 
 **Live demo:** `demo.ipynb` (matplotlib animation of all maps).
 
-**Inspection viewer:** `inspect_viewer.ipynb` (`inspect_viewer.py::Inspector`) —
+**Inspection app (fast):** `python inspect_app.py` (Qt/pyqtgraph, up to 10 runs; guide
+`docs/inspection_viewer.md`). **Inspection viewer:** `inspect_viewer.ipynb` (`inspect_viewer.py::Inspector`) —
 1–5 runs of one segment: maps at frame k (or one iteration of it), events + APS of
 that window, any `tracking.csv` column as a curve with a frame marker; click a
 curve to jump there; GIF/MP4 export. It reads runs made with per-frame states,
@@ -90,6 +91,10 @@ PYTHONPATH=. python tests/test_states_replay.py     # per-frame states, bit-exac
 PYTHONPATH=. python tests/test_inspect_io.py        # viewer loader (tiny generated dataset)
 PYTHONPATH=. python tests/test_inspect_fig.py       # inspector figure, scales, export
 PYTHONPATH=. python tests/test_inspect_viewer.py    # widgets headless: sliders, click, export
+PYTHONPATH=. python tests/test_inspect_registry.py  # quantity registry
+PYTHONPATH=. python tests/test_inspect_cache.py     # run cache + disk cache
+PYTHONPATH=. python tests/test_inspect_labels.py    # run labels/colours
+PYTHONPATH=. python tests/test_inspect_app.py       # Qt app headless (offscreen)
 PYTHONPATH=. python tests/test_inspect_tools.py     # run picker, spikes, scale modes, pixel probe, residuals, export
 PYTHONPATH=. python tests/test_cmax_gradient.py      # analytic contrast gradient vs finite differences
 ```

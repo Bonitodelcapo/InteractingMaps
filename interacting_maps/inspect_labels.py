@@ -36,7 +36,7 @@ def run_labels(configs) -> list:
     labels = []
     for c, f in zip(configs, fields):
         parts = [MODELS.get(c['model'], (c['model'],))[0]]
-        parts += [_fmt(k, f.get(k)) for k in differ]
+        parts += [_fmt(k, f.get(k)) for k in differ if f.get(k) is not None]
         labels.append(' '.join(parts))
     folders = [os.path.basename(os.path.normpath(c.get('_dir', ''))) for c in configs]
     dup = [labels.count(lab) > 1 for lab in labels]

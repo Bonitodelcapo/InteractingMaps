@@ -17,7 +17,26 @@ python report/run_experiments.py --what inspect --sequences poster --models cook
 Copy the run folders back to the laptop. Keep the dataset in `data/<dataset>/` (or set the
 *data in* box) for the events/APS panels; without it, maps and curves still show.
 
-## 2. Open it (laptop)
+## 2. Open it (laptop) — desktop app (fast, recommended)
+
+```
+pip install PySide6 pyqtgraph
+python inspect_app.py                     # or: --root <folder with inspect runs>  --data <data folder>
+```
+
+- **Runs tab:** *scan* → dataset → segment → tick up to **10 run folders** (any models, the same
+  model from a sweep too; *model* filters the list) → *load*. Each run is labelled by what differs
+  (e.g. `thesis+IMU dFR=0.1`) and gets its own colour. First open of a run takes a while; later
+  opens read `<run>/.inspect_cache/`.
+- **View tab:** ▷ play / ◀ ▶ / frame slider; iteration slider on replayed frames; **maps for**
+  (which runs get I | G | F rows) and **curves for** (which runs draw lines) are independent;
+  curves list, map kinds, scale mode, spikes, *clear pixel probe*.
+- In the window: **drag the dashed marker** on a curve (or click a curve) to scrub; **click a map
+  pixel** for the probe plots; zoom/pan any map — all maps follow.
+- **Export tab:** GIF/MP4 over a frame range or over the iterations of the current frame, PNG of
+  the current frame (report style), *screenshot of the window* (exactly what you see).
+
+## 2b. Notebook viewer (slower)
 
 1. Python with `ipywidgets` + `ipympl` (`pip install ipywidgets ipympl`); after installing,
    **restart the kernel**.
