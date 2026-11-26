@@ -24,7 +24,7 @@ import os
 # ---------------------------------------------------------------------------
 DATASET_SEGMENTS = {
     'boxes_rotation': [
-    {  # quality=1.47, |ω|=1.810 rad/s, dominant=ω_z
+    {  # quality=1.47, |ω|=103.7 deg/s, dominant=ω_z
         'id': 'seg_A',
         't_start': 9.972,
         'frame_duration': 0.02,
@@ -32,7 +32,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.85, |ω|=1.094 rad/s, dominant=ω_x
+    {  # quality=0.85, |ω|=62.7 deg/s, dominant=ω_x
         'id': 'seg_B',
         't_start': 7.322,
         'frame_duration': 0.02,
@@ -40,7 +40,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.64, |ω|=0.794 rad/s, dominant=ω_y
+    {  # quality=0.64, |ω|=45.5 deg/s, dominant=ω_y
         'id': 'seg_C',
         't_start': 4.422,
         'frame_duration': 0.02,
@@ -48,7 +48,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.46, |ω|=0.574 rad/s, dominant=ω_y
+    {  # quality=0.46, |ω|=32.9 deg/s, dominant=ω_y
         'id': 'seg_D',
         't_start': 1.922,
         'frame_duration': 0.02,
@@ -59,21 +59,21 @@ DATASET_SEGMENTS = {
     ],
     # 'shapes_rotation' disabled:
     # 'shapes_rotation': [
-    #     {  # quality=7.2, |ω|=0.757 rad/s
+    #     {  # quality=7.2, |ω|=43.4 deg/s
     #     'id': 'seg_A', 't_start': 2.416, 'frame_duration': 0.02,
     #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
-    #     {  # quality=7.2, |ω|=0.925 rad/s
+    #     {  # quality=7.2, |ω|=53.0 deg/s
     #     'id': 'seg_B', 't_start': 6.216, 'frame_duration': 0.02,
     #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
-    #     {  # quality=6.2, |ω|=0.646 rad/s
+    #     {  # quality=6.2, |ω|=37.0 deg/s
     #     'id': 'seg_C', 't_start': 1.616, 'frame_duration': 0.02,
     #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
-    #     {  # quality=1.2, |ω|=0.066 rad/s
+    #     {  # quality=1.2, |ω|=3.8 deg/s
     #     'id': 'seg_D', 't_start': 0.166, 'frame_duration': 0.02,
     #     'n_frames': 25, 'initial_R': None, 'sensor_size': (180, 240)},
     # ],
     'poster_rotation': [
-           {  # quality=2.47, |ω|=2.816 rad/s, dominant=ω_z
+           {  # quality=2.47, |ω|=161.3 deg/s, dominant=ω_z
         'id': 'seg_A',
         't_start': 14.166,
         'frame_duration': 0.02,
@@ -81,7 +81,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=1.77, |ω|=2.026 rad/s, dominant=ω_z
+    {  # quality=1.77, |ω|=116.1 deg/s, dominant=ω_z
         'id': 'seg_B',
         't_start': 12.166,
         'frame_duration': 0.02,
@@ -89,7 +89,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.99, |ω|=1.123 rad/s, dominant=ω_x
+    {  # quality=0.99, |ω|=64.3 deg/s, dominant=ω_x
         'id': 'seg_C',
         't_start': 8.816,
         'frame_duration': 0.02,
@@ -97,7 +97,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.60, |ω|=0.683 rad/s, dominant=ω_y
+    {  # quality=0.60, |ω|=39.1 deg/s, dominant=ω_y
         'id': 'seg_D',
         't_start': 1.866,
         'frame_duration': 0.02,
@@ -105,7 +105,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.51, |ω|=0.575 rad/s, dominant=ω_y
+    {  # quality=0.51, |ω|=32.9 deg/s, dominant=ω_y
         'id': 'seg_E',
         't_start': 5.066,
         'frame_duration': 0.02,
@@ -115,7 +115,7 @@ DATASET_SEGMENTS = {
     },
     ],
     'dynamic_rotation': [
-    {  # quality=2.39, |ω|=2.618 rad/s, dominant=ω_z
+    {  # quality=2.39, |ω|=150.0 deg/s, dominant=ω_z
         'id': 'seg_A',
         't_start': 11.769,
         'frame_duration': 0.02,
@@ -123,7 +123,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=2.27, |ω|=2.743 rad/s, dominant=ω_z
+    {  # quality=2.27, |ω|=157.2 deg/s, dominant=ω_z
         'id': 'seg_B',
         't_start': 24.719,
         'frame_duration': 0.02,
@@ -131,7 +131,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=1.13, |ω|=1.436 rad/s, dominant=ω_y
+    {  # quality=1.13, |ω|=82.3 deg/s, dominant=ω_y
         'id': 'seg_C',
         't_start': 31.919,
         'frame_duration': 0.02,
@@ -139,7 +139,7 @@ DATASET_SEGMENTS = {
         'initial_R': None,
         'sensor_size': (180, 240),
     },
-    {  # quality=0.82, |ω|=0.964 rad/s, dominant=ω_y
+    {  # quality=0.82, |ω|=55.2 deg/s, dominant=ω_y
         'id': 'seg_D',
         't_start': 1.619,
         'frame_duration': 0.02,

@@ -181,7 +181,7 @@ def unanchored():
         g = run(seg, 'thesis')
         if g is not None:
             say(f'{seg[3]:8s} reference: axis turns up to {max(deg(x, g["gt"][0]) for x in g["gt"]):5.1f} '
-                f'deg, speed {mag(g["gt"]).min():.2f}-{mag(g["gt"]).max():.2f} rad/s')
+                f'deg, speed {mag(g["gt"]).min()*DEG:.1f}-{mag(g["gt"]).max()*DEG:.1f} deg/s')
 
 
 def reversal():
@@ -195,9 +195,9 @@ def reversal():
         ax = int(np.argmax(np.abs(c['gt']).mean(0)))          # dominant rotation axis
         near = c['gt'][max(k - 3, 0):k + 4, ax]
         flip = bool((np.diff(np.sign(near)) != 0).any())
-        say(f'{seg[3]:8s} frame {k}: |w_ref| = {mag(c["gt"])[k]:.3f} rad/s '
+        say(f'{seg[3]:8s} frame {k}: |w_ref| = {mag(c["gt"])[k]*DEG:.1f} deg/s '
             f'({"dominant axis reverses within 3 frames" if flip else "no reversal within 3 frames"}; '
-            f'{int((mag(c["gt"]) <= 0.2).sum())} frames of the track at <= 0.2 rad/s); '
+            f'{int((mag(c["gt"]) <= 0.2).sum())} frames of the track at <= {0.2*DEG:.1f} deg/s); '
             f'err CMax-anchor {c["err"][k]:6.1f}, thesis+IMU {i["err"][k]:4.1f} deg/s; '
             f'mean without it: CMax-anchor {c["err"][keep].mean():5.2f}, '
             f'thesis+IMU {i["err"][keep].mean():5.2f}, gap {c["err"][keep].mean()-i["err"][keep].mean():5.2f} '
@@ -227,7 +227,7 @@ def poster_segments():
             continue
         w = mag(c['gt']).mean()
         floor = mag(c['imu'] - c['gt']).mean() * DEG
-        line = (f'{seg[0][:6]} {seg[1]}: |w| {w:.2f} rad/s; CMax-anchor {c["err"].mean():5.2f} deg/s '
+        line = (f'{seg[0][:6]} {seg[1]}: |w| {w*DEG:.1f} deg/s; CMax-anchor {c["err"].mean():5.2f} deg/s '
                 f'= {100*c["err"].mean()/(w*DEG):4.1f}% of |w|; gyro floor {floor:4.2f} '
                 f'= {100*floor/(w*DEG):4.1f}%')
         if i is not None:
@@ -253,13 +253,13 @@ def beta_speed():
         r, p = stats.pearsonr(w, b)
         say(f'{model} dFR {d_fr} anchor {d_a}: r = {r:+.2f} (p = {p:.3g}, n = {len(w)}), '
             f'beta {b.min():.2f}-{b.max():.2f}, beta at slowest {b[np.argmin(w)]:.2f}, '
-            f'at fastest {b[np.argmax(w)]:.2f}; speeds {w.min():.2f}-{w.max():.2f} rad/s')
+            f'at fastest {b[np.argmax(w)]:.2f}; speeds {w.min()*DEG:.1f}-{w.max()*DEG:.1f} deg/s')
     orig, adopt, inl = (data.get(c, []) for c in BETA_CONFIGS)
     if len(orig) >= 2:
         fit = np.polyfit([p[0] for p in orig], [p[1] for p in orig], 1)
         syn = [run(s, 'thesis_cmax') for s in SYN]
         ws = np.mean([mag(t['gt']).mean() for t in syn if t is not None])
-        say(f'original fit predicts beta {np.polyval(fit, ws):.2f} at the synthetic {ws:.2f} rad/s')
+        say(f'original fit predicts beta {np.polyval(fit, ws):.2f} at the synthetic {ws*DEG:.1f} deg/s')
     if len(inl) == len(orig) == len(adopt):
         for (o, a, v, seg) in zip(orig, adopt, inl, BETA_SEGMENTS):
             say(f'{seg[0][:6]} {seg[1]}: dir CMax-anchor {o[3]:.1f} / {a[3]:.1f}, CMax-inloop {v[3]:.1f}; '
@@ -271,13 +271,13 @@ def inloop_identical():
     for seg in SEGMENTS:
         a, b = run(seg, 'thesis_cmax_v2'), run(seg, 'thesis_cmax_v2', curl=0.6)
         if a is not None and b is not None:
-            say(f'{seg[3]:8s} curl 0 vs 0.6 (1.5 s): max |dw| = {np.abs(a["est"]-b["est"]).max():.2e} rad/s')
+            say(f'{seg[3]:8s} curl 0 vs 0.6 (1.5 s): max |dw| = {np.abs(a["est"]-b["est"]).max()*DEG:.2e} deg/s')
     for seg in [b for b in BETA_SEGMENTS if b in [s[:3] for s in SEGMENTS]]:   # 3 s main_* runs exist
         a = run(seg, 'thesis_cmax_v2', nf=150, d_fr=0.5, d_anchor=None)
         b = run(seg, 'thesis_cmax_v2', nf=150)
         if a is not None and b is not None:
             say(f'{seg[0][:6]} {seg[1]}: dFR 0.5 vs {ADOPTED["delta_FR"]} (3 s): '
-                f'max |dw| = {np.abs(a["est"]-b["est"]).max():.2e} rad/s')
+                f'max |dw| = {np.abs(a["est"]-b["est"]).max()*DEG:.2e} deg/s')
 
 
 def synthetic_beta_original():

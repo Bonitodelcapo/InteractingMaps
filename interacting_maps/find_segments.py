@@ -212,8 +212,8 @@ def print_segments(segments, top_n=10):
     print(f"TOP {n} CONSTANT-VELOCITY SEGMENTS")
     print(f"{'='*100}")
     print(f"{'#':>3} | {'t_start':>7} {'t_end':>7} {'dur':>5} {'max_n':>5} | "
-          f"{'ωx':>7} {'ωy':>7} {'ωz':>7} | "
-          f"{'|ω|':>5} {'dom':>3} {'rσ':>5} {'dir°':>5} {'qual':>5}")
+          f"{'ωx°/s':>7} {'ωy°/s':>7} {'ωz°/s':>7} | "
+          f"{'|ω|°/s':>5} {'dom':>3} {'rσ':>5} {'dir°':>5} {'score':>5}")
     print(f"{'-'*100}")
 
     for i, seg in enumerate(segments[:n]):
@@ -222,8 +222,8 @@ def print_segments(segments, top_n=10):
         print(
             f"{i+1:3d} | {seg['t_start']:7.3f} {seg['t_end']:7.3f} "
             f"{seg['duration']:5.1f} {seg['max_n_frames']:5d} | "
-            f"{omega[0]:7.3f} {omega[1]:7.3f} {omega[2]:7.3f} | "
-            f"{seg['omega_magnitude']:5.3f} {dom:>3} "
+            f"{np.degrees(omega[0]):7.1f} {np.degrees(omega[1]):7.1f} {np.degrees(omega[2]):7.1f} | "
+            f"{np.degrees(seg['omega_magnitude']):5.1f} {dom:>3} "
             f"{seg['relative_std']:5.3f} {seg['direction_spread_deg']:5.1f} "
             f"{seg['quality']:5.2f}"
         )
@@ -245,7 +245,7 @@ def generate_config(segments, dataset_name: str, top_n=5, frame_duration=0.020):
         axis_names = ['x', 'y', 'z']
         dom = axis_names[seg['dominant_axis']]
         print(f"# Segment #{i+1}: quality={seg['quality']:.2f}, "
-              f"|ω|={seg['omega_magnitude']:.3f} rad/s, dominant=ω_{dom}")
+              f"|ω|={np.degrees(seg['omega_magnitude']):.1f} deg/s, dominant=ω_{dom}")
         print(f"# Validated duration: {seg['duration']:.1f}s → max_n_frames={seg['max_n_frames']}")
         print(f"T_START = {seg['t_start']:.3f}")
         print(f"FRAME_DURATION = {dt}")
@@ -262,7 +262,7 @@ def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020, targ
         omega = seg['mean_omega']
         axis_names = ['x', 'y', 'z']
         dom = axis_names[seg['dominant_axis']]
-        print(f"    {{  # quality={seg['quality']:.2f}, |ω|={seg['omega_magnitude']:.3f} rad/s, "
+        print(f"    {{  # quality={seg['quality']:.2f}, |ω|={np.degrees(seg['omega_magnitude']):.1f} deg/s, "
               f"dominant=ω_{dom}")
         print(f"        'id': 'seg_{chr(65+i)}',")
         print(f"        't_start': {seg['t_start']:.3f},")
@@ -277,12 +277,12 @@ def export_to_config(segments, dataset_name, top_n=5, frame_duration=0.020, targ
 def plot_imu_with_segments(imu_data, segments, top_n=5):
     """Plot gyroscope data with highlighted constant-velocity segments."""
     t = imu_data[:, 0]
-    gyro = imu_data[:, 4:7]
+    gyro = np.degrees(imu_data[:, 4:7])     # drawn in deg/s
 
     fig, axes = plt.subplots(4, 1, figsize=(14, 8), sharex=True)
     fig.suptitle('IMU Gyroscope — Constant Velocity Segments Highlighted')
 
-    labels = ['ω_x (rad/s)', 'ω_y (rad/s)', 'ω_z (rad/s)']
+    labels = ['ω_x (deg/s)', 'ω_y (deg/s)', 'ω_z (deg/s)']
     colors = ['#4e79a7', '#f28e2b', '#e15759']
 
     for i in range(3):
@@ -292,7 +292,7 @@ def plot_imu_with_segments(imu_data, segments, top_n=5):
 
     omega_mag = np.linalg.norm(gyro, axis=1)
     axes[3].plot(t, omega_mag, 'k-', lw=0.5, alpha=0.7)
-    axes[3].set_ylabel('|ω| (rad/s)')
+    axes[3].set_ylabel('|ω| (deg/s)')
     axes[3].set_xlabel('Time (s)')
     axes[3].grid(True, alpha=0.3)
 
@@ -301,7 +301,7 @@ def plot_imu_with_segments(imu_data, segments, top_n=5):
         for ax in axes:
             ax.axvspan(seg['t_start'], seg['t_end'],
                       alpha=0.3, color=seg_colors[i],
-                      label=(f"#{i+1}: |ω|={seg['omega_magnitude']:.2f}, "
+                      label=(f"#{i+1}: |ω|={np.degrees(seg['omega_magnitude']):.0f} deg/s, "
                              f"{seg['duration']:.1f}s")
                       if ax == axes[0] else None)
 

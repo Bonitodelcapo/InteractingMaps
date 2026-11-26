@@ -7,3 +7,5 @@ pyyaml               # ECRot calibration YAML
 imageio              # optional: IWE sequence GIFs (--save-iwe)
 mlflow               # run tracking / provenance mirror (provenance.py)
 rosbags
+ipywidgets           # widget panel of experiments_walkthrough.ipynb
+nbclient             # executes the notebook headless (tests/test_experiments_walkthrough.py)

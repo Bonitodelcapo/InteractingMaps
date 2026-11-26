@@ -39,6 +39,7 @@ OUTDIR = os.path.join(ROOT, 'report', 'experiments')
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 from config import THESIS_PARAMS, COOK_PARAMS, ITERS_PER_FRAME
+from interacting_maps.style import to_deg_s
 import experiment_tracking  # run.json reader, also for older params.json runs
 
 # display name in the report, model key
@@ -103,11 +104,11 @@ def floor_label(ds):
 
 
 def speed(lab):
-    """Mean |omega| of the reference over the 1.5 s segment, rad/s (baseline npz)."""
+    """Mean |omega| of the reference over the 1.5 s segment, deg/s (baseline npz)."""
     path = os.path.join(OUTDIR, f'baseline_dt20ms_{lab}.npz')
     if not os.path.exists(path):
         return None
-    return float(np.linalg.norm(np.load(path)['ref'], axis=1).mean())
+    return float(to_deg_s(np.linalg.norm(np.load(path)['ref'], axis=1).mean()))
 
 
 def tabular(spec, head, body):
@@ -142,7 +143,7 @@ def table_main():
     body = []
     for ds, disp, lab, extra in SEQS:
         sp = speed(lab)
-        head = [disp] + ([f'${sp:.2f}$\\,rad/s'] if sp else []) + extra
+        head = [disp] + ([f'${sp:.0f}$\\,$^\\circ$/s'] if sp else []) + extra
         body += [r'\midrule',
                  r'\multirow{6}{*}{\shortstack[l]{' + r'\\'.join(head) + '}}']
         floor = None
@@ -239,7 +240,7 @@ def table_anchor():
         ref = runs.get('thesis_imu')
         fl = gyro_floor(ref) if ref else None
         body += [r'\midrule',
-                 rf'\multirow{{6}}{{*}}{{${fl[2]:.2f}$}}' if fl else r'\multirow{6}{*}{---}']
+                 rf'\multirow{{6}}{{*}}{{${to_deg_s(fl[2]):.0f}$\,$^\circ$/s}}' if fl else r'\multirow{6}{*}{---}']
         for mdisp, key in MODELS:
             d = runs[key]
             if d is None:

@@ -33,7 +33,7 @@ from interacting_maps.network_dissertation import InteractingMapsThesis, Cost_OF
 from interacting_maps.camera import build_R_normal_equations, solve_R_lstsq
 from interacting_maps.metrics import compute_metrics, curl_share, flow_epe
 from interacting_maps.viz import net_maps, draw_map, draw_series
-from interacting_maps.style import frame_times, use_style, save, SCREEN_WIDTH
+from interacting_maps.style import frame_times, use_style, save, SCREEN_WIDTH, to_deg_s
 
 # Cap on frames per segment for a fast local smoke test; set from --limit.
 LIMIT = None
@@ -276,7 +276,7 @@ def _selfcheck():
         w0 = ref_omega(ctx['om'], *ctx['wins'][0])
         c = ctx['calib']
         print(f"[ok] {seg['name']}: {ctx['n']} frames, |omega_gt[0]|="
-              f"{np.linalg.norm(w0):.3f} rad/s  [calib {c['src']}: "
+              f"{to_deg_s(np.linalg.norm(w0)):.1f} deg/s  [calib {c['src']}: "
               f"fx={c['fx']:.0f} cx={c['cx']:.0f} cy={c['cy']:.0f}"
               f"{' +dist' if c['dist_coeffs'] is not None else ''}]")
         _selfcheck_clamps(ctx)
@@ -547,9 +547,9 @@ def plot_P3(path=FRAMES_CSV, out='diag_P3_omega_timeseries.png'):
         k = [int(r['frame']) for r in sr]
         for j, (ek, gk, title) in enumerate(axkeys):
             ax = axes[i][j]
-            ax.plot(k, [float(r[gk]) for r in sr], color='#52514e', lw=1.5,
+            ax.plot(k, to_deg_s([float(r[gk]) for r in sr]), color='#52514e', lw=1.5,
                     label='GT')
-            ax.plot(k, [float(r[ek]) for r in sr], color='#2a78d6', lw=1.5,
+            ax.plot(k, to_deg_s([float(r[ek]) for r in sr]), color='#2a78d6', lw=1.5,
                     label='est')
             ax.spines[['top', 'right']].set_visible(False)
             if i == 0:
@@ -557,7 +557,7 @@ def plot_P3(path=FRAMES_CSV, out='diag_P3_omega_timeseries.png'):
             if j == 0:
                 ax.set_ylabel(seg, fontsize=9)
     axes[0][2].legend(frameon=False, fontsize=8)
-    fig.suptitle('Rung 0: estimated vs ground-truth omega (rad/s) over frames')
+    fig.suptitle('Rung 0: estimated vs ground-truth omega (deg/s) over frames')
     fig.tight_layout(); fig.savefig(out, dpi=130); plt.close(fig)
     print(f"[ok] {out}")
 
