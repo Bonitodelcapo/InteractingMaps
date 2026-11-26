@@ -90,6 +90,7 @@ PYTHONPATH=. python tests/test_states_replay.py     # per-frame states, bit-exac
 PYTHONPATH=. python tests/test_inspect_io.py        # viewer loader (tiny generated dataset)
 PYTHONPATH=. python tests/test_inspect_fig.py       # inspector figure, scales, export
 PYTHONPATH=. python tests/test_inspect_viewer.py    # widgets headless: sliders, click, export
+PYTHONPATH=. python tests/test_inspect_tools.py     # run picker, spikes, scale modes, pixel probe, residuals, export
 PYTHONPATH=. python tests/test_cmax_gradient.py      # analytic contrast gradient vs finite differences
 ```
 

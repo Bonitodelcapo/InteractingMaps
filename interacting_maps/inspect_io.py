@@ -152,3 +152,29 @@ def check_comparable(runs) -> None:
         vals = {str(r.config[key]) for r in runs}
         if len(vals) > 1:
             raise ValueError(f'runs differ in {key}: {sorted(vals)}')
+
+
+# ------------------------------------------------------------------ catalog
+def segment_label(cfg) -> str:
+    """One segment of one dataset at one dt and length: what compared runs share."""
+    return (f"{cfg['segment_id']}  t0 {float(cfg['t_start']):.3f} s  "
+            f"dt {1000 * float(cfg['frame_duration']):.0f} ms  {int(cfg['n_frames'])} frames")
+
+
+def scan_runs(root) -> list:
+    """Every run under root that has saved states, as dicts with dir, dataset,
+    segment (segment_label), model, n_frames, replays (frames), summary, provenance."""
+    import glob
+    out = []
+    for path in sorted(glob.glob(os.path.join(root, '**', 'run.json'), recursive=True)):
+        d = os.path.dirname(path)
+        if not states_io.has_states(d):
+            continue
+        rec = experiment_tracking.read_run(d)
+        c = rec['config']
+        rep = glob.glob(os.path.join(os.path.dirname(states_io.replay_path(d, 0)), 'frame_*.npz'))
+        out.append({'dir': d, 'dataset': c['dataset'], 'segment': segment_label(c),
+                    'model': c['model'], 'n_frames': int(c['n_frames']),
+                    'replays': sorted(int(os.path.basename(p)[6:10]) for p in rep),
+                    'summary': rec['summary'], 'provenance': rec['provenance']})
+    return out

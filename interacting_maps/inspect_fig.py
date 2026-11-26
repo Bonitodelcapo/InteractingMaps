@@ -106,10 +106,11 @@ def _draw_curve(ax, runs, name, k):
 
 
 def draw_inspector(runs, k, it=None, panels=MAP_KINDS, curves=('err_deg_s', 'beta'),
-                   share_scale=False, scales=None, fig=None) -> Figure:
+                   share_scale=False, scales=None, fig=None, probe=None) -> Figure:
     """Rows: one per run (map panels), one raw row (V, APS), one per curve.
     `it` (1-based) shows that iteration of frame k's replay; `scales` from
-    fixed_scales (computed here when None); `fig` is cleared and reused."""
+    fixed_scales (computed here when None; [{}] per run = per-frame scaling);
+    `fig` is cleared and reused; `probe` (x, y) is marked on every map."""
     kinds = [p for p in panels if p in MAP_KINDS]
     if scales is None:
         scales = fixed_scales(runs, kinds + ['V'], share=share_scale)
@@ -125,7 +126,9 @@ def draw_inspector(runs, k, it=None, panels=MAP_KINDS, curves=('err_deg_s', 'bet
             maps, note = _maps_at(r, k, it)
             for j, kind in enumerate(kinds):
                 ax = fig.add_subplot(gs[i, j])
-                ax._inspect_role = 'map'
+                ax._inspect_role, ax._inspect_run, ax._inspect_kind = 'map', i, kind
+                if probe is not None:
+                    ax.plot(*probe, marker='+', color='k', ms=10, mew=1.5)
                 draw_map(ax, kind, maps[kind], title=f'{kind} {note}'.strip(),
                          scale=sc.get(kind))
                 if j == 0:
