@@ -13,6 +13,7 @@ class CurveArea:
         self.widget = self.layout
         self.plots, self.lines, self.markers = {}, {}, {}
         self._moving = False
+        self.layout.scene().sigMouseClicked.connect(self._clicked)   # once: the scene outlives rebuilds
 
     def rebuild(self):
         app = self.app
@@ -43,7 +44,6 @@ class CurveArea:
             m.sigPositionChanged.connect(self._dragged)
             m.sigPositionChangeFinished.connect(self._dragged)
             p.addItem(m)
-            p.scene().sigMouseClicked.connect(lambda ev, p=p: self._clicked(ev, p))
             self.markers[name] = m
             self.plots[name] = p
         p_last = self.plots[app.curve_names[-1]] if app.curve_names else None
@@ -63,10 +63,13 @@ class CurveArea:
         if not self._moving and self.app.caches:
             self.app.set_frame(self._nearest(m.value()))
 
-    def _clicked(self, ev, p):
-        if not self.app.caches or not p.sceneBoundingRect().contains(ev.scenePos()):
+    def _clicked(self, ev):
+        if not self.app.caches:
             return
-        self.app.set_frame(self._nearest(p.vb.mapSceneToView(ev.scenePos()).x()))
+        for p in self.plots.values():
+            if p.vb.sceneBoundingRect().contains(ev.scenePos()):
+                self.app.set_frame(self._nearest(p.vb.mapSceneToView(ev.scenePos()).x()))
+                return
 
     def update(self):
         t = self.app.caches[0].times[self.app.frame]

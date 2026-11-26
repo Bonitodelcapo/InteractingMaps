@@ -72,6 +72,28 @@ try:
     states_io.save_state(d, 1, st, loop)
     c3 = RunCache.open(d, DATA)
     check('stale cache rebuilt after new states', np.allclose(c3.map_at('I', 1), st['I'][:180, :240], atol=1e-3))
+    # review fixes
+    import interacting_maps.inspect_cache as ic
+    calls = []
+    orig_res = ic.residuals_of_stack
+    ic.residuals_of_stack = lambda *a: calls.append(1) or orig_res(*a)
+    c4 = RunCache.open(d, DATA)
+    c4.iteration_residuals(2); c4.iteration_residuals(2)
+    ic.residuals_of_stack = orig_res
+    check('residuals computed once per frame (memoised)', len(calls) == 1)
+
+    orig_w = RunCache._write_cache
+    RunCache._write_cache = lambda self, *a: (_ for _ in ()).throw(OSError('read-only'))
+    try:
+        shutil.rmtree(os.path.join(d, ic.CACHE_DIR), ignore_errors=True)
+        c5 = RunCache.open(d, DATA)
+        check('read-only folder: loads without the disk cache', np.allclose(c5.map_at('I', 1), c3.map_at('I', 1)))
+    except OSError:
+        check('read-only folder: loads without the disk cache', False)
+    finally:
+        RunCache._write_cache = orig_w
+    check('no disk cache under results/', not ic.cache_allowed('results/poster_rotation/cook/x')
+          and ic.cache_allowed(d))
 finally:
     shutil.rmtree(ROOT, ignore_errors=True)
 

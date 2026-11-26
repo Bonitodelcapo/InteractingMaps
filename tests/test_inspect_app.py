@@ -156,6 +156,38 @@ try:
     check('screenshot written', os.path.getsize(p) > 0)
     check('file names stay short', len(os.path.basename(ep._name('f000-001', 'gif'))) <= 150)
 
+    # ---------------- review fixes
+    for _ in range(4):
+        ca.rebuild()
+    hits = []
+    orig_set = app.set_frame
+    app.set_frame = lambda k: hits.append(k)
+    p0 = ca.plots['err_deg_s']
+    class _Ev:
+        def scenePos(self):
+            return p0.vb.sceneBoundingRect().center()
+    ca.layout.resize(800, 400)
+    qt_app().processEvents()
+    ca.layout.scene().sigMouseClicked.emit(_Ev())
+    app.set_frame = orig_set
+    check('one click = one frame change after many rebuilds', len(hits) == 1)
+
+    ma = app.map_area
+    old_rgb, old_gen, old_caches = ma._rgb, ma._generation, list(app.caches)
+    ma.reset()
+    ma._prefill_work([(0, 'I', 0)], old_gen, old_rgb, old_caches)
+    check('stale prefill does not write into the new cache', len(ma._rgb) == 0)
+    g = ma._generation
+    ma.prefill(blocking=True)
+    check('each prefill cancels the previous one', ma._generation == g + 1)
+    empty = InspectApp(root=ROOT, data_root=DATA)
+    try:
+        empty.map_area.prefill(blocking=True)
+        empty.set_scale_mode('shared')
+        check('prefill with no runs loaded', True)
+    except Exception as e:
+        check(f'prefill with no runs loaded ({e!r})', False)
+
     # ---------------- speed: 10 runs, 5 with maps
     dirs = [make_run(ROOT, 'thesis_imu', seed=20 + i, n_frames=12, folder=f'sweep{i}', t_start=1.1,
                      deltas={'delta_FR': 0.1 * (i + 1)}) for i in range(10)]

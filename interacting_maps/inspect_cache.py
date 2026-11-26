@@ -21,6 +21,15 @@ CACHE_DIR = '.inspect_cache'
 KINDS = ('I', 'G', 'F')
 
 
+def cache_allowed(run_dir) -> bool:
+    """No disk cache under results/ (the reported runs stay untouched)."""
+    try:
+        states_io.assert_not_results(run_dir)
+        return True
+    except ValueError:
+        return False
+
+
 def _stamp(run_dir) -> list:
     out = []
     for sub in ('states', 'replay'):
@@ -49,6 +58,7 @@ class RunCache:
         self.maps, self.replays, self.V = {}, {}, None
         self.aps, self.aps_index = [], None
         self.curves, self.fullrate, self.frame_scales = {}, {}, {}
+        self._residuals = {}
 
     # ------------------------------------------------------------ open
     @classmethod
@@ -62,7 +72,11 @@ class RunCache:
             c._read_cache(cdir)
         else:
             c._decompress(report)
-            c._write_cache(cdir, stamp)
+            if cache_allowed(run_dir):
+                try:
+                    c._write_cache(cdir, stamp)
+                except OSError as e:                 # read-only folder: keep it in memory only
+                    print(f'  (no disk cache for {run_dir}: {e})')
         report(0.8)
         c._load_raw()
         c._compute_scales()
@@ -164,5 +178,7 @@ class RunCache:
     def iteration_residuals(self, k):
         if k not in self.replays:
             return None
-        V = None if self.V is None else self.V[k].astype(np.float64)
-        return residuals_of_stack(self.replays[k], V, self.dt)
+        if k not in self._residuals:                 # do not depend on the iteration: once per frame
+            V = None if self.V is None else self.V[k].astype(np.float64)
+            self._residuals[k] = residuals_of_stack(self.replays[k], V, self.dt)
+        return self._residuals[k]

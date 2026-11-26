@@ -28,6 +28,16 @@ def _rgb(x):
     return (np.asarray(x) * 255).astype(np.uint8)
 
 
+def _render(c, sc, kind, k, it):
+    """RGB (uint8) of one panel of run cache `c` at scale `sc`; None without data."""
+    if kind == 'V':
+        return None if c.V is None else _rgb(render_V(c.V[k], scale=sc))
+    if kind == 'aps':
+        data = c.aps_at(k)
+        return None if data is None else _rgb(_render_aps(data))
+    return _rgb(_RENDER[kind](c.map_at(kind, k, it), scale=sc))
+
+
 class MapArea:
     def __init__(self, app):
         self.app = app
@@ -37,29 +47,40 @@ class MapArea:
         self.widget.setWidget(self.layout)
         self.images, self.raw_items, self.views, self.markers = {}, {}, [], []
         self.run_rows = []
+        self._generation = 0
         self.reset()
 
     def reset(self):
         self._rgb, self._scales = {}, {}
-        self._generation = getattr(self, '_generation', 0) + 1     # stops a running prefill
+        self._generation += 1                        # stops a running prefill
 
     def prefill(self, blocking=False):
         """Render every frame of the shown runs at the current scale mode ahead of
-        time (background thread), so even the first pass through the frames is fast."""
+        time (background thread), so even the first pass through the frames is fast.
+        Each call cancels the previous one; results of a cancelled pass are dropped."""
         import threading
-        app, gen = self.app, self._generation
-        jobs = [(i, kind, k) for k in range(app.caches[0].n_frames) if app.caches
+        app = self.app
+        self._generation += 1
+        if not app.caches:
+            return
+        jobs = [(i, kind, k) for k in range(app.caches[0].n_frames)
                 for i in sorted(app.maps_for) for kind in app.map_kinds]
-
-        def work():
-            for i, kind, k in jobs:
-                if gen != self._generation or i >= len(app.caches):
-                    return
-                self._image(i, kind, k, None)
+        args = (jobs, self._generation, self._rgb, list(app.caches), app.scale_mode, self.scales())
         if blocking:
-            work()
+            self._prefill_work(*args)
         else:
-            threading.Thread(target=work, daemon=True).start()
+            threading.Thread(target=self._prefill_work, args=args, daemon=True).start()
+
+    def _prefill_work(self, jobs, gen, rgb, caches, mode=None, scales=None):
+        """Render into `rgb` (the dict of that pass) while `gen` is current."""
+        for i, kind, k in jobs:
+            if gen != self._generation:
+                return
+            key = (i, kind, k, None, mode)
+            if key not in rgb and i < len(caches):
+                val = _render(caches[i], scales[i].get(kind), kind, k, None)
+                if gen == self._generation:
+                    rgb[key] = val
 
     # ------------------------------------------------------------ scales
     def scales(self) -> list:
@@ -118,16 +139,7 @@ class MapArea:
     def _image(self, i, kind, k, it):
         key = (i, kind, k, it, self.app.scale_mode)
         if key not in self._rgb:
-            c = self.app.caches[i]
-            sc = self.scales()[i].get(kind)
-            if kind == 'V':
-                data = None if c.V is None else c.V[k]
-                self._rgb[key] = None if data is None else _rgb(render_V(data, scale=sc))
-            elif kind == 'aps':
-                data = c.aps_at(k)
-                self._rgb[key] = None if data is None else _rgb(_render_aps(data))
-            else:
-                self._rgb[key] = _rgb(_RENDER[kind](c.map_at(kind, k, it), scale=sc))
+            self._rgb[key] = _render(self.app.caches[i], self.scales()[i].get(kind), kind, k, it)
         return self._rgb[key]
 
     def update(self):
