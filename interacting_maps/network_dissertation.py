@@ -29,7 +29,7 @@ Key implementation detail:
 
 import numpy as np
 from .camera import (compute_calibration, build_kinematic_matrix,
-                     build_R_normal_equations, solve_R_lstsq,
+                     build_R_normal_equations, solve_R_lstsq, kinematic_residual,
                      CLIP_I, CLIP_G, CLIP_F, CLIP_R)
 
 # ---------------------------------------------------------------------------
@@ -593,6 +593,20 @@ class InteractingMapsThesis:
 
         # G and other quantities start at zero — they'll develop from OFCE
 
+    def get_state(self) -> dict:
+        """Copies of everything carried from one frame to the next.
+
+        Gradient accumulators are reset every iteration and the IMU/CMax
+        targets are set per frame, so I, G, F, R are the whole state."""
+        return {k: q.value.copy() for k, q in
+                (('I', self.q_I), ('G', self.q_G), ('F', self.q_F), ('R', self.q_R))}
+
+    def set_state(self, state: dict) -> None:
+        """Restore a state from get_state (copied in)."""
+        new = {k: np.array(state[k], dtype=np.float64) for k in ('I', 'G', 'F', 'R')}
+        self.q_I.value, self.q_G.value = new['I'], new['G']
+        self.q_F.value, self.q_R.value = new['F'], new['R']
+
     def reset(self, scale=0.01):
         """Randomly initialise all inferred maps (without R/F consistency)."""
         rng = np.random.default_rng()
@@ -666,3 +680,7 @@ class InteractingMapsThesis:
         dIy[:-1, :] = self.I[1:, :] - self.I[:-1, :]
         grad_I = np.stack([dIx, dIy], axis=-1)
         return float(np.mean(np.abs(self.G - grad_I)))
+
+    def residual_FCR(self) -> float:
+        """Mean absolute residual of the kinematic constraint F = C·R."""
+        return kinematic_residual(self._C_mat, self.F, self.R)

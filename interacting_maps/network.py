@@ -17,7 +17,7 @@ the thesis version (network_dissertation.py) which uses simultaneous updates.
 
 import numpy as np
 from .camera import (compute_calibration, build_kinematic_matrix,
-                     build_R_normal_equations, solve_R_lstsq,
+                     build_R_normal_equations, solve_R_lstsq, kinematic_residual,
                      CLIP_I, CLIP_G, CLIP_F)
 
 
@@ -82,6 +82,16 @@ class InteractingMaps:
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
+
+    def get_state(self) -> dict:
+        """Copies of everything carried from one frame to the next."""
+        return {'I': self.I.copy(), 'G': self.G.copy(),
+                'F': self.F.copy(), 'R': self.R.copy()}
+
+    def set_state(self, state: dict) -> None:
+        """Restore a state from get_state (copied in)."""
+        self.I, self.G, self.F, self.R = (np.array(state[k], dtype=np.float64)
+                                          for k in ('I', 'G', 'F', 'R'))
 
     def reset(self, scale: float = 0.01) -> None:
         """Randomly initialise all inferred maps."""
@@ -276,3 +286,7 @@ class InteractingMaps:
     def residual_GI(self) -> float:
         """Mean absolute residual of the gradient constraint G = ∇I."""
         return float(np.mean(np.abs(self.G - self._grad_I())))
+
+    def residual_FCR(self) -> float:
+        """Mean absolute residual of the kinematic constraint F = C·R."""
+        return kinematic_residual(self._C_mat, self.F, self.R)
