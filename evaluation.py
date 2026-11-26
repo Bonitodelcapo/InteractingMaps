@@ -53,6 +53,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from config import DATASET_SEGMENTS, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
+from interacting_maps.frame_driver import FrameDriver
 import experiment_tracking as run_store
 
 # Helpers extracted into focused modules (R3/R5 of architecture_review.md) and
@@ -100,7 +101,6 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
     )
     H, W = seq.H, seq.W
     fx, fy, cx, cy = seq.calib.fx, seq.calib.fy, seq.calib.cx, seq.calib.cy
-    imu_data = load_imu(rc.paths['imu'])            # model INPUT (gyro)
     gt_data  = load_groundtruth(rc.paths['groundtruth'])  # SCORING ref (Vicon)
     om_data  = load_omega_gt(rc.paths.get('omega_gt'))     # exact omega, if shipped
 
@@ -121,28 +121,9 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
 
     net = make_network(rc, H, W, fx, fy, cx, cy)
 
-    # ─── CMax front-end (V1: full CMax per frame → R anchor) ──────────
-    # B1: load the raw events separately and slice per window here, leaving
-    # EventFrameSequence untouched. The gyro still provides frame-0 init only.
-    cmax_est = None
-    cmax_events = None
-    omega_cmax_prev = np.zeros(3)
-    omega_anchor = None
-    if getattr(rc, 'use_cmax', False):
-        from interacting_maps.data_loader import load_events_fast, undistort_events
-        dur = rc.n_frames * rc.frame_duration + 0.1
-        cmax_events = undistort_events(
-            load_events_fast(rc.paths['events'], t_start=rc.t_start, duration=dur),
-            seq.calib)
-        if getattr(rc, 'use_cmax_v2', False):
-            print(f"  CMax V2 active — R driven by 1 CMax step / iteration "
-                  f"(lr={rc.cmax_lr}, {len(cmax_events)} events).")
-        else:
-            # V1: standalone full-solve estimator, feeds the R anchor.
-            from interacting_maps.angular_velocity import CMaxAngularVelocity
-            cmax_est = CMaxAngularVelocity(H, W, fx, fy, cx, cy, use_polarity=True)
-            print(f"  CMax V1 active — R anchored to full CMax ω per frame "
-                  f"({len(cmax_events)} events).")
+    # Per-frame inputs (gyro / CMax anchor / event window) and V1's loop state.
+    driver = FrameDriver(rc, net, H, W, seq.calib)
+    imu_data = driver.imu_data
 
     # ─── IWE logging (final contrast-maximized IWE per frame) ─────────
     iwe_dir = None
@@ -172,24 +153,8 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
         # SCORING reference: Vicon (independent), falls back to gyro if absent.
         omega_ref, _ = get_reference_omega(gt_data, imu_data, t_lo, t_hi, om_data)
 
-        # Raw events for this window (V1 anchor and V2 in-loop both need them).
-        win = None
-        if cmax_events is not None:
-            win = cmax_events[(cmax_events[:, 0] >= t_lo) & (cmax_events[:, 0] < t_hi)]
-
-        if getattr(rc, 'use_cmax_v2', False):
-            # V2: CMax drives R inside the message passing.
-            net.step(V, n_iters=rc.n_iters, events=win)
-        elif cmax_est is not None:
-            # V1: full CMax solve → R anchor (via Cost_IMU mechanism).
-            omega_anchor = cmax_est.estimate(win, t_ref=0.5 * (t_lo + t_hi),
-                                             omega_init=omega_cmax_prev)
-            omega_cmax_prev = omega_anchor.copy()
-            net.step(V, n_iters=rc.n_iters, omega_imu=omega_anchor)
-        elif rc.use_thesis and rc.use_imu:
-            net.step(V, n_iters=rc.n_iters, omega_imu=omega_imu)
-        else:
-            net.step(V, n_iters=rc.n_iters)
+        driver.step(k, V, rc.n_iters)
+        win, omega_anchor, cmax_est = driver.last_window, driver.last_anchor, driver.cmax_est
 
         omega_est = net.R / rc.frame_duration
         err, dir_err, beta = compute_metrics(omega_est, omega_ref)
