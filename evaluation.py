@@ -653,6 +653,8 @@ if __name__ == '__main__':
     parser.add_argument('--distortion-mode', type=str, default=None,
                         choices=['undistort_events', 'C_full'],
                         help='Override distortion handling (exp 2, 6). Exp 9 sweeps both.')
+    parser.add_argument('--out-root', type=str, default=None,
+                        help="Run folder root (default 'results'); e.g. experiments/<name> for exploratory runs")
     args = parser.parse_args()
     save_frames = not args.no_frames  # Default: save images
 
@@ -672,6 +674,7 @@ if __name__ == '__main__':
             n_iters=args.n_iters,
             delta_IMU=args.delta_imu,
             distortion_mode=args.distortion_mode,
+            out_root=args.out_root,
         )
         rc = RunConfig(**rc_kwargs)
         rc.save_iwe = args.save_iwe

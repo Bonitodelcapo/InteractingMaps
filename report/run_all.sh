@@ -158,6 +158,21 @@ runs() {   # one line per independent run: "name|group|command"
     done
     echo "sweep2_thesis_cmax_${s}_more|REPORT|$S2 --mode coord --model thesis_cmax --sequences $s --vary 'n_iters=300;poisson=fft,dct' --out sweep2_thesis_cmax_${s}_more.csv"
   done
+  # stale (not in the report): why thesis' omega barely moves without an anchor.
+  # x2 F free of the kinematics, R follows F; x3 strongest stable push on F;
+  # x4 G set by the events only; x5 all of it; basin: does R return from any start?
+  ST="$R --what sweep --name stale --model thesis --duration 1.5"
+  for s in boxes poster dynamic bicycle street; do
+    echo "stale_x2_$s|REPORT|$ST --mode coord --sequences $s --base 'delta_RF=0,delta_FR=0.9' --vary 'n_iters=75,300' --out stale_x2_$s.csv"
+    echo "stale_x3_$s|REPORT|$ST --mode grid --sequences $s --base 'delta_VFG=0.48' --vary 'dt=0.005;n_iters=300' --out stale_x3_$s.csv"
+    echo "stale_x4_$s|REPORT|$ST --mode coord --sequences $s --base 'delta_IG=0,delta_GI=0' --vary 'n_iters=75,300' --out stale_x4_$s.csv"
+    echo "stale_x5_$s|REPORT|$ST --mode grid --sequences $s --base 'delta_VFG=0.48,delta_RF=0,delta_FR=0.9' --vary 'dt=0.005;n_iters=300,1000' --out stale_x5_$s.csv"
+  done
+  for d in "boxes_rotation seg_B" "poster_rotation seg_C" "ecrot_bicycle seg_A"; do
+    for it in 75 1000 5000; do
+      echo "stale_basin_${d% *}_$it|REPORT|python evaluation.py --exp 6 --model thesis --dataset ${d% *} --segment ${d#* } --frame 20 --n_iters $it --out-root experiments/stale_basin"
+    done
+  done
   # OFCE step-instability diagnostic (not in the report): one job per variant.
   for v in $OFCE_VARIANTS; do
     echo "ofce_$v|DIAG|python diag_omega_ladder.py --mode ofce --variant $v"
