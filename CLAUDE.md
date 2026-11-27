@@ -53,6 +53,10 @@ sqlite:///mlflow.db`). `IM_MLFLOW=0` disables; `IM_MLFLOW_ALL=1` also logs sweep
 
 **Live demo:** `demo.ipynb` (matplotlib animation of all maps).
 
+**Compare runs:** `compare_runs.ipynb` — up to 20 saved runs side by side, output by
+output (curves overlaid, table, figures, maps, frames); viewer only, never runs anything
+(`interacting_maps/compare_runs/`).
+
 **Discover new segments** from a dataset's IMU and print a `config.py` block:
 `python interacting_maps/find_segments.py data/<name>/imu.txt`.
 
@@ -76,6 +80,7 @@ PYTHONPATH=. python tests/test_distortion_cmax.py
 PYTHONPATH=. python tests/test_ecrot_convert.py      # ROSbag converter on a tiny synthetic bag
 PYTHONPATH=. python tests/test_cmax_v1_vs_v2.py
 PYTHONPATH=. python tests/test_cmax_gradient.py      # analytic contrast gradient vs finite differences
+PYTHONPATH=. python tests/test_compare_runs.py       # run comparison tool on synthetic run folders
 ```
 
 ## Configuration lives in config.py

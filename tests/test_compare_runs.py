@@ -204,6 +204,9 @@ def test_bands():
     with tempfile.TemporaryDirectory() as root:
         runs = make_runs(root, [('a', dict(seg='seg_A'), {}, None),
                                 ('b', dict(seg='seg_B'), {}, None)])
+        lab = bands.labels(runs)
+        check('segment label is one token', lab == {1: '#1 boxes_rotation seg_A',
+                                                    2: '#2 boxes_rotation seg_B'}, str(lab))
         w = bands.segment_warning(runs) or ''
         check('two segments: warning', '2 segments' in w and 'does not make sense' in w, w)
         fig, _ = bands.curve_figure(runs, 'omega')
@@ -211,7 +214,56 @@ def test_bands():
               sum(l.get_color() == 'k' for l in fig.axes[2].lines) == 2)
 
 
-TESTS = [test_catalog, test_outputs, test_bands]
+# ---------------------------------------------------------------- Task 4: app
+def test_app():
+    import ipywidgets as wd
+    from interacting_maps.compare_runs import CompareApp
+    print('app')
+    with tempfile.TemporaryDirectory() as root:
+        a, b, c = three_runs(root)
+        for d in (a, b):
+            write_tracking(d)
+        write_png(os.path.join(a, 'tracking_plot.png'))
+        app = CompareApp(roots=[root])
+        for _ in range(25):
+            app.add_btn.click()
+        check('at most 20 slots', len(app.slots) == 20 and app.add_btn.disabled)
+        for _ in range(25):
+            app.remove_btn.click()
+        check('at least 1 slot', len(app.slots) == 1 and app.remove_btn.disabled)
+
+        s1 = app.slots[0]
+        s1.drop['model'].value = 'thesis'
+        check('cascade: dt options', s1.drop['dt'].options[1:] == (('0.01', 0.01), ('0.02', 0.02))
+              or [v for _, v in s1.drop['dt'].options] == ['any', 0.01, 0.02],
+              str(s1.drop['dt'].options))
+        check('two matches: no folder yet until picked', len(s1.run.options) == 2)
+        s1.drop['dt'].value = 0.02
+        check('single match picked', s1.folder == a, str(s1.folder))
+        check('missing output disabled', s1.check['recon_r'].disabled
+              and not s1.check['omega'].disabled)
+
+        for k in ('omega', 'table', 'tracking_plot.png', 'recon_r'):
+            s1.check[k].value = True
+        check('disabled output not ticked', s1.ticked == {'omega', 'table', 'tracking_plot.png'},
+              str(s1.ticked))
+        app.add_btn.click()
+        s2 = app.slots[1]
+        check('new slot copies choices', s2.drop['model'].value == 'thesis')
+        check('new slot copies ticks', s2.check['omega'].value)
+        s2.drop['dt'].value = 0.01
+        check('slot 2 folder', s2.folder == b)
+        app.render()
+        kids = app.view.children
+        check('render draws widgets', len(kids) >= 3, str(len(kids)))
+        def walk(w):
+            yield w
+            for k in getattr(w, 'children', ()):
+                yield from walk(k)
+        check('render has images', any(isinstance(w, wd.Image) for w in walk(app.view)))
+
+
+TESTS = [test_catalog, test_outputs, test_bands, test_app]
 
 if __name__ == '__main__':
     only = sys.argv[1:]

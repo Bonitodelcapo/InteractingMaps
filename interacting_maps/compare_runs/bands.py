@@ -19,11 +19,11 @@ from . import outputs
 from .catalog import MISSING, choice_keys
 
 Run = namedtuple('Run', 'slot color row ticked')
-SLOT_COLORS = [matplotlib.colors.to_hex(c) for c in plt.get_cmap('tab20').colors]
+_TAB20 = plt.get_cmap('tab20').colors
+SLOT_COLORS = [matplotlib.colors.to_hex(c) for c in _TAB20[0::2] + _TAB20[1::2]]  # dark first
 DIFF_STYLE = 'background:#fff3c4'
 MAP_COLS = 5                      # map panels per figure row
 _SEG_LS = ['-', '--', ':', '-.']  # reference line style per segment
-_NOT_CONFIG = ('folder', 'err_deg_s')
 
 
 # ------------------------------------------------------------ labels, warning
@@ -38,6 +38,8 @@ def _fmt(k, v):
         return f'dt={1000 * v:g}ms'
     if k.startswith('delta_'):
         return f'δ_{k[6:]}={v}'
+    if k == 'root':
+        return os.path.basename(os.path.normpath(v))
     return f'{k}={v}'
 
 
@@ -49,9 +51,13 @@ def differing(runs):
 def labels(runs):
     """slot -> '#<slot> ' + the config values that differ between the runs."""
     diff = differing(runs)
-    return {r.slot: f'#{r.slot} ' + (' '.join(_fmt(k, r.row[k]) for k in diff)
-                                     or _fmt('model', r.row['model']))
-            for r in runs}
+    seg = bool({'dataset', 'segment_id'} & set(diff))
+    diff = [k for k in diff if not (seg and k in ('dataset', 'segment_id', 't_start'))]
+
+    def one(r):
+        parts = ([_segment(r)] if seg else []) + [_fmt(k, r.row[k]) for k in diff]
+        return f'#{r.slot} ' + (' '.join(parts) or _fmt('model', r.row['model']))
+    return {r.slot: one(r) for r in runs}
 
 
 def _segment(r):
@@ -145,8 +151,8 @@ def curve_figure(runs, key, lab=None):
             if key == 'recon_r':
                 ax.set_ylim(0, 1)
         axes[-1].set_xlabel(style.LABEL_TIME + ' since t_start')
-        axes[0].legend(loc='lower left', bbox_to_anchor=(0, 1), ncol=4, frameon=False,
-                       fontsize=8)
+        h, l = axes[0].get_legend_handles_labels()
+        fig.legend(h, l, loc='outside lower center', ncol=3, frameon=False, fontsize=8)
     return fig, missing
 
 
@@ -219,7 +225,7 @@ def map_figure(runs, key, lab=None):
         for ax in axes.flat[len(runs):]:
             ax.set_axis_off()
         for ax, (r, a, k, note) in zip(axes.flat, got):
-            title = lab[r.slot] + (f'\n{note}' if note else '') + ('' if same else '\nown scale')
+            title = f'#{r.slot}' + (f'\n{note}' if note else '') + ('' if same else '\nown scale')
             if a is None:
                 ax.set_axis_off()
                 ax.set_title(title + ('' if note else f'\nno {kind}'), color=r.color)
@@ -249,9 +255,9 @@ def state_figure(runs, frame, lab=None):
                 ax = axes[i, j]
                 if s is None or kind not in s:
                     ax.set_axis_off()
-                    ax.set_title(f'{lab[r.slot]}\nno frame {frame}' if i == 0 else '')
+                    ax.set_title(f'#{r.slot}\nno frame {frame}' if i == 0 else '')
                     continue
-                viz.draw_map(ax, kind, s[kind], title=lab[r.slot] if i == 0 else None,
+                viz.draw_map(ax, kind, s[kind], title=f'#{r.slot}' if i == 0 else '',
                              scale=scale)
     return fig
 

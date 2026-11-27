@@ -5,7 +5,6 @@ folder under the given roots; options() / matches() narrow them like the
 walkthrough's saved-run lookup: each choice narrows the others, a chosen key keeps
 its alternatives, 'any' is no filter.
 """
-import glob
 import os
 import re
 
@@ -20,12 +19,17 @@ BASE_KEYS = ['model', 'dataset', 'segment_id', 't_start', 'dt', 'n_frames', 'n_i
 _RECORDS = ('run.json', 'params.json')
 
 
+_SKIP_DIRS = {'video_frames', 'iter_frames', 'iwe', 'states', 'replay', '.ipynb_checkpoints'}
+
+
 def _run_folders(root):
-    found = set()
-    for name in _RECORDS:
-        found |= {os.path.normpath(os.path.dirname(f))
-                  for f in glob.glob(os.path.join(root, '**', name), recursive=True)}
-    return sorted(found)
+    """Folders under root holding a run record; frame folders are not descended into."""
+    found = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in _SKIP_DIRS)
+        if any(n in files for n in _RECORDS):
+            found.append(os.path.normpath(d))
+    return found
 
 
 def _segment_id(config, folder):
