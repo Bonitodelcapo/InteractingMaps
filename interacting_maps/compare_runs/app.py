@@ -177,6 +177,8 @@ class CompareApp:
         if len(self.slots) > 1:
             self.slots.pop()
             self._buttons()
+            if self.view.children:
+                self.render()
 
     def rescan(self):
         outputs.clear_cache()
@@ -196,9 +198,12 @@ class CompareApp:
         return out
 
     def _cells(self, runs, key, lab, frame=None):
+        """One cell per run in slot order; a run that did not tick key keeps an empty cell."""
         cells = []
         for slot, path in bands.image_cells(runs, key, frame):
             r = next(r for r in runs if r.slot == slot)
+            if key not in r.ticked:
+                path = frame = None
             body = _file_widget(path) if path else wd.HTML(
                 '—' if frame is None else f'no frame {frame}')
             cells.append(wd.VBox([_head(lab[slot], r.color), body],
@@ -208,21 +213,22 @@ class CompareApp:
     def _band(self, runs, band, lab):
         out = []
         for o in [o for o in outputs.OUTPUTS if o.band == band]:
-            sel = [r for r in runs if o.key in r.ticked]
-            if not sel:
+            want = [r for r in runs if o.key in self._wanted.get(r.slot, ())]
+            if not want:
                 continue
             out.append(_head(o.label))
-            if band == 'curves':
-                fig, missing = bands.curve_figure(sel, o.key, lab)
+            if band == 'curves':        # a ticked run without the column is reported
+                fig, missing = bands.curve_figure(want, o.key, lab)
                 out.append(_fig_image(fig))
                 if missing:
                     out.append(wd.HTML('not in: ' + ', '.join(f'#{s}' for s in missing)))
             elif band == 'table':
-                out.append(wd.HTML(bands.table_html(sel, self.only_diff.value, lab)))
+                out.append(wd.HTML(bands.table_html(want, self.only_diff.value, lab)))
             elif band == 'maps':
-                out.append(_fig_image(bands.map_figure(sel, o.key, lab)))
+                show = {r.slot for r in runs if o.key in r.ticked}
+                out.append(_fig_image(bands.map_figure(runs, o.key, lab, show=show)))
             else:
-                out.append(self._cells(sel, o.key, lab))
+                out.append(self._cells(runs, o.key, lab))
         return out
 
     def _frame_count(self, runs):
@@ -234,21 +240,21 @@ class CompareApp:
         runs, k = self._runs, self.frame.value
         out = []
         for key in outputs.SEQUENCES:
-            sel = [r for r in runs if key in r.ticked]
-            if not sel:
+            if not any(key in r.ticked for r in runs):
                 continue
             out.append(_head(outputs.BY_KEY[key].label + f' — frame {k}'))
-            out.append(_fig_image(bands.state_figure(sel, k, self._lab)) if key == 'states'
-                       else self._cells(sel, key, self._lab, frame=k))
-        for key in outputs.MOVIES:
             sel = [r for r in runs if key in r.ticked]
-            if sel:
-                out += [_head(key), self._cells(sel, key, self._lab)]
+            out.append(_fig_image(bands.state_figure(sel, k, self._lab)) if key == 'states'
+                       else self._cells(runs, key, self._lab, frame=k))
+        for key in outputs.MOVIES:
+            if any(key in r.ticked for r in runs):
+                out += [_head(key), self._cells(runs, key, self._lab)]
         self.frames_box.children = out
 
     def render(self):
         """Redraw the comparison grid from the slots' runs and ticks."""
         runs = self._runs = self.runs()
+        self._wanted = {s.slot: {k for k, cb in s.check.items() if cb.value} for s in self.slots}
         if not runs:
             self.view.children = [wd.HTML('<b>no run chosen</b>')]
             return

@@ -210,11 +210,14 @@ def _grid(n):
     return math.ceil(n / cols), cols
 
 
-def map_figure(runs, key, lab=None):
-    """One panel per run of one map (key 'final:I', 'center:aps', ...), shared colour scale."""
+def map_figure(runs, key, lab=None, show=None):
+    """One panel per run of one map (key 'final:I', 'center:aps', ...), shared colour scale.
+    Runs not in `show` (slots; default all) keep an empty panel."""
     lab = lab or labels(runs)
     which, kind = key.split(':')
-    got = [(r, *_map_array(r, which, kind)) for r in runs]
+    show = {r.slot for r in runs} if show is None else show
+    got = [(r, *_map_array(r, which, kind)) if r.slot in show else (r, None, None, 'not ticked')
+           for r in runs]
     arrs = [a for _, a, _, _ in got if a is not None]
     draw_kind = next((k for _, a, k, _ in got if a is not None), None)
     same = len({a.shape for a in arrs}) == 1

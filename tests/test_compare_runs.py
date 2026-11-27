@@ -16,7 +16,8 @@ FAILURES = []
 
 
 def check(name, ok, detail=''):
-    print(f"  [{'ok ' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ''))
+    line = f"  [{'ok ' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else '')
+    print(line.encode(sys.stdout.encoding or 'utf-8', 'replace').decode(sys.stdout.encoding or 'utf-8'))
     if not ok:
         FAILURES.append(name)
 
@@ -261,6 +262,27 @@ def test_app():
             for k in getattr(w, 'children', ()):
                 yield from walk(k)
         check('render has images', any(isinstance(w, wd.Image) for w in walk(app.view)))
+        html = lambda: ' '.join(w.value for w in walk(app.view) if isinstance(w, wd.HTML))
+
+        # final review: a run lacking a ticked curve is reported, never silent
+        write_tracking(a, extra={'recon_r': 0.5})
+        app.rescan()
+        s1.check['recon_r'].value = True
+        s2.check['recon_r'].value = True          # slot 2 (run b) has no recon_r: greyed
+        app.render()
+        check('missing curve reported in the app', 'not in: #2' in html(), html()[-200:])
+
+        # final review: a run that did not tick an output keeps its (empty) column
+        s2.check['tracking_plot.png'].value = False
+        app.render()
+        cells = [w for w in walk(app.view) if isinstance(w, wd.VBox)
+                 and w.children and isinstance(w.children[0], wd.HTML)
+                 and w.children[0].value.endswith('</b>') and len(w.children) == 2]
+        check('unticked run keeps its empty cell', len(cells) == 2, str(len(cells)))
+
+        # final review: removing a slot redraws the comparison
+        app.remove()
+        check('remove redraws', '#2' not in html(), html()[:200])
 
 
 TESTS = [test_catalog, test_outputs, test_bands, test_app]
