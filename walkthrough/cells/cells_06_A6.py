@@ -27,43 +27,51 @@ the adopted config, `one axis` / `full` with the three `BETA_CONFIGS`.
 '''),
 
 ('code', A6, r'''
-# step 1 -- the runs: found (Redraw, every BETA_SEGMENTS x BETA_CONFIGS) or made now (Live)
+# the A6 form: which anchor configurations on which beta segments
 from report_runs import BETA_CONFIGS
-p = params()
+form('A6', [Knob('configs', BETA_CONFIGS, 'many', choices=BETA_CONFIGS),
+            Knob('segments', BETA_SEGMENTS, 'many', choices=BETA_SEGMENTS),
+            Knob('n_frames', 150), Knob('dt', 0.02)])
+'''),
+
+('code', A6, r'''
+# step 1 -- the runs of the form's (segment x config) pairs: found (Redraw) or made (Live)
+p = params('A6')
+rep_A6 = is_report('A6')                        # the report-only steps run only then
 PAIRS_A6 = [(s, c) for s in BETA_SEGMENTS for c in BETA_CONFIGS]   # cmd_beta's order: index i
-runs_A6 = {}
-if p['mode'] == 'Redraw':
-    note_redraw(p, 150)
-    nf_A6, miss = 150, []
-    for i, (seg, (model, d_fr, d_a)) in enumerate(PAIRS_A6):
-        d = run_dir(seg, model, 150, d_fr=d_fr, d_anchor=d_a)
+nf_A6, runs_A6, miss = p['n_frames'], {}, []
+
+
+def beta_run_dir_A6(seg, model, d_fr, d_a):
+    """The saved run of one (segment, config): every step size as cmd_beta's run_cfg sets
+    it (config.py's, with the config's delta_FR / anchor), so a sweep run with another
+    rate never stands in; results/ first."""
+    prm = {**make_tables.expected_params(model), 'delta_FR': d_fr,
+           **({'delta_IMU': d_a} if d_a is not None else {})}
+    with contextlib.redirect_stdout(io.StringIO()):
+        return next((h for h in (experiment_tracking.find_run(r, seg[0], model, seg[1], nf_A6, prm,
+                                                               dt=p['dt'], t_start=seg[2])
+                                 for r in roots()) if h), None)
+
+
+for seg in p['segments']:
+    for model, d_fr, d_a in p['configs']:
+        if p['mode'] == 'Redraw':
+            d = beta_run_dir_A6(seg, model, d_fr, d_a)
+        elif need([os.path.join('data', seg[0])]):      # cmd_beta's run_cfg call
+            d = saved_or_run(run_cfg(*seg, model, p['dt'], nf_A6, out_root='experiments/walkthrough',
+                                     delta_FR=d_fr, delta_IMU=d_a))
+        else:
+            d = None
         if d is None:
-            miss.append(f'beta_{i}')
+            miss.append((seg, (model, d_fr, d_a)))
         else:
             runs_A6[seg, (model, d_fr, d_a)] = d
-    print(f'{len(runs_A6)} of {len(PAIRS_A6)} runs found')
-    if miss:
-        print('make with run_all.sh job(s): ' + ', '.join(miss))
-    READY['A6'] = bool(runs_A6) or need(['results/<a 150-frame beta run>'], miss)
-else:
-    seg_A6 = next((s for s in BETA_SEGMENTS
-                   if s[0] == p['seg'][0] and abs(s[2] - p['seg'][2]) < 1e-9), None)
-    READY['A6'], nf_A6 = False, min(p['n_frames'], 150)
-    if seg_A6 is None:
-        print(f"not a β segment: {p['segment']} ({p['seg'][0]} {p['seg'][1]}) is not in "
-              f"report_runs.BETA_SEGMENTS; pick boxes or poster")
-    else:
-        adopted = ('thesis_cmax', ADOPTED['delta_FR'], ADOPTED['delta_IMU'])
-        cfgs_A6 = [adopted] if p['sweep'] == 'one point' else list(BETA_CONFIGS)
-        print(f'{len(cfgs_A6)} run(s) of {nf_A6} frames = {len(cfgs_A6) * nf_A6} frames, '
-              f'{p["dt"]*1000:g} ms each')
-        if need([os.path.join('data', seg_A6[0])]):
-            for model, d_fr, d_a in cfgs_A6:            # cmd_beta's run_cfg call
-                rc = run_cfg(*seg_A6, model, p['dt'], nf_A6, out_root=walk_dir('A6'),
-                             delta_FR=d_fr, delta_IMU=d_a)
-                E.experiment_tracking(rc, save_frames=False)
-                runs_A6[seg_A6, (model, d_fr, d_a)] = rc.output_dir
-            READY['A6'] = True
+print(f'{len(runs_A6)} of {len(runs_A6) + len(miss)} runs found')
+for seg, cfg in miss:
+    i = PAIRS_A6.index((seg, cfg)) if (seg, cfg) in PAIRS_A6 else None
+    print(f'no saved run for {seg[0][:6]} {seg[1]} {cfg}' + (f' (run_all.sh job beta_{i})' if i is not None else ''))
+READY['A6'] = bool(runs_A6)
 for (seg, cfg), d in runs_A6.items():
     print(f'{seg[0][:6]} {seg[1]} {cfg[0]:15s} dFR {cfg[1]} anchor {cfg[2]}: {d}')
 '''),
@@ -89,8 +97,10 @@ display(pd.DataFrame(pts_A6).round(3))
 speed_A6, speed_src_A6 = {}, {}
 for seg in BETA_SEGMENTS:
     have = [d for (s, _c), d in runs_A6.items() if s == seg]
-    if p['mode'] == 'Redraw' and os.path.isdir(os.path.join('data', seg[0])):
-        ref, _ = reference_and_gyro(seg + ('',), 0.02, nf_A6)
+    if not have:
+        continue
+    if os.path.isdir(os.path.join('data', seg[0])):
+        ref, _ = reference_and_gyro(seg + ('',), p['dt'], nf_A6)
         speed_A6[seg], speed_src_A6[seg] = float(to_deg_s(mag(ref).mean())), 'dataset'
     elif have:
         speed_A6[seg] = float(to_deg_s(mag(tracking(have[0])['gt']).mean()))
@@ -144,11 +154,11 @@ with use_style('paper'):
 
 ('code', A6, r'''
 %%section A6
-# step 5 -- the text numbers (Redraw only: they read the report's runs)
+# step 5 -- the text numbers (report configuration only: they read the report's runs)
 from scipy import stats
 from text_numbers import rows_of, f as tn_f
 lines_A6 = {'beta_speed': [], 'synthetic_beta_original': []}
-if p['mode'] == 'Redraw':
+if rep_A6:
     L = lines_A6['beta_speed']          # text_numbers.beta_speed
     tn_data = {}
     for cfg in BETA_CONFIGS:
@@ -188,7 +198,7 @@ if p['mode'] == 'Redraw':
     for k, ls in lines_A6.items():
         print(f'== {k}'); print('\n'.join(ls) or '(no runs)')
 else:
-    print('Live: the text numbers read the report runs; switch to Redraw to see them.')
+    print('[skip] report-only step')
 '''),
 
 ('code', A6, r'''
@@ -223,6 +233,8 @@ if p['mode'] == 'Live':
         differ = sorted(k for k in mine if k != 'out_root' and a.get(k) != mine[k])
         print(f'[ok] cmd_beta config {cfg}' if seen and not differ
               else f'[DIFF] cmd_beta config {cfg}: {differ or "no run"}')
+if not rep_A6:
+    print('[skip] not the report configuration')
 else:
     # fig_beta_speed reads the reference from the dataset (make_figures.reference_omega).
     # A dataset not on this machine: its reference is taken from the segment's run

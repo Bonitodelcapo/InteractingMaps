@@ -21,9 +21,10 @@ holding I of every model at the checkpoints `1,3,10,25,50,75`.
 a network per model, warm-started like a run → `step(V, n_iters=1)` repeated,
 I kept at every checkpoint → the grid of images → same-code check.
 
-Redraw reads the npz (it needs the synthetic `ecrot_bicycle` and the `dynamic`
-runs of the cluster; without them the section skips). Live iterates now on the
-panel's segment, at frame `n_frames - 1`, with the checkpoints up to `n_iters`.
+The form picks the cases (sequence, frame), dt and the iteration count. Redraw
+reads the saved npz of each case (the report's need the synthetic `ecrot_bicycle`
+and `dynamic` runs of the cluster); Live iterates now on the cases without one, into
+`experiments/walkthrough/converge*/` (converge_path's file names).
 '''),
 
 ('code', IMG, r'''
@@ -58,27 +59,41 @@ def caught_figures(module, **attrs):
 '''),
 
 ('code', A14, r'''
-# step 1 -- the snapshots: found (Redraw) or set up to be made now (Live)
+# the A14 form: which (sequence, frame) cases, at which dt and iteration count
 from report_runs import converge_path
-p = params()
-if p['mode'] == 'Redraw':
-    # the report's (sequence, frame) pairs; n_frames of its runs = frame + 1
-    cases_A14 = list(make_figures.CONVERGE)
-    note_redraw(p, cases_A14[0][1] + 1)
-    paths_A14 = {lab: converge_path(lab, fr) for lab, fr in cases_A14
-                 if need([converge_path(lab, fr)], [f'converge_{lab}'])}
-    ckpts_A14 = None                            # read from the npz
-    READY['A14'] = bool(paths_A14)
-else:
-    ds_A14, sid_A14, t0_A14, lab_A14 = p['seg']
-    cases_A14 = [(lab_A14, p['n_frames'] - 1)]  # the last frame of an n_frames track
-    ckpts_A14 = sorted({c for c in (1, 3, 10, 25, 50, 75) if c <= p['n_iters']} | {p['n_iters']})
-    paths_A14 = {lab_A14: os.path.join(walk_dir('A14'), f'{lab_A14}_frame{cases_A14[0][1]}.npz')}
-    READY['A14'] = need([os.path.join('data', ds_A14)])
-    print(f"Live: {lab_A14} frame {cases_A14[0][1]}, dt {p['dt']*1000:.0f} ms, "
-          f"checkpoints {ckpts_A14}; cmd_converge uses the adopted step sizes (panel deltas ignored)")
-for lab, path in paths_A14.items():
-    print(f'{lab:8s} {path}')
+CASES_A14 = list(make_figures.CONVERGE) + [(s[3], 74) for s in SEGMENTS
+                                           if (s[3], 74) not in make_figures.CONVERGE]
+form('A14', [Knob('cases', list(make_figures.CONVERGE), 'many', choices=CASES_A14),
+             Knob('dt', 0.02, choices=[0.02, 0.01]), Knob('n_iters', 75, choices=[75, 150])])
+'''),
+
+('code', A14, r'''
+# step 1 -- the snapshots per case: a saved npz (shown, not recomputed) or made now (Live)
+p = params('A14')
+rep_A14 = is_report('A14')                      # the report-only steps run only then
+ckpts_A14 = sorted({c for c in (1, 3, 10, 25, 50, 75) if c <= p['n_iters']} | {p['n_iters']})
+same_as_report = p['dt'] == 0.02 and p['n_iters'] == 75
+# Live npz: converge_path's file name, in a folder per (dt, n_iters)
+NAME_A14 = 'walkthrough/converge' + ('' if same_as_report else f"_dt{p['dt']*1000:g}ms_i{p['n_iters']}")
+cases_A14, paths_A14, make_A14 = list(p['cases']), {}, []
+for lab, fr in cases_A14:
+    saved = ([converge_path(lab, fr)] if same_as_report else []) + [converge_path(lab, fr, NAME_A14)]
+    hit = next((x for x in saved if os.path.exists(x)), None)
+    if hit:
+        paths_A14[lab, fr] = hit
+        if p['mode'] == 'Live':
+            print(f'>>> SAVED RUN (not rerun): {hit}')
+    elif p['mode'] == 'Live':
+        seg = next(s for s in SEGMENTS if s[3] == lab)
+        if need([os.path.join('data', seg[0])]):
+            paths_A14[lab, fr] = converge_path(lab, fr, NAME_A14)
+            make_A14.append((lab, fr))
+    else:
+        print(f'missing: {saved[0]} -- no saved run for {lab} frame {fr}'
+              + (f' (run_all.sh job converge_{lab})' if rep_A14 else ''))
+READY['A14'] = bool(paths_A14)
+for (lab, fr), path in paths_A14.items():
+    print(f'{lab:8s} frame {fr}: {path}' + ('  (made now)' if (lab, fr) in make_A14 else ''))
 '''),
 
 ('code', A14, r'''
@@ -129,21 +144,22 @@ def converge_one_A14(seg, model, dt, frame, checkpoints):
     return snaps
 
 
-snaps_A14 = {}                                  # {label: {model: {checkpoint: I}}}
-if p['mode'] == 'Live':
-    lab, frame = cases_A14[0]
-    snaps_A14[lab] = {m: converge_one_A14(p['seg'], m, p['dt'], frame, ckpts_A14) for m in MODELS}
-    np.savez_compressed(paths_A14[lab], checkpoints=ckpts_A14, segment=p['seg'][1],
-                        **{f'{m}_{it}': snaps_A14[lab][m][it] for m in MODELS for it in ckpts_A14})
-    print(f'-> {paths_A14[lab]}')
-else:
-    for lab, path in paths_A14.items():
+snaps_A14 = {}                                  # {(label, frame): {model: {checkpoint: I}}}
+for (lab, fr), path in paths_A14.items():
+    if (lab, fr) in make_A14:                   # cmd_converge, unrolled: made now
+        seg = next(s for s in SEGMENTS if s[3] == lab)
+        snaps_A14[lab, fr] = {m: converge_one_A14(seg, m, p['dt'], fr, ckpts_A14) for m in MODELS}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        np.savez_compressed(path, checkpoints=ckpts_A14, segment=seg[1],
+                            **{f'{m}_{it}': snaps_A14[lab, fr][m][it] for m in MODELS for it in ckpts_A14})
+        print(f'-> {path}')
+    else:                                       # its npz read
         z = np.load(path)
         ck = [int(c) for c in z['checkpoints']]
-        snaps_A14[lab] = {m: {it: z[f'{m}_{it}'] for it in ck} for m in MODELS}
+        snaps_A14[lab, fr] = {m: {it: z[f'{m}_{it}'] for it in ck} for m in MODELS}
 # how I sharpens: its spatial std at every checkpoint, per model
-for lab, by_model in snaps_A14.items():
-    print(f'== {lab}: std of I at each checkpoint (rows: models, columns: iterations)')
+for (lab, fr), by_model in snaps_A14.items():
+    print(f'== {lab} frame {fr}: std of I at each checkpoint (rows: models, columns: iterations)')
     display(pd.DataFrame({m: {it: float(np.std(I)) for it, I in s.items()}
                           for m, s in by_model.items()}).T.round(4))
 '''),
@@ -154,7 +170,9 @@ for lab, by_model in snaps_A14.items():
 from interacting_maps.style import use_style, save
 from interacting_maps.viz import draw_map
 pix_A14 = {}
-for lab, by_model in snaps_A14.items():
+for (lab, fr), by_model in snaps_A14.items():
+    one_per_lab = len({l for l, _ in snaps_A14}) == len(snaps_A14)
+    name = f'fig_converge_{lab}' + ('' if one_per_lab else f'_frame{fr}')   # fig_converge's names
     ck = sorted(next(iter(by_model.values())))
     with use_style('paper'):
         fig_A14, axes_A14 = plt.subplots(len(MODELS), len(ck),
@@ -164,36 +182,41 @@ for lab, by_model in snaps_A14.items():
             for c, it in enumerate(ck):
                 draw_map(axes_A14[r, c], 'I', by_model[model][it], title=f'iter {it}' if r == 0 else '')
             axes_A14[r, 0].set_ylabel(make_figures.MODELS[model][0])
-        pix_A14[f'fig_converge_{lab}.png'] = fig_pixels(fig_A14)
-        save(fig_A14, os.path.join(walk_dir('A14'), f'fig_converge_{lab}.png'), show=True)
+        pix_A14[f'{name}.png'] = fig_pixels(fig_A14)
+        save(fig_A14, os.path.join(walk_dir('A14'), f'{name}.png'), show=True)
 '''),
 
 ('code', A14, r'''
 %%section A14
-# same-code check -- fig_converge itself on the same npz; in Live also cmd_converge
+# same-code check -- cmd_converge on the cases made now; fig_converge itself on
+# the report's npz (report configuration only)
 import argparse
-if p['mode'] == 'Live':
-    lab, frame = cases_A14[0]
+for lab, frame in make_A14:
     chk_A14 = os.path.join(walk_dir('A14'), 'check', f'{lab}_frame{frame}.npz')
     os.makedirs(os.path.dirname(chk_A14), exist_ok=True)
     args_A14 = argparse.Namespace(checkpoints=','.join(map(str, ckpts_A14)), sequences=lab,
-                              frame=frame, dt=p['dt'])
+                                  frame=frame, dt=p['dt'])
     with redirect(run_experiments, converge_path=lambda l, f, name='converge': chk_A14), \
          contextlib.redirect_stdout(io.StringIO()):
         run_experiments.cmd_converge(E, args_A14)
     z = np.load(chk_A14)
-    check('cmd_converge snapshots',
+    check(f'cmd_converge snapshots {lab} frame {frame}',
           np.concatenate([z[f'{m}_{it}'].ravel() for m in MODELS for it in ckpts_A14]),
-          np.concatenate([snaps_A14[lab][m][it].ravel() for m in MODELS for it in ckpts_A14]))
-    attrs_A14 = dict(CONVERGE=cases_A14, converge_path=lambda l, f, name='converge': paths_A14[l])
+          np.concatenate([snaps_A14[lab, frame][m][it].ravel() for m in MODELS for it in ckpts_A14]))
+# fig_converge on the form's own npz: its CONVERGE and converge_path pointed at them
+# (the report's own when the form is the report's)
+if len({l for l, _ in paths_A14}) < len(paths_A14):
+    print('[skip] fig_converge: one figure per sequence, and two cases share one')
 else:
-    attrs_A14 = {}
-with caught_figures(make_figures, FIG=os.path.join(walk_dir('A14'), 'check'), **attrs_A14) as got_A14:
-    make_figures.fig_converge(E)
-for name, mine in pix_A14.items():
-    if name in got_A14['pixels']:
-        check(f'fig_converge {name}', mine, got_A14['pixels'][name])
-    else:
-        print(f'[DIFF] fig_converge {name}: the report function drew no such figure')
+    report_npz = rep_A14 and all(paths_A14[c] == converge_path(*c) for c in paths_A14)
+    attrs_A14 = {} if report_npz else dict(
+        CONVERGE=list(paths_A14), converge_path=lambda l, f, name='converge': paths_A14[l, f])
+    with caught_figures(make_figures, FIG=os.path.join(walk_dir('A14'), 'check'), **attrs_A14) as got_A14:
+        make_figures.fig_converge(E)
+    for name, mine in pix_A14.items():
+        if name in got_A14['pixels']:
+            check(f'fig_converge {name}', mine, got_A14['pixels'][name])
+        else:
+            print(f'[DIFF] fig_converge {name}: the report function drew no such figure')
 '''),
 ]

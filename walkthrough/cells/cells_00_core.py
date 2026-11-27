@@ -31,14 +31,20 @@ Run from the repository root (the setup cell finds it). Every angular velocity
 is shown in deg/s (`style.to_deg_s`); the code itself computes in rad/s.
 '''),
 
+('md', CORE + ('overview',), r'''
+(replaced at build time by experiments.md, see walkthrough/build_nb.py::overview_md)
+'''),
+
 ('md', CORE, r'''
 ### What you see, cell by cell
 
 | Section · cell | Shows |
 |---|---|
 | **setup** | nothing printed; imports and paths |
-| **panel** | the widgets, at the report's defaults; *reset* restores them |
-| **registry** | Redraw: the saved-runs lookup (model → available values → matching runs, best ω error first) · Live: the run panel; a saved configuration is not run again |
+| **overview** | experiments.md; each ID links to its section |
+| **panel** | the old global panel, read only by sections without a form yet (A1, A5, A8–A13, A18, A19) |
+| **registry** | the saved-runs lookup (model → available values → matching runs, best ω error first) |
+| **forms** | nothing printed; the per-experiment form machinery |
 | **helpers** | nothing printed; `check`, `need`, `redirect`, `%%section` |
 | **A0** | links to the five per-model walkthroughs |
 | **A1 · 1** inputs | the window (20 ms in Redraw, panel dt in Live) and the sequences with data |
@@ -48,14 +54,15 @@ is shown in deg/s (`style.to_deg_s`); the code itself computes in rad/s.
 | **A1 · 5** segment speeds | gyro speed of every candidate segment over 3 s; median-speed vs reported segment |
 | **A1 · 6** text lines | the image-travel line (`intensity`) and the sign-changes line (`track_length`) |
 | **A1 · check** | rows vs `cmd_window` and window_choice.csv; lines vs `segment_speeds`, `intensity`, `track_length` |
-| **A2 · 1** the runs | one folder per model (Redraw) or the folder of the new run (Live) |
+| **A2 · form** | models, segment, n_frames, dt, n_iters, poisson, δ_FR; Redraw: saved values only · Live: free |
+| **A2 · 1** the runs | one folder per model of the form; Live: `SAVED RUN (not rerun)` when it exists |
 | **A2 · 2** reference and gyro | their shapes and the first 4 frames, deg/s |
 | **A2 · 3** gyro floor | gyro error against the reference: deg/s and deg |
 | **A2 · 4** rows | one `cmd_main` csv row per model: err, median, dir, β, \|r\| |
 | **A2 · 5** text numbers | the lines of `poster_segments` and of the 3 s `inloop_identical` (Redraw) |
 | **A2 · 6** track length | `track_length`: error and \|r\| over the first N frames of the 3 s runs |
 | **A2 · check** | `[ok]`/`[DIFF]`: rows vs `main_base_*.csv`, text vs `text_numbers` (Redraw); config and row vs `cmd_main` itself (Live) |
-| **A3 · 1** the runs | as A2 · 1, at 75 frames |
+| **A3 · form, 1** | as A2, at 75 frames; report-only steps skip away from the report configuration |
 | **A3 · 2** rows | gyro floor and the 1.5 s rows of every model |
 | **A3 · 5** tab:main | every sequence's cells as a table, then the LaTeX of Table III |
 | **A3 · 6** fig:tracking | ω per axis over 1.5 s, poster seg_C, CMax-anchor and thesis vs reference |
@@ -275,9 +282,7 @@ def section(line, cell):
     """%%section A2 -- run the cell only if section A2's inputs were found."""
     ID = line.strip()
     if READY.get(ID, True):
-        r = get_ipython().run_cell(cell)
-        if not isinstance(r.error_in_exec, globals().get('AlreadySaved', ())):   # already said, no traceback
-            r.raise_error()                     # a failing cell fails "Run all"
+        get_ipython().run_cell(cell).raise_error()   # a failing cell fails "Run all"
     else:
         print(f'(skipped: {ID} inputs missing)')
 '''),
@@ -408,11 +413,7 @@ TOP = wd.HBox([W['mode'], W['segment']])          # the sections' segment, in bo
 display(wd.VBox([TOP, LOOKUP, PANEL]))
 
 
-# --- the Live guard: a configuration that is already saved is not run again
-class AlreadySaved(Exception):
-    pass
-
-
+# --- saved runs of one configuration (used by saved_or_run in the forms cell)
 def saved_runs(rc):
     """Complete saved runs (with a summary) of rc's configuration, by
     experiment_tracking.find_run, in every scanned root and in rc.out_root."""
@@ -424,23 +425,249 @@ def saved_runs(rc):
                     poisson=rc.poisson, distortion_mode=rc.distortion_mode) for root in roots]
     return [h for h in hits
             if h and 'mean_err_deg_s' in (experiment_tracking.read_summary(h) or {})]
+'''),
+
+('code', CORE + ('forms',), r'''
+# forms -- one per experiment: its own mode and knobs; never a global value
+from collections import namedtuple
+from IPython.display import HTML
+
+# kind: 'one' | 'many'. choices: a fixed list (configs, cases, solvers ...) offered in
+# both modes, not looked up in the registry; the section says which have no output.
+Knob = namedtuple('Knob', 'name report kind choices', defaults=('one', None))
 
 
-def guarded_tracking(rc, *a, **k):
-    """evaluation.experiment_tracking -- every tracking run, Live sections and
-    run_experiments._run alike -- unless the run is already saved."""
+def _pairs(choices):
+    """Widget options for a choices knob: (label, value), so tuples stay values."""
+    return [(str(c), c) for c in choices]
+FORMS = {}                                      # ID -> {'mode', 'knobs', 'redraw', 'live', 'hints', 'box'}
+LABEL = {f'{ds} {sid}': lab for ds, sid, _t0, lab in SEGMENTS}      # REG segment -> panel label
+COL = {'models': 'model'}                       # knob name -> REG column
+LIVE_FRAMES = 10                                # Live n_frames default: smoke size here
+PRESET = globals().get('PRESET', {})            # starting values for new forms (tests set it)
+
+
+def saved_view(fixed=None):
+    """REG rows a form can redraw: report segments, C_full, the form's fixed values."""
+    v = REG[REG.distortion_mode == 'C_full'].copy()
+    v['segment'] = v['segment'].map(LABEL)
+    for k, val in (fixed or {}).items():
+        v = v[v[k] == val]
+    return v.dropna(subset=['segment'])
+
+
+def form_options(ID):
+    """Redraw options of each knob: values of saved runs that fit the form's other knobs."""
+    F = FORMS[ID]
+    v = saved_view(F['fixed'])
+    opts = {}
+    for k in F['knobs']:
+        if k.choices is not None:
+            continue
+        rows = v
+        for o in F['knobs']:
+            val = F['redraw'][o.name].value
+            if o.name == k.name or o.choices is not None or val in (None, ()):
+                continue
+            col = COL.get(o.name, o.name)
+            rows = rows[rows[col].isin(val)] if o.kind == 'many' else rows[rows[col] == val]
+        opts[k.name] = sorted(rows[COL.get(k.name, k.name)].dropna().unique().tolist())
+    return opts
+
+
+def _refresh_form(ID):
+    """Refill the Redraw options until they agree with the values (a value forced to
+    another option changes the options of the others)."""
+    F = FORMS[ID]
+    if F['busy']:
+        return
+    F['busy'] = True
+    try:
+        for _ in range(len(F['knobs']) + 1):
+            changed = False
+            for name, vals in form_options(ID).items():
+                w = F['redraw'][name]
+                keep = w.value
+                if list(w.options) != vals:
+                    w.options = vals
+                if isinstance(keep, tuple):
+                    new = tuple(x for x in keep if x in vals) or tuple(vals)
+                else:
+                    new = keep if keep in vals else (vals[0] if vals else None)
+                w.value = new
+                changed |= new != keep
+            if not changed:
+                break
+    finally:
+        F['busy'] = False
+
+
+def _choice_widget(k):
+    w = (wd.SelectMultiple if k.kind == 'many' else wd.Dropdown)(options=_pairs(k.choices),
+                                                                  description=k.name)
+    w.value = tuple(k.report) if k.kind == 'many' else k.report
+    return w
+
+
+def _live_widget(k):
+    if k.choices is not None:
+        return _choice_widget(k)
+    if k.name == 'models':
+        return wd.SelectMultiple(options=MODELS, value=tuple(k.report), description='models')
+    if k.name == 'segment':
+        return wd.Dropdown(options=list(LABEL.values()), value=k.report, description='segment')
+    if k.name == 'poisson':
+        return wd.Dropdown(options=['iterative', 'fft', 'dct'], value=k.report, description='poisson')
+    if k.name in ('n_frames', 'n_iters'):
+        return wd.IntText(value=LIVE_FRAMES if k.name == 'n_frames' else k.report, description=k.name)
+    return wd.FloatText(value=k.report, description=k.name, step=0.01)
+
+
+def form(ID, knobs, fixed=None):
+    """Show experiment ID's form: mode, one widget per knob, reset. Redraw offers only
+    saved values (cascading) among runs with the `fixed` values (e.g. no curl);
+    Live is free (n_frames from 10, report value as hint). Re-running keeps the values."""
+    if ID not in FORMS:
+        F = FORMS[ID] = dict(knobs=list(knobs), busy=False, fixed=dict(fixed or {}),
+                             mode=wd.ToggleButtons(options=['Redraw', 'Live'], description=ID))
+        F['redraw'] = {k.name: (_choice_widget(k) if k.choices is not None else
+                                wd.SelectMultiple(description=k.name, value=()) if k.kind == 'many'
+                                else wd.Dropdown(description=k.name)) for k in knobs}
+        F['live'] = {k.name: _live_widget(k) for k in knobs}
+        F['hints'] = {k.name: wd.HTML(f'<i>report: {k.report}</i>') for k in knobs}
+        for k in knobs:                         # the report value first, where saved
+            if k.choices is not None:
+                continue
+            F['redraw'][k.name].options = [k.report] if k.kind == 'one' else list(k.report)
+            F['redraw'][k.name].value = k.report if k.kind == 'one' else tuple(k.report)
+        _refresh_form(ID)
+        _preset(F)
+        _refresh_form(ID)
+        for w in F['redraw'].values():
+            w.observe(lambda _c, ID=ID: _refresh_form(ID), names='value')
+        reset = wd.Button(description='reset to report')
+        reset.on_click(lambda _b, ID=ID: reset_form(ID))
+        red = wd.GridBox(list(F['redraw'].values()),
+                         layout=wd.Layout(grid_template_columns='repeat(3, 1fr)'))
+        live = wd.GridBox([wd.VBox([F['live'][k.name], F['hints'][k.name]]) for k in knobs],
+                          layout=wd.Layout(grid_template_columns='repeat(3, 1fr)'))
+        note = wd.HTML()
+        def show(_c=None, red=red, live=live, note=note, F=F):
+            r = F['mode'].value == 'Redraw'
+            red.layout.display, live.layout.display = ('', 'none') if r else ('none', '')
+            note.value = ('<i>Redraw: only values with saved runs</i>' if r else
+                          '<i>Live: free values; a saved configuration is shown, not rerun</i>')
+        F['mode'].observe(show, names='value')
+        show()
+        F['box'] = wd.VBox([wd.HBox([F['mode'], reset]), red, live, note],
+                           layout=wd.Layout(border='1px solid #999', padding='4px'))
+    display(FORMS[ID]['box'])
+
+
+def _preset(F):
+    """Start a new form from PRESET (mode, and knob values; 'model' sets 'models')."""
+    pre = dict(PRESET)
+    if 'model' in pre:
+        pre.setdefault('models', (pre['model'],))
+    F['mode'].value = pre.get('mode', F['mode'].value)
+    for k in F['knobs']:
+        if k.name not in pre:
+            continue
+        v = tuple(pre[k.name]) if k.kind == 'many' else pre[k.name]
+        F['live'][k.name].value = v
+        r = F['redraw'][k.name]
+        opts = k.choices if k.choices is not None else r.options
+        if (set(v) <= set(opts)) if k.kind == 'many' else (v in opts):
+            r.value = v
+
+
+def reset_form(ID):
+    """Every knob back to the report's value (Redraw: where saved runs have it)."""
+    F = FORMS[ID]
+    F['busy'] = True                            # no cascade while the values are set
+    try:
+        for k in F['knobs']:
+            rep = tuple(k.report) if k.kind == 'many' else k.report
+            F['live'][k.name].value = LIVE_FRAMES if k.name == 'n_frames' else rep
+            w = F['redraw'][k.name]
+            if k.choices is None:
+                w.options = list(rep) if k.kind == 'many' else [rep]
+            w.value = rep
+    finally:
+        F['busy'] = False
+    _refresh_form(ID)
+
+
+panel_params = globals().get('panel_params', params)   # the old global panel; kept on a re-run
+
+
+def params(ID=None):
+    """Experiment ID's form values, with the keys of the old panel params();
+    params() without an ID reads the old global panel."""
+    if ID is None:
+        return panel_params()
+    F = FORMS[ID]
+    q = {**DEFAULTS, 'mode': F['mode'].value, 'models': list(MODELS)}
+    ws = F['redraw'] if q['mode'] == 'Redraw' else F['live']
+    for k in F['knobs']:
+        v = ws[k.name].value
+        q[k.name] = list(v) if k.kind == 'many' else v
+    for k in ('n_frames', 'n_iters'):           # REG columns can come back as floats
+        q[k] = int(q[k]) if q[k] is not None else None
+    q['form'] = ID
+    if not any(k.name == 'model' for k in F['knobs']):     # a form's own model knob wins
+        q['model'] = q['models'][0] if q['models'] else None
+    q['seg'] = next((s for s in SEGMENTS if s[3] == q['segment']), None)
+    q['deltas'] = {k: q[k] for k in DELTAS}
+    return q
+
+
+def is_report(ID):
+    """Every knob at the report's value. The choice of models and of the segment does
+    not count: the report has runs of every model on every Table II segment."""
+    q = params(ID)
+    same = lambda k: (set(q[k.name]) == set(k.report)) if k.kind == 'many' else q[k.name] == k.report
+    return all(same(k) for k in FORMS[ID]['knobs'] if k.name not in ('models', 'segment'))
+
+
+def report_skip(ID):
+    """True (and says so) when the form is away from the report's configuration."""
+    if is_report(ID):
+        return False
+    print('[skip] not the report configuration')
+    return True
+
+
+def roots():
+    """Where a form looks for saved runs: results/ first, then every other scanned root."""
+    return ['results'] + sorted(set(REG.root) - {'results'})
+
+
+def report_or_saved(rc, root, need='maps_final.npz'):
+    """Redraw: rc's run in the report job's root (the folder the job names, as the
+    report reads it), else any complete saved run with that configuration; it must
+    hold `need`. None if there is none."""
+    old, rc.out_root = rc.out_root, root
+    try:
+        d = rc.output_dir
+    finally:
+        rc.out_root = old
+    if os.path.exists(os.path.join(d, need)):
+        return d
+    hits = [h for h in saved_runs(rc) if os.path.exists(os.path.join(h, need))]
+    return hits[0] if hits else None
+
+
+def saved_or_run(rc):
+    """The folder of rc's run: a complete saved run is used, not rerun (banner);
+    otherwise run it now and save it."""
     hits = saved_runs(rc)
     if hits:
-        raise AlreadySaved(f'already saved: {hits[0]} -- use Redraw (pick {rc.model}, '
-                           f'{rc.dataset} {rc.segment_id}, n_frames {rc.n_frames} in the lookup)')
-    out = TRACK0(rc, *a, **k)
+        print(f'>>> SAVED RUN (not rerun): {hits[0]}')
+        display(HTML(f'<b style="color:#c00">SAVED RUN (not rerun):</b> <code>{hits[0]}</code>'))
+        return hits[0]
+    E.experiment_tracking(rc, save_frames=False)
     rescan()
-    return out
-
-
-if getattr(E.experiment_tracking, '__name__', '') != 'guarded_tracking':
-    TRACK0 = E.experiment_tracking              # the real one, kept across re-runs of this cell
-E.experiment_tracking = guarded_tracking
-get_ipython().set_custom_exc((AlreadySaved,), lambda shell, et, ev, tb, tb_offset=None: print(ev))
+    return rc.output_dir
 '''),
 ]

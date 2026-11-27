@@ -26,33 +26,37 @@ figure against `fig_recon` drawn from the *same* runs, so it is unaffected.
 '''),
 
 ('code', A15, r'''
-# step 1 -- the runs: found (Redraw) or made now (Live), recon_cfg at 20 and 10 ms
+# the A15 form: which sequences, which model, how long
 from report_runs import recon_cfg
-p = params()
 RECON_A15 = make_figures.RECON                  # the report's sequences, duration, model, root
-if p['mode'] == 'Redraw':
-    note_redraw(p, int(round(RECON_A15['duration'] / 0.02)))
-    seqs_A15 = [s for s in SEGMENTS if s[3] in RECON_A15['sequences']]
-    model_A15, dur_A15, root_A15 = RECON_A15['model'], RECON_A15['duration'], RECON_A15['root']
-else:
-    seqs_A15 = [p['seg']]
-    model_A15 = p['model'] if p['model'] != 'cook' else RECON_A15['model']
-    if model_A15 != p['model']:
-        print(f"cook has no delta_IMU for recon_cfg's adopted step sizes; using {model_A15}")
-    dur_A15 = min(p['n_frames'], 80) * 0.01     # n_frames caps the 10 ms run
-    root_A15 = walk_dir('A15')
-    print(f"Live: {p['segment']}, {dur_A15:.2f} s at 20 and 10 ms; recon_cfg fixes dt, poisson "
-          f"(iterative) and the step sizes (adopted) -- the panel's are not used")
-runs_A15 = {}                                   # {label: {dt: run folder}}
+form('A15', [Knob('segments', list(RECON_A15['sequences']), 'many', choices=[s[3] for s in SEGMENTS]),
+             Knob('model', RECON_A15['model'], choices=MODELS[1:]),
+             Knob('duration', RECON_A15['duration'], choices=[0.06, 0.2, 0.8, 1.5])])
+'''),
+
+('code', A15, r'''
+# step 1 -- the runs, recon_cfg at 20 and 10 ms: found (Redraw) or made now (Live;
+# a saved run is shown, not rerun). Live: choose a short duration here (0.06 s).
+p = params('A15')
+rep_A15 = is_report('A15')                      # the report-only steps run only then
+seqs_A15 = [s for s in SEGMENTS if s[3] in p['segments']]
+model_A15, dur_A15 = p['model'], p['duration']
+runs_A15, cfgs_A15 = {}, {}                     # {label: {dt: run folder}}, {label: {dt: RunConfig}}
 for ds, sid, t0, lab in seqs_A15:
     if not need([os.path.join('data', ds)]):    # recon_cfg reads the dataset's gyro
         continue
-    cfgs_A15 = {dt: recon_cfg(ds, sid, t0, model_A15, dt, dur_A15, root_A15) for dt in (0.02, 0.01)}
-    if p['mode'] == 'Live':
-        for rc in cfgs_A15.values():
-            E.experiment_tracking(rc, save_frames=False)
-    if need([os.path.join(rc.output_dir, 'maps_final.npz') for rc in cfgs_A15.values()], ['recon']):
-        runs_A15[lab] = {dt: rc.output_dir for dt, rc in cfgs_A15.items()}
+    cfgs_A15[lab] = {dt: recon_cfg(ds, sid, t0, model_A15, dt, dur_A15, 'experiments/walkthrough')
+                     for dt in (0.02, 0.01)}
+    got = {}
+    for dt, rc in cfgs_A15[lab].items():
+        if p['mode'] == 'Live':
+            got[dt] = saved_or_run(rc)
+        else:                                   # the report's root first
+            got[dt] = report_or_saved(rc, RECON_A15['root'])
+            if got[dt] is None:
+                print(f'no saved run for {lab} {dt*1000:.0f} ms' + (' (run_all.sh job recon)' if rep_A15 else ''))
+    if all(got.values()):
+        runs_A15[lab] = got
 READY['A15'] = bool(runs_A15)
 for lab, d in runs_A15.items():
     for dt, f in d.items():
@@ -128,26 +132,36 @@ with use_style('paper'):
 
 ('code', A15, r'''
 %%section A15
-# same-code check -- fig_recon itself on the same runs (its RECON set to the rows
-# found here); in Live also cmd_recon's RunConfigs
+# same-code check -- in Live, cmd_recon's RunConfigs; fig_recon itself on the
+# report's runs (report configuration only: its RECON is the report's)
 import argparse
-labs_A15 = tuple(runs_A15)
-if len(labs_A15) < len(seqs_A15):
-    print(f'fig_recon is checked on {labs_A15} only (the other rows are missing above)')
-attrs_A15 = dict(RECON=dict(RECON_A15, sequences=labs_A15, duration=dur_A15, model=model_A15, root=root_A15))
-with caught_figures(make_figures, FIG=os.path.join(walk_dir('A15'), 'check'), **attrs_A15) as got_A15:
-    make_figures.fig_recon(E)
-check('fig_recon pixels', pix_A15, got_A15['pixels'].get('fig_recon.png', []))
-check('fig_recon |r|', nums(text_A15), nums(got_A15['text'].get('fig_recon.png', [])))
 if p['mode'] == 'Live':
-    seen_A15 = []
-    args_A15 = argparse.Namespace(name='walkthrough/A15', sequences=p['segment'], model=model_A15,
-                              duration=dur_A15, no_frames=True, frame_stride=1)
-    with redirect(run_experiments, _run=lambda E_, rc, sf, st: seen_A15.append(rc)), \
-         contextlib.redirect_stdout(io.StringIO()):
-        run_experiments.cmd_recon(E, args_A15)
-    mine_A15 = [os.path.normpath(f) for f in runs_A15[p['segment']].values()]
-    theirs_A15 = [os.path.normpath(rc.output_dir) for rc in seen_A15]
-    print('[ok] config' if mine_A15 == theirs_A15 else f'[DIFF] config: {mine_A15} vs {theirs_A15}')
+    for lab in runs_A15:
+        seen_A15 = []
+        args_A15 = argparse.Namespace(name='walkthrough/A15', sequences=lab, model=model_A15,
+                                      duration=dur_A15, no_frames=True, frame_stride=1)
+        with redirect(run_experiments, _run=lambda E_, rc, sf, st: seen_A15.append(rc)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            run_experiments.cmd_recon(E, args_A15)
+        strip = lambda rc: {k: v for k, v in rc.to_dict().items() if k != 'out_root'}
+        mine_A15 = [strip(rc) for rc in cfgs_A15[lab].values()]
+        theirs_A15 = [strip(rc) for rc in seen_A15]
+        print(f'[ok] config {lab}' if mine_A15 == theirs_A15 else f'[DIFF] config {lab}')
+# fig_recon on the form's own runs: its RECON pointed at them (sequences, duration,
+# model, and the root they lie in -- recon_cfg names the folders the same way)
+roots_A15 = {os.path.dirname(os.path.dirname(os.path.dirname(os.path.normpath(f))))
+             for d in runs_A15.values() for f in d.values()}
+if len(roots_A15) != 1:
+    print('[skip] fig_recon: the runs lie in several roots' if roots_A15 else '[skip] fig_recon: no runs')
+else:
+    labs_A15 = tuple(runs_A15)
+    if len(labs_A15) < len(seqs_A15):
+        print(f'fig_recon is checked on {labs_A15} only (the other rows are missing above)')
+    attrs_A15 = dict(RECON=dict(RECON_A15, sequences=labs_A15, duration=dur_A15, model=model_A15,
+                                root=roots_A15.pop()))
+    with caught_figures(make_figures, FIG=os.path.join(walk_dir('A15'), 'check'), **attrs_A15) as got_A15:
+        make_figures.fig_recon(E)
+    check('fig_recon pixels', pix_A15, got_A15['pixels'].get('fig_recon.png', []))
+    check('fig_recon |r|', nums(text_A15), nums(got_A15['text'].get('fig_recon.png', [])))
 '''),
 ]

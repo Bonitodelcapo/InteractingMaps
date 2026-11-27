@@ -22,35 +22,16 @@ other input is: `make_tables.table_image` (A12) and the curl-share lines of
 '''),
 
 ('code', A4, r'''
-# step 1 -- the runs with delta_curl = 0.6: found (Redraw) or made now (Live)
-def curl_params_A4(p):
-    """The panel's values with delta_curl at the value of this section: the panel's
-    if it is set, else the report's 0.6 (a panel at 0 would be the A3 runs)."""
-    curl = p['delta_curl'] or 0.6
-    if p['delta_curl'] == 0:
-        print("The panel's delta_curl is 0 (no regulariser): this section uses delta_curl 0.6, "
-              "the report's value.")
-    return {**p, 'delta_curl': curl, 'deltas': {**p['deltas'], 'delta_curl': curl}}
+# the A4 form: as A3, with the curl step size (report: 0.6)
+form('A4', main_knobs(75) + [Knob('delta_curl', 0.6)],
+     fixed={'delta_shrinkI': 0.0, 'delta_map': 0.0})
+'''),
 
-
-def find_curl_runs_A4(p, ID, nf):
-    """find_runs (A2) for the curl runs: run_dir(..., curl=0.6) in Redraw."""
-    q = curl_params_A4(p)
-    if p['mode'] == 'Live':
-        return q, *find_runs(q, ID, nf, 1.5)
-    ds, sid, t0, lab = p['seg']
-    note_redraw({**q, 'delta_curl': DEFAULTS['delta_curl']} if q['delta_curl'] == 0.6 else q, nf)
-    dirs = {m: run_dir(p['seg'], m, nf, curl=0.6) for m in MODELS}
-    dirs = {m: d for m, d in dirs.items() if d is not None}
-    READY[ID] = need([os.path.join('data', ds)] if dirs else [f'results/{ds}/<a {nf}-frame curl run>'],
-                     [f'curl_{lab}_<model>'])
-    for m, d in dirs.items():
-        print(f'{m:16s} {d}')
-    return q, dirs, nf
-
-
-p = params()
-q_A4, runs_A4, nf_A4 = find_curl_runs_A4(p, 'A4', 75)
+('code', A4, r'''
+# step 1 -- the runs with the form's delta_curl: found (Redraw) or made now (Live)
+p = params('A4')
+runs_A4, nf_A4 = find_runs(p, 'A4', duration=1.5)
+q_A4, rep_A4 = p, is_report('A4')               # the report-only steps run only then
 '''),
 
 ('code', A4, r'''
@@ -76,8 +57,11 @@ lowest err and the highest |r| among the ten runs of that sequence.
 ('code', A4, r'''
 %%section A4
 # step 5 -- table_curl, unrolled (load / fmt / mark_best / tabular are its helpers)
+# It reads the report's csv rows of every segment: report configuration only.
 from make_tables import load, fmt, mark_best, tabular, SEQS, MODELS as TAB_MODELS
-none_A4, curl_A4 = load(['dissoc_1p5s_*.csv']), load(['main_curl_*_*.csv'])
+none_A4, curl_A4 = (load(['dissoc_1p5s_*.csv']), load(['main_curl_*_*.csv'])) if rep_A4 else ({}, {})
+if not rep_A4:
+    print('[skip] report-only step')
 print(f'{len(none_A4)} rows without curl (dissoc_1p5s_*.csv), {len(curl_A4)} with (main_curl_*_*.csv)')
 
 
@@ -105,18 +89,19 @@ def table_curl_A4(none, curl):
 
 
 table_A4, cells_A4 = table_curl_A4(none_A4, curl_A4)
-display(pd.DataFrame(cells_A4, columns=['sequence', 'model', 'err none (deg/s)', 'err curl (deg/s)',
-                                        '|r| none', '|r| curl']))
-print(table_A4)
+if rep_A4:
+    display(pd.DataFrame(cells_A4, columns=['sequence', 'model', 'err none (deg/s)', 'err curl (deg/s)',
+                                            '|r| none', '|r| curl']))
+    print(table_A4)
 '''),
 
 ('code', A4, r'''
 %%section A4
-# step 6 -- text_numbers.py::inloop_identical, 1.5 s half (Redraw only: it reads the
-# report's runs). CMax-inloop omega with and without the curl term: the maps
+# step 6 -- text_numbers.py::inloop_identical, 1.5 s half (report configuration only:
+# it reads the report's runs). CMax-inloop omega with and without the curl term: the maps
 # change, the anchor's omega should not.
 lines_A4 = []
-if p['mode'] == 'Redraw':
+if rep_A4:
     for seg in SEGMENTS:
         da = run_dir(seg, 'thesis_cmax_v2', 75)
         db = run_dir(seg, 'thesis_cmax_v2', 75, curl=0.6)
@@ -125,15 +110,18 @@ if p['mode'] == 'Redraw':
                             f'{np.abs(tracking(da)["est"]-tracking(db)["est"]).max()*DEG:.2e} deg/s')
     print('== inloop_identical (1.5 s)'); print('\n'.join(lines_A4) or '(no runs)')
 else:
-    print('Live: the text numbers read the report runs; switch to Redraw to see them.')
+    print('[skip] report-only step')
 '''),
 
 ('code', A4, r'''
 %%section A4
 # same-code check
 import io
-if p['mode'] == 'Live':
-    check_live_main(q_A4, 'A4', nf_A4, runs_A4, rows_A4)     # cmd_main --vary delta_curl=...
+if p['mode'] == 'Live':                         # cmd_main --vary delta_curl=...
+    for m_ in runs_A4:
+        check_live_main({**q_A4, 'model': m_}, 'A4', nf_A4, runs_A4, rows_A4)
+if not rep_A4:
+    print('[skip] not the report configuration')
 else:
     for m, row in rows_A4.items():      # the rows against main_curl_<seq>_<model>.csv
         path = os.path.join('report', 'experiments', f'main_curl_{p["segment"]}_{m}.csv')
@@ -147,6 +135,6 @@ else:
         text_numbers.inloop_identical()
         theirs = [l for l in text_numbers.OUT if '(1.5 s)' in l]
     check('text_numbers.inloop_identical', nums(lines_A4), nums(theirs))
-check('table_curl', nums(table_A4.splitlines()), nums(make_tables.table_curl().splitlines()))
+    check('table_curl', nums(table_A4.splitlines()), nums(make_tables.table_curl().splitlines()))
 '''),
 ]

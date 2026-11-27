@@ -64,7 +64,8 @@ from interacting_maps.eval_io import (SCORE_AGAINST, GT_DIFF_HALFWIDTH, load_imu
                      get_reference_omega)
 from interacting_maps.metrics import (compute_metrics, curl_share, _intensity_stats,
                      _corr_to_aps, _recon_scores)
-from interacting_maps.viz import draw_map, draw_omega, draw_error, net_maps, map_scale
+from interacting_maps.viz import (draw_map, draw_omega, draw_error, net_maps, map_scale,
+                                  draw_state, run_figures)
 from interacting_maps.style import (MODELS, SCREEN_WIDTH, frame_times,
                                     to_deg_s, ref_label, use_style, save)
 from run_config import (RunConfig, make_network,
@@ -316,6 +317,7 @@ def experiment_tracking(rc: RunConfig, save_frames=True, frame_stride=1):
         print(f"  Frames saved:    {frames_dir}/ ({rc.n_frames} PNGs)")
 
     _plot_tracking(rows, rc)
+    run_figures(rc.output_dir, net_maps(net, H, W), rows, gt_images, rc.to_dict())
     return summary
 
 def _plot_tracking(rows, rc: RunConfig):
@@ -475,24 +477,19 @@ def _save_3col_frame(out_dir, k, V, net, H, W, gt_images, rc: RunConfig):
     g_scale = _steady_scale(rc, 'G', G, k)
     f_scale = _steady_scale(rc, 'F', F, k)
     I_ro = solve_poisson_exact(G, 'fft')
-    fmt_r = lambda r: f'r = {r:+.2f}' if np.isfinite(r) else ''
     r_in = _corr_to_aps(np.asarray(I, dtype=np.float64), gt_images, t_mid)
     r_ro = _corr_to_aps(I_ro, gt_images, t_mid)
     w = to_deg_s(np.linalg.norm(net.R) / rc.frame_duration)
+    aps = aps_dt = None
+    if gt_images:
+        t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
+        aps, aps_dt = plt.imread(path), abs(t_aps - t_mid)
 
     with use_style('screen'):
         fig, axes = plt.subplots(1, 6, figsize=(SCREEN_WIDTH, 2.6))
         draw_map(axes[0], 'V', V, scale=v_scale)
-        draw_map(axes[1], 'I', I, scale=rng, title='I in-loop\n' + f'std {I.std():.3f}   ' + fmt_r(r_in))
-        draw_map(axes[2], 'I', I_ro, title='I from G (exact)\n' + fmt_r(r_ro))
-        draw_map(axes[3], 'G', G, scale=g_scale)
-        draw_map(axes[4], 'F', F, scale=f_scale, title=f'flow $F$\n|ω| {w:.0f} °/s')
-        if gt_images:
-            t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
-            draw_map(axes[5], 'aps', plt.imread(path),
-                     title=f'APS (log)\nΔt {1000 * abs(t_aps - t_mid):.0f} ms')
-        else:
-            draw_map(axes[5], 'aps', np.zeros((H, W)), title='APS (n/a)')
+        draw_state(axes[1:], I, I_ro, G, F, r_in, r_ro, w, aps, aps_dt,
+                   scale_I=rng, scale_G=g_scale, scale_F=f_scale)
         anchor = f'   δ_anchor {rc.params["delta_IMU"]:.2f}' if rc.use_imu else ''
         fig.suptitle(f'{MODELS[rc.model][0]}   frame {k:04d}   t {t_rel:.3f} s '
                      f'(segment start {rc.t_start:.3f} s)   δ_FR {rc.params["delta_FR"]:.2f}'

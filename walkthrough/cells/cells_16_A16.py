@@ -27,28 +27,45 @@ printed (`intensity_update` prints the in-loop poisson job, A17).
 '''),
 
 ('code', A16, r'''
-# step 1 -- the readout csvs (Redraw), or one readout run made now (Live)
+# the A16 form: segment, model, window and the track lengths read out
 from report_runs import ADOPTED
-p = params()
+form('A16', [Knob('segment', 'poster', choices=[s[3] for s in SEGMENTS]),
+             Knob('model', 'thesis_cmax', choices=MODELS[1:]),
+             Knob('dt', 0.02, choices=[0.02, 0.01]),
+             Knob('durations', [0.4, 0.8, 1.2], 'many', choices=[0.06, 0.4, 0.8, 1.2])])
+'''),
+
+('code', A16, r'''
+# step 1 -- the readout runs (cmd_readout's run_cfg) per track length: found (Redraw)
+# or made now (Live; a saved run is shown, not rerun). Live: pick 0.06 s here.
+p = params('A16')
+rep_A16 = is_report('A16')                      # the report-only steps run only then
 CSV_A16 = {20: os.path.join('experiments', 'readout_fft_vs_dct', 'readout.csv'),
            10: os.path.join('experiments', 'readout_dt10ms', 'readout.csv')}
+ROOT_A16 = os.path.dirname(CSV_A16[20 if p['dt'] == 0.02 else 10])   # the report job's runs
 ds_A16, sid_A16, t0_A16, lab_A16 = p['seg']
-if p['mode'] == 'Redraw':
-    note_redraw(p, 60)                          # the longest track: 1.2 s of 20 ms
-    model_A16, dt_A16 = 'thesis_cmax', 0.02     # the job's --model and --dt (20 ms csv)
-    READY['A16'] = need(list(CSV_A16.values()), ['readout_20ms', 'readout_10ms'])
-else:
-    model_A16 = p['model'] if p['model'] != 'cook' else 'thesis_cmax'
-    if model_A16 != p['model']:
-        print("cook has no delta_IMU for cmd_readout's adopted step sizes; using thesis_cmax")
-    dt_A16, nf_A16 = p['dt'], p['n_frames']
-    READY['A16'] = False
-    if need([os.path.join('data', ds_A16)]):
-        rc_A16 = run_cfg(ds_A16, sid_A16, t0_A16, model_A16, dt_A16, nf_A16, out_root=walk_dir('A16'),
-                         poisson='iterative', deltas=dict(ADOPTED))
-        E.experiment_tracking(rc_A16, save_frames=False)
-        print(f"Live: {lab_A16}, {nf_A16} frames of {dt_A16*1000:.0f} ms -> {rc_A16.output_dir}")
-        READY['A16'] = True
+# the report-only steps read both csvs of the report jobs
+csv_A16 = rep_A16 and need(list(CSV_A16.values()), ['readout_20ms', 'readout_10ms'])
+model_A16, dt_A16 = p['model'], p['dt']
+runs_A16, cfgs_A16 = {}, {}                     # {duration: run folder}, {duration: RunConfig}
+if need([os.path.join('data', ds_A16)]):        # run_cfg reads the dataset's gyro
+    for dur in p['durations']:
+        nf = int(round(dur / dt_A16))
+        rc = run_cfg(ds_A16, sid_A16, t0_A16, model_A16, dt_A16, nf, out_root='experiments/walkthrough',
+                     poisson='iterative', deltas=dict(ADOPTED))
+        cfgs_A16[dur] = rc
+        if p['mode'] == 'Live':
+            runs_A16[dur] = saved_or_run(rc)
+            continue
+        d = report_or_saved(rc, ROOT_A16)
+        if d:
+            runs_A16[dur] = d
+        else:
+            print(f'no saved run for {lab_A16} {dur} s at {dt_A16*1000:.0f} ms'
+                  + (' (run_all.sh jobs readout_20ms, readout_10ms)' if rep_A16 else ''))
+READY['A16'] = bool(runs_A16)
+for dur, f in runs_A16.items():
+    print(f'{lab_A16} {dur} s: {f}')
 '''),
 
 ('code', A16, r'''
@@ -82,18 +99,8 @@ def score_A16(ds, t0, dur, nf, dt, folder):
 
 
 rows_A16 = []
-if p['mode'] == 'Live':
-    rows_A16 = score_A16(ds_A16, t0_A16, round(nf_A16 * dt_A16, 4), nf_A16, dt_A16, rc_A16.output_dir)
-elif need([os.path.join('data', ds_A16)]):      # the runs behind the 20 ms csv, this segment
-    durs_A16 = sorted({float(r['duration_s']) for r in csv.DictReader(open(CSV_A16[20]))
-                   if r['sequence'] == ds_A16})
-    for dur in durs_A16:
-        nf = int(round(dur / dt_A16))
-        f = run_cfg(ds_A16, sid_A16, t0_A16, model_A16, dt_A16, nf,
-                    out_root=os.path.dirname(CSV_A16[20]), poisson='iterative',
-                    deltas=dict(ADOPTED)).output_dir
-        if need([os.path.join(f, 'maps_final.npz')], ['readout_20ms']):
-            rows_A16 += score_A16(ds_A16, t0_A16, dur, nf, dt_A16, f)
+for dur, f in runs_A16.items():                 # the form's runs, one block of rows each
+    rows_A16 += score_A16(ds_A16, t0_A16, dur, int(round(dur / dt_A16)), dt_A16, f)
 display(pd.DataFrame(rows_A16, columns=READOUT_COLS_A16))
 if rows_A16:
     wins_A16 = {}
@@ -107,7 +114,7 @@ if rows_A16:
 %%section A16
 # step 3 -- make_tables.py::table_recon, unrolled: mean |r_crop| per read-out, fft-over-dct wins
 from make_tables import tabular
-if p['mode'] == 'Redraw':
+if csv_A16:
     body_A16, means_A16 = [], {}
     for dt, path in CSV_A16.items():
         r, runs = {}, {}
@@ -130,7 +137,8 @@ if p['mode'] == 'Redraw':
     display(pd.DataFrame(means_A16).T)
     print(table_A16)
 else:
-    print('Live: table_recon reads both readout csvs of the report; the mean |r_crop| of this run:')
+    print('[skip] report-only step (table_recon reads both readout csvs of the report); '
+          'the mean |r_crop| of the form runs:')
     print({v: np.mean([r[5] for r in rows_A16 if r[3] == v]).round(3)
            for v in ('iterative', 'fft', 'dct')} if rows_A16 else '(no rows)')
 '''),
@@ -139,7 +147,7 @@ else:
 %%section A16
 # step 4 -- text_numbers.py::intensity, its heading "10 against 20 ms on the same read-outs"
 lines_A16 = []
-if p['mode'] == 'Redraw':
+if csv_A16:
     rd = text_numbers.rows_of
     r20, r10 = rd(CSV_A16[20]), rd(CSV_A16[10])
     key = lambda r: (r['sequence'], r['duration_s'], r['variant'])
@@ -159,16 +167,43 @@ if p['mode'] == 'Redraw':
                                  f'{sum(tab[q + (x,)] > tab[q + (y,)] for q in n)}/{len(n)}')
     print('\n'.join(lines_A16) or '(no rows)')
 else:
-    print('Live: the text numbers read the report runs; switch to Redraw to see them.')
+    print('[skip] report-only step')
 '''),
 
 ('code', A16, r'''
 %%section A16
-# same-code check -- rows vs the csv / cmd_readout, table vs table_recon, text vs text_numbers
+# same-code check -- cmd_readout's RunConfigs (Live); rows vs the csv, table vs
+# table_recon, text vs text_numbers (report configuration only)
 import io, argparse
-if p['mode'] == 'Redraw':
+if p['mode'] == 'Live':
+    seen_A16 = []
+    args_A16 = argparse.Namespace(name='walkthrough', sequences=lab_A16,   # the Live runs' root
+                                  durations=','.join(str(d) for d in p['durations']),
+                                  dt=dt_A16, model=model_A16, no_frames=True, frame_stride=1)
+    with redirect(run_experiments, _run=lambda E_, rc_, sf, st: seen_A16.append(rc_)), \
+         contextlib.redirect_stdout(io.StringIO()):
+        try:
+            run_experiments.cmd_readout(E, args_A16)
+        except Exception as e:                  # it scores runs the recorder did not make
+            print(f'   (cmd_readout stopped after its configs: {type(e).__name__})')
+    strip = lambda rc: {k: v for k, v in rc.to_dict().items() if k != 'out_root'}
+    same_A16 = [strip(r) for r in seen_A16] == [strip(cfgs_A16[d]) for d in p['durations']]
+    print('[ok] config' if same_A16 else '[DIFF] config')
+    out_csv_A16 = os.path.join('experiments', 'walkthrough', 'readout.csv')   # cmd_readout's rows
+    if same_A16 and os.path.exists(out_csv_A16):
+        theirs_A16 = list(csv.DictReader(open(out_csv_A16)))
+        check('cmd_readout rows', [x for r in rows_A16 for x in r[4:]],
+              [float(r[c]) for r in theirs_A16 for c in READOUT_COLS_A16[4:]])
+    else:
+        print('[skip] cmd_readout rows: it scores only runs under experiments/walkthrough')
+from_report = all(os.path.normpath(f).startswith(os.path.normpath(ROOT_A16)) for f in runs_A16.values())
+if not rep_A16 or not from_report:
+    print('[skip] not the report configuration')
+elif not csv_A16:
+    print('[skip] the report csvs are missing (above)')
+else:
     want_A16 = {(r['sequence'], float(r['duration_s']), r['variant']): r
-            for r in csv.DictReader(open(CSV_A16[20]))}
+                for r in csv.DictReader(open(CSV_A16[20]))}
     mine_A16 = {(r[0], float(r[1]), r[3]): r for r in rows_A16}
     if mine_A16:
         check('readout.csv rows', [x for k in sorted(mine_A16) for x in mine_A16[k][4:]],
@@ -184,17 +219,5 @@ if p['mode'] == 'Redraw':
         check('text_numbers.intensity 10 vs 20 ms', nums(lines_A16), nums(theirs_A16))
     except Exception as e:
         print(f'[DIFF] text_numbers.intensity 10 vs 20 ms: {type(e).__name__}: {e}')
-else:
-    seen_A16 = []
-    args_A16 = argparse.Namespace(name='walkthrough/A16', sequences=lab_A16, durations=str(round(nf_A16 * dt_A16, 4)),
-                              dt=dt_A16, model=model_A16, no_frames=True, frame_stride=1)
-    with redirect(run_experiments, _run=lambda E_, rc_, sf, st: seen_A16.append(rc_)), \
-         contextlib.redirect_stdout(io.StringIO()):
-        run_experiments.cmd_readout(E, args_A16)
-    same_A16 = [os.path.normpath(r.output_dir) for r in seen_A16] == [os.path.normpath(rc_A16.output_dir)]
-    print('[ok] config' if same_A16 else f'[DIFF] config: {[r.output_dir for r in seen_A16]}')
-    theirs_A16 = list(csv.DictReader(open(os.path.join(walk_dir('A16'), 'readout.csv'))))
-    check('cmd_readout rows', [x for r in rows_A16 for x in r[4:]],
-          [float(r[c]) for r in theirs_A16 for c in READOUT_COLS_A16[4:]])
 '''),
 ]

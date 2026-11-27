@@ -92,19 +92,22 @@ def _live(ID, overrides):
 
 
 def test_A14_live():
-    _live('A14', {'segment': 'poster', 'n_frames': 2, 'n_iters': 10})
+    old = os.path.join(ROOT, 'experiments', 'walkthrough', 'converge', 'poster_frame74.npz')
+    if os.path.exists(old):             # a saved case is shown, not recomputed: start fresh
+        os.remove(old)
+    _live('A14', {'cases': [('poster', 74)], 'n_iters': 75})
 
 
 def test_A15_live():
-    _live('A15', {'model': 'thesis_cmax', 'segment': 'poster', 'n_frames': 3})
+    _live('A15', {'model': 'thesis_cmax', 'segments': ['poster'], 'duration': 0.06})
 
 
 def test_A16_live():
-    _live('A16', {'model': 'thesis_cmax', 'segment': 'poster', 'n_frames': 3})
+    _live('A16', {'model': 'thesis_cmax', 'segment': 'poster', 'durations': [0.06]})
 
 
 def test_A17_live():
-    _live('A17', {'model': 'thesis_cmax', 'segment': 'poster', 'n_frames': 3})
+    _live('A17', {'model': 'thesis_cmax', 'segments': ['poster'], 'n_frames': 3})
 
 
 def test_A18_live():

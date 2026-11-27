@@ -886,8 +886,9 @@ def run_ofce_variant(name, seg_name='city_short'):
     print(f"[ok] {OFCE_DIR}/{name}.csv + .png  (bound {bound:.2f} px/frame, {n} frames)")
 
 
-def ofce_summary(out=os.path.join(OFCE_DIR, 'summary.csv')):
+def ofce_summary(out=None):
     """Concatenate diag_ofce/E*.csv into summary.csv and print the key columns."""
+    out = out or os.path.join(OFCE_DIR, 'summary.csv')   # OFCE_DIR read at call time (--ofce-dir)
     rows = []
     for p in sorted(glob.glob(os.path.join(OFCE_DIR, 'E*.csv'))):
         rows += list(csv.DictReader(open(p, newline='')))
@@ -901,7 +902,7 @@ def ofce_summary(out=os.path.join(OFCE_DIR, 'summary.csv')):
     for r in rows:
         print(' | '.join(str(r[k]) for k in keys))
     print(f"[ok] {out}")
-    plot_ofce_findings(out)
+    plot_ofce_findings(out, os.path.dirname(out))
 
 
 VARIANT_COLORS = dict(zip(OFCE_VARIANTS, ('#000000', '#56B4E9', '#0072B2', '#D55E00',
@@ -1014,8 +1015,11 @@ if __name__ == '__main__':
                     help='--mode maps: segment name from SEGMENTS')
     ap.add_argument('--frame', type=int, default=None,
                     help='--mode maps: frame K for the iteration GIF (default n//2)')
+    ap.add_argument('--ofce-dir', default=OFCE_DIR,
+                    help='--mode ofce / ofce_summary: output folder (one per segment)')
     args = ap.parse_args()
     LIMIT = args.limit
+    OFCE_DIR = args.ofce_dir
     if args.mode == 'setup':
         _selfcheck()
     elif args.mode == 'run':

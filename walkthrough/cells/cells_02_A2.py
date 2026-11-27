@@ -58,8 +58,10 @@ def reference_and_gyro(seg, dt, nf):
 
 
 def ref_dt(p):
-    """The frame length the reference is taken over: the report's 20 ms in
-    Redraw (its runs are all 20 ms), the panel's dt in Live."""
+    """The frame length the reference is taken over: a form's dt (in Redraw, the dt
+    of the runs it selects); for the old panel, 20 ms in Redraw, its dt in Live."""
+    if p.get('form'):
+        return p['dt']
     return 0.02 if p['mode'] == 'Redraw' else p['dt']
 
 
@@ -115,14 +117,22 @@ def main_row(ds, sid, model, s, floor, fdir, secs=0):
             round(fdir, 2), round(secs)]
 
 
-def run_dir(seg, model, nf, d_fr=None, d_anchor='adopted', curl=0.0, root='results'):
-    """text_numbers.run's lookup: the run folder whose stored config matches."""
+def run_dir(seg, model, nf, d_fr=None, d_anchor='adopted', curl=0.0, root='results', dt=0.02):
+    """text_numbers.run's lookup: the run folder whose stored config matches.
+    root may be a list (a form's roots(): the first root with a match wins)."""
+    if not isinstance(root, str):
+        with contextlib.redirect_stdout(io.StringIO()):
+            hits = [run_dir(seg, model, nf, d_fr, d_anchor, curl, r, dt) for r in root]
+        d = next((h for h in hits if h), None)
+        if d is None:
+            print(f'   (missing run: {seg[0]}/{seg[1]} {model} n{nf})')
+        return d
     ds, sid, t0 = seg[:3]
     prm = {'delta_FR': ADOPTED['delta_FR'] if d_fr is None else d_fr,
            'delta_shrinkI': 0.0, 'delta_map': 0.0, 'delta_curl': curl}
     if model in ('thesis_imu', 'thesis_cmax') and d_anchor is not None:
         prm['delta_IMU'] = ADOPTED['delta_IMU'] if d_anchor == 'adopted' else d_anchor
-    d = experiment_tracking.find_run(root, ds, model, sid, nf, prm, dt=0.02, t_start=t0)
+    d = experiment_tracking.find_run(root, ds, model, sid, nf, prm, dt=dt, t_start=t0)
     if d is None:
         print(f'   (missing run: {ds}/{sid} {model} n{nf} {prm})')
     return d
@@ -150,26 +160,58 @@ REAL = [s for s in SEGMENTS if s[3] not in SYNTHETIC]          # text_numbers.RE
 SYN = [s for s in SEGMENTS if s[3] in SYNTHETIC]
 
 
-def find_runs(p, ID, nf, duration):
-    """Step 'the run': Redraw finds the report's run of every model; Live makes
-    one run of the panel's model. Sets READY[ID]; returns {model: run folder}."""
+def main_knobs(nf):
+    """The knobs of a cmd_main experiment (A2: 150 frames, A3: 75), at the report's values."""
+    return [Knob('models', MODELS, 'many'), Knob('segment', 'poster'), Knob('n_frames', nf),
+            Knob('dt', 0.02), Knob('poisson', POISSON_MODE),
+            Knob('delta_FR', ADOPTED['delta_FR'])]
+
+
+MAIN_FIXED = {'delta_curl': 0.0, 'delta_shrinkI': 0.0, 'delta_map': 0.0}   # cmd_main runs have none
+
+
+def form_run_dir(p, model):
+    """The saved run of `model` with the form's values -- every step size as cmd_main
+    would set it (main_cfg), so a sweep run with another rate never stands in --
+    by experiment_tracking.find_run; results/ first, then every other scanned root."""
+    ds, sid, t0, _lab = p['seg']
+    with contextlib.redirect_stdout(io.StringIO()):
+        prm = main_cfg({**p, 'model': model}, p['n_frames'], None).params
+    for root in roots():
+        with contextlib.redirect_stdout(io.StringIO()):
+            d = experiment_tracking.find_run(root, ds, model, sid, p['n_frames'], prm, dt=p['dt'],
+                                             t_start=t0, n_iters=p['n_iters'], poisson=p['poisson'])
+        if d:
+            return d
+    return None
+
+
+def find_runs(p, ID, duration):
+    """Step 'the run(s)', one per model of the form. Redraw: the saved runs the form
+    selects. Live: saved_or_run (a saved configuration is shown, not rerun), into
+    experiments/walkthrough in the real folder format. Sets READY[ID];
+    returns ({model: run folder}, n_frames)."""
+    READY[ID], dirs = False, {}                 # until the runs are there
+    if p['seg'] is None or not p['models']:
+        print(f'no saved run matches the {ID} form')
+        return dirs, p['n_frames']
     ds, sid, t0, lab = p['seg']
+    if not need([os.path.join('data', ds)]):    # run_cfg reads the dataset's IMU
+        return dirs, p['n_frames']
     if p['mode'] == 'Redraw':
-        note_redraw(p, nf)
-        dirs = {m: run_dir(p['seg'], m, nf) for m in MODELS}
+        print(f'Redraw: the saved runs the {ID} form selects')
+        dirs = {m: form_run_dir(p, m) for m in p['models']}
         dirs = {m: d for m, d in dirs.items() if d is not None}
-        READY[ID] = need([os.path.join('data', ds)] if dirs else [f'results/{ds}/<a {nf}-frame run>'],
-                         [f'{"main" if duration == 3.0 else "dissoc"}_{lab}_<model>'])
+        if not dirs:
+            print(f'no saved run matches the {ID} form')
+        READY[ID] = bool(dirs)
     else:
-        nf = min(p['n_frames'], nf)
-        READY[ID], dirs = False, {}             # until the run has succeeded
-        if need([os.path.join('data', ds)]):
-            rc = main_cfg(p, nf, walk_dir(ID))
-            E.experiment_tracking(rc, save_frames=False)
-            dirs, READY[ID] = {p['model']: rc.output_dir}, True
+        dirs = {m: saved_or_run(main_cfg({**p, 'model': m}, p['n_frames'], 'experiments/walkthrough'))
+                for m in p['models']}
+        READY[ID] = True
     for m, d in dirs.items():
         print(f'{m:16s} {d}')
-    return dirs, nf
+    return dirs, p['n_frames']
 
 
 def check_live_main(p, ID, nf, runs, rows):
@@ -207,9 +249,15 @@ def check_live_main(p, ID, nf, runs, rows):
 '''),
 
 ('code', A2, r'''
+# the A2 form: Redraw browses saved runs, Live computes new ones
+form('A2', main_knobs(150), fixed=MAIN_FIXED)
+'''),
+
+('code', A2, r'''
 # step 1 -- the run(s): found (Redraw) or made now (Live)
-p = params()
-runs_A2, nf_A2 = find_runs(p, 'A2', nf=150, duration=3.0)
+p = params('A2')
+runs_A2, nf_A2 = find_runs(p, 'A2', duration=3.0)
+rep_A2 = is_report('A2')                        # the report-only steps run only then
 '''),
 
 ('code', A2, r'''
@@ -238,9 +286,9 @@ display(pd.DataFrame(rows_A2.values(), columns=MAIN_COLS).drop(columns='secs'))
 
 ('code', A2, r'''
 %%section A2
-# step 5 -- the text numbers (Redraw only: they read the report's runs)
+# step 5 -- the text numbers (report configuration only: they read the report's runs)
 lines_A2 = {'poster_segments': [], 'inloop_identical': []}
-if p['mode'] == 'Redraw':
+if rep_A2:
     # text_numbers.poster_segments: fastest-segment gap, error relative to speed
     for seg in BETA_SEGMENTS:
         dc = run_dir(seg, 'thesis_cmax', 150, d_fr=0.1, d_anchor=0.5)   # BETA_CONFIGS series
@@ -267,15 +315,17 @@ if p['mode'] == 'Redraw':
     for k, ls in lines_A2.items():
         print(f'== {k}'); print('\n'.join(ls) or '(no runs)')
 else:
-    print('Live: the text numbers read the report runs; switch to Redraw to see them.')
+    print('[skip] report-only step')
 '''),
 
 ('code', A2, r'''
 %%section A2
-# step 6 -- text_numbers.track_length: the 3 s runs cut after N frames (Redraw only).
+# step 6 -- text_numbers.track_length: the 3 s runs cut after N frames (report configuration only).
 # The network is causal, so their first 75 frames are the 1.5 s runs of A3.
 L = lines_A2['track_length'] = []
-if p['mode'] == 'Redraw':
+if not rep_A2:
+    print('[skip] report-only step')
+else:
     Ns = (25, 50, 75, 100, 150)
     FIVE = ('cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2')
     same = []
@@ -333,7 +383,10 @@ if p['mode'] == 'Redraw':
 # same-code check -- against cmd_main (Live, Redraw) and text_numbers (Redraw)
 import io
 if p['mode'] == 'Live':
-    check_live_main(p, 'A2', nf_A2, runs_A2, rows_A2)
+    for m_ in runs_A2:
+        check_live_main({**p, 'model': m_}, 'A2', nf_A2, runs_A2, rows_A2)
+if not rep_A2:
+    print('[skip] not the report configuration')
 else:
     # the rows against report/experiments/main_base_<seq>_<model>.csv
     for m, row in rows_A2.items():

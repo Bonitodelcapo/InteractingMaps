@@ -26,10 +26,19 @@ table → same-code check. Live runs the panel's model on poster seg_A
 '''),
 
 ('code', A7, r'''
-# step 1 -- the runs: found by table_anchor's lookup (Redraw) or made now (Live)
-from report_runs import BETA_CONFIGS
-p = params()
+# the A7 form: which models on which poster segments
 SEGS_A7 = make_tables.ANCHOR_SEGMENTS                      # seg_A, seg_C, seg_D
+form('A7', [Knob('models', MODELS, 'many'),
+            Knob('segments', list(SEGS_A7), 'many', choices=list(SEGS_A7)),
+            Knob('n_frames', 150), Knob('dt', 0.02), Knob('poisson', POISSON_MODE),
+            Knob('delta_FR', ADOPTED['delta_FR'])])
+'''),
+
+('code', A7, r'''
+# step 1 -- the runs: table_anchor's lookup for the form's values (Redraw) or made now (Live)
+from report_runs import BETA_CONFIGS
+p = params('A7')
+rep_A7 = is_report('A7')                        # the report-only steps run only then
 T0_A7 = {s['id']: s['t_start'] for s in E.DATASET_SEGMENTS['poster_rotation']}
 
 
@@ -44,43 +53,39 @@ def anchor_job(sid, model):
     return f'anchor_{sid}_{model}'
 
 
-runs_A7 = {}
-if p['mode'] == 'Redraw':
-    note_redraw(p, 150)
-    miss = []
-    for sid in SEGS_A7:
-        for _disp, k in make_tables.MODELS:
-            # table_anchor: find_run on results/, 150 frames, every step size as in config.py
-            d = experiment_tracking.find_run('results', 'poster_rotation', k, sid, 150,
-                                             make_tables.expected_params(k))
-            if d is None:
-                print(f'missing: results/poster_rotation/{k}/{sid}_* (150 frames, config.py step sizes)')
-                miss.append(anchor_job(sid, k))
-            else:
-                runs_A7[sid, k] = d
-    if miss:
-        print('make with run_all.sh job(s): ' + ', '.join(miss))
-    READY['A7'] = bool(runs_A7)
-else:
-    nf_A7 = min(p['n_frames'], 150)
-    sids_A7 = ['seg_A'] if p['sweep'] == 'one point' else list(SEGS_A7)
-    print(f"{len(sids_A7)} run(s) of {nf_A7} frames = {len(sids_A7) * nf_A7} frames: "
-          f"{p['model']} on poster {', '.join(sids_A7)}")
-    READY['A7'] = False
-    if need([os.path.join('data', 'poster_rotation')]):
-        deltas = {k: v for k, v in p['deltas'].items() if v != THESIS_PARAMS[k]}
-        if p['model'] == 'cook' and deltas:
-            print(f'cook has its own step sizes; ignoring {sorted(deltas)}')
-            deltas = {}
-        for sid in sids_A7:
-            # evaluation.py --exp 2's RunConfig, plus the panel's values and out_root
-            rc = E.RunConfig(dataset='poster_rotation', model=p['model'], segment=sid,
-                             n_frames=nf_A7, frame_duration=p['dt'], n_iters=p['n_iters'],
-                             poisson=p['poisson'], deltas=deltas or None,
-                             out_root=walk_dir('A7'))
-            E.experiment_tracking(rc, save_frames=False)
-            runs_A7[sid, p['model']] = rc.output_dir
-        READY['A7'] = True
+def anchor_deltas_A7(model):
+    """The step sizes the form changes (evaluation.py --exp 2 takes config.py's); cook
+    has its own and keeps them."""
+    d = {} if model == 'cook' else {'delta_FR': p['delta_FR']}
+    return {k: v for k, v in d.items() if v != THESIS_PARAMS[k]}
+
+
+runs_A7, miss, nf_A7 = {}, [], p['n_frames']
+if p['mode'] == 'Live':
+    print(f"{len(p['segments']) * len(p['models'])} run(s) of {nf_A7} frames: "
+          f"{', '.join(p['models'])} on poster {', '.join(p['segments'])}")
+for sid in p['segments']:
+    for k in p['models']:
+        if p['mode'] == 'Redraw':
+            # table_anchor: find_run, every step size as in config.py, the form's delta_FR
+            prm = {**make_tables.expected_params(k), **anchor_deltas_A7(k)}
+            d = next((h for h in (experiment_tracking.find_run(
+                     r, 'poster_rotation', k, sid, nf_A7, prm, dt=p['dt'], poisson=p['poisson'])
+                     for r in roots()) if h), None)
+        elif need([os.path.join('data', 'poster_rotation')]):
+            # evaluation.py --exp 2's RunConfig with the form's values, out_root walkthrough
+            d = saved_or_run(E.RunConfig(dataset='poster_rotation', model=k, segment=sid,
+                                         n_frames=nf_A7, frame_duration=p['dt'],
+                                         poisson=p['poisson'], deltas=anchor_deltas_A7(k) or None,
+                                         out_root='experiments/walkthrough'))
+        else:
+            d = None
+        if d is None:
+            print(f'no saved run for poster {sid} {k}' + (f' (run_all.sh job {anchor_job(sid, k)})'
+                                                          if rep_A7 else ''))
+        else:
+            runs_A7[sid, k] = d
+READY['A7'] = bool(runs_A7)
 for (sid, k), d in runs_A7.items():
     print(f'{sid} {k:16s} {d}')
 '''),
@@ -158,6 +163,8 @@ if p['mode'] == 'Live':
         check(f'summary vs tracking.csv {sid} {k}',
               [s['mean_err_deg_s'], s['mean_dir_err_deg'], s['mean_beta']],
               [tr['err'].mean(), tr['dir'].mean(), tr['beta'].mean()])
+if not rep_A7:
+    print('[skip] not the report configuration')
 else:
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         theirs = make_tables.table_anchor()

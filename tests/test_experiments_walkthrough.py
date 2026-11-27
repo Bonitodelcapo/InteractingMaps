@@ -41,7 +41,9 @@ def execute(mode='Redraw', overrides=None, sections=(), extra=(), pre=(), allow_
             if 'widgets' in tags:
                 sets = {'mode': mode, **(overrides or {})}
                 keep.append(nbformat.v4.new_code_cell(
-                    '\n'.join(f"W[{k!r}].value = {v!r}" for k, v in sets.items())
+                    f"for k_, v_ in {sets!r}.items():\n"
+                    "    if k_ in W:                 # other keys only start the forms\n"
+                    "        W[k_].value = v_"
                     + f"\nPRESET = {sets!r}"))      # the same values start the forms
             if 'A2-defs' in tags:
                 keep += [nbformat.v4.new_code_cell(src) for src in pre]
@@ -462,6 +464,20 @@ def test_forms_isolated():
     check('forms_isolated', 'T2 75 Redraw' in text(nb), text(nb)[-300:] + str(errors(nb)))
 
 
+def test_choices_knob():
+    nb = execute('Redraw', extra=[
+        "form('T', [Knob('cfgs', [(1, 2), (3, 4)], 'many', choices=[(1, 2), (3, 4), (5, 6)]),"
+        " Knob('n_frames', 75)])\n"
+        "R = FORMS['T']['redraw']; nf0 = list(R['n_frames'].options)\n"
+        "print('NOPT', len(R['cfgs'].options)); print('VAL', params('T')['cfgs'])\n"
+        "print('REP', is_report('T'))\n"
+        "R['cfgs'].value = ((5, 6),); print('REP2', is_report('T'))\n"
+        "print('NFSAME', list(R['n_frames'].options) == nf0)"])
+    t = text(nb)
+    for k in ('NOPT 3', 'VAL [(1, 2), (3, 4)]', 'REP True', 'REP2 False', 'NFSAME True'):
+        check(f'choices_knob: {k}', k in t, t[-400:] + str(errors(nb)))
+
+
 def test_guard_unstored_delta():
     nb = execute('Live', extra=[
         GUARD_RC.replace("REG.root == 'results'", "(REG.root == 'results') & (REG.delta_curl == 0)") +
@@ -528,7 +544,8 @@ def test_overview_links():
 
 TESTS = {'setup': [test_setup],
          'forms': [test_overview_links, test_saved_or_run_banner, test_form_redraw_options,
-                   test_form_live_defaults, test_params_keys, test_is_report, test_forms_isolated],
+                   test_form_live_defaults, test_params_keys, test_is_report, test_forms_isolated,
+                   test_choices_knob],
          'registry': [test_registry_scan, test_registry_cascade, test_registry_no_match,
                       test_registry_empty_roots, test_registry_old_config, test_model_prints_dict,
                       test_guard_unstored_delta,
@@ -550,9 +567,9 @@ def section_tests():
     [FAIL]s collect in that module's FAILS. Returns (groups, that FAILS list)."""
     import tests.test_experiments_walkthrough as me
     from tests import walk_A1_A4 as a, walk_A5_A7 as b, walk_A8_A13 as c, walk_A14_A19 as d
-    groups = {'A1': [a.test_A1_redraw], 'A4': [a.test_A4_redraw],
-              'A5': [b.test_A5_redraw], 'A6': [b.test_A6_redraw, b.test_A6_live_not_beta_segment],
-              'A7': [b.test_A7_redraw],
+    groups = {'A1': [a.test_A1_redraw], 'A4': [a.test_A4_redraw, a.test_A4_form_non_report],
+              'A5': [b.test_A5_redraw], 'A6': [b.test_A6_redraw, b.test_A6_form_subset],
+              'A7': [b.test_A7_redraw, b.test_A7_form_one_segment],
               'sweep': [c.test_sweep_points_extent, c.test_sweep_missing_column_is_diff],
               **{f'A{i}': [getattr(c, f'test_A{i}_redraw')] for i in range(8, 14)},
               **{f'A{i}': [getattr(d, f'test_A{i}_redraw')] for i in range(14, 20)}}

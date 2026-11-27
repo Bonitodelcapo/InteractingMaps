@@ -7,12 +7,15 @@ touch figures; draw_map puts one on an axis. Line plots: draw_omega,
 draw_error and draw_series fill one axis each, time in seconds.
 """
 
+import os
+
 import numpy as np
 
 from interacting_maps.style import (MAP_TITLES, MODELS, OMEGA_AXIS_COLORS, REF_STYLE,
                                     IMU_STYLE, LINE_COLOR, LABEL_TIME, LABEL_ERROR,
                                     EST_STYLE, ERR_STYLE, SERIES_STYLE, KEY_RECT,
-                                    omega_label, ref_label, to_deg_s)
+                                    NEUTRAL_COLOR, SCREEN_WIDTH, omega_label, ref_label,
+                                    to_deg_s, frame_times, use_style, save)
 
 
 def normalise(x):
@@ -203,3 +206,77 @@ def draw_series(ax, t, y, ylabel, model=None, label=None):
     ax.plot(t, y, color=color, label=label, **SERIES_STYLE)
     ax.set_ylabel(ylabel)
     ax.set_xlabel(LABEL_TIME)
+
+
+def draw_state(axes, I, I_ro, G, F, r_in, r_ro, w_deg_s, aps=None, aps_dt=None,
+               scale_I=None, scale_G=None, scale_F=None):
+    """In-loop I | I read out from G (exact) | G | F | nearest APS, on five axes:
+    the state panels of the per-frame inspection figure and of recon_final.png."""
+    fmt_r = lambda r: f'r = {r:+.2f}' if np.isfinite(r) else ''
+    draw_map(axes[0], 'I', I, scale=scale_I,
+             title='I in-loop\n' + f'std {I.std():.3f}   ' + fmt_r(r_in))
+    draw_map(axes[1], 'I', I_ro, title='I from G (exact)\n' + fmt_r(r_ro))
+    draw_map(axes[2], 'G', G, scale=scale_G)
+    draw_map(axes[3], 'F', F, scale=scale_F, title=f'flow $F$\n|ω| {w_deg_s:.0f} °/s')
+    if aps is None:
+        draw_map(axes[4], 'aps', np.zeros(I.shape), title='APS (n/a)')
+    else:
+        draw_map(axes[4], 'aps', aps, title=f'APS (log)\nΔt {1000 * aps_dt:.0f} ms')
+
+
+def run_title(cfg):
+    """One line naming a run from its stored config (run.json 'config')."""
+    deltas = '  '.join(f'{k[6:]} {v:g}' for k, v in sorted(cfg.get('params', {}).items())
+                       if k.startswith('delta_'))
+    return (f"{MODELS[cfg['model']][0]}   {cfg['dataset']} {cfg.get('segment_id', '')}   "
+            f"dt {1000 * cfg['frame_duration']:.0f} ms   {cfg.get('n_iters', '?')} iters\n"
+            f"δ: {deltas}")
+
+
+def run_figures(out_dir, maps, rows, gt_images, cfg):
+    """Two image-quality figures of one tracking run, written into its folder:
+    recon_final.png, the state after the last frame (draw_state), and
+    recon_plot.png, |r| vs APS and the spread of I over the track.
+
+    maps: final I, G, F (maps_final.npz); rows: tracking.csv rows (dicts, values
+    float or str); gt_images: load_aps_list around the run; cfg: run.json config.
+    """
+    import matplotlib.pyplot as plt
+    from interacting_maps.network_dissertation import solve_poisson_exact
+    col = lambda k: np.array([float(r.get(k, 'nan')) for r in rows])
+    # |r|: runs written before scoring took the absolute value stored signed r
+    absr = lambda k: abs(float(rows[-1].get(k, 'nan')))
+    last, title = rows[-1], run_title(cfg)
+    t_mid = float(last['time'])
+    w = to_deg_s(np.linalg.norm([float(last[f'est_w{a}']) for a in 'xyz']))
+    aps = aps_dt = None
+    if gt_images:
+        t_aps, path = min(gt_images, key=lambda x: abs(x[0] - t_mid))
+        aps, aps_dt = plt.imread(path), abs(t_aps - t_mid)
+    I, G, F = (np.asarray(maps[k], dtype=np.float64) for k in ('I', 'G', 'F'))
+
+    with use_style('screen'):
+        fig, axes = plt.subplots(1, 5, figsize=(SCREEN_WIDTH, 3.0))
+        draw_state(axes, I, solve_poisson_exact(G, 'fft'), G, F,
+                   absr('recon_r_inloop'), absr('recon_r'), w, aps, aps_dt)
+        fig.suptitle(f'final state, frame {len(rows) - 1}   {title}')
+        save(fig, os.path.join(out_dir, 'recon_final.png'))
+
+        t = frame_times(cfg['frame_duration'], len(rows))
+        fig, axes = plt.subplots(2, 1, figsize=(SCREEN_WIDTH, 5.5), sharex=True)
+        draw_series(axes[0], t, np.abs(col('recon_r')), '|r| vs APS', label='I from G (exact)')
+        axes[0].plot(t, np.abs(col('recon_r_inloop')), color=NEUTRAL_COLOR, ls='--', lw=1.0,
+                     label='I in-loop')
+        axes[0].set_ylim(0, 1)            # |r| has a fixed range: same axis for every run
+        axes[0].legend(loc='lower left', bbox_to_anchor=(0, 1), ncol=2, frameon=False)
+        std = col('I_std')
+        draw_series(axes[1], t, std, 'std of in-loop I')
+        if np.isfinite(std).any() and np.nanmedian(std) > 0:
+            axes[1].axhline(5 * np.nanmedian(std), color=NEUTRAL_COLOR, ls=':', lw=1.0,
+                            label='blow-up threshold (5× median)')
+            axes[1].set_yscale('log')
+            axes[1].legend(loc='upper right')
+        for ax in axes:
+            ax.label_outer()
+        fig.suptitle(f'reconstruction over the track   {title}')
+        save(fig, os.path.join(out_dir, 'recon_plot.png'))

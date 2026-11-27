@@ -21,9 +21,15 @@ where their second input is: `fig_dissociation`, `fig_maps`/`fig_appendix`
 '''),
 
 ('code', A3, r'''
+# the A3 form: Redraw browses saved runs, Live computes new ones
+form('A3', main_knobs(75), fixed=MAIN_FIXED)
+'''),
+
+('code', A3, r'''
 # steps 1-4 of A2 at 1.5 s: the run(s), reference and gyro, floor, the rows
-p = params()
-runs_A3, nf_A3 = find_runs(p, 'A3', nf=75, duration=1.5)
+p = params('A3')
+runs_A3, nf_A3 = find_runs(p, 'A3', duration=1.5)
+rep_A3 = is_report('A3')                        # the report-only steps run only then
 '''),
 
 ('code', A3, r'''
@@ -47,10 +53,13 @@ under each sequence name comes from the A5 baseline npz.
 
 ('code', A3, r'''
 %%section A3
-# step 5 -- table_main, unrolled (fmt / mark_best / tabular are its formatters)
+# step 5 -- table_main, unrolled (fmt / mark_best / tabular are its formatters).
+# It reads the report's csv rows of every segment: report configuration only.
 from make_tables import fmt, mark_best, tabular, floor_label, SEQS, MODELS as TAB_MODELS
 csv_rows = {}
-for path in sorted(glob.glob(os.path.join('report', 'experiments', 'dissoc_1p5s_*.csv'))):
+if not rep_A3:
+    print('[skip] report-only step')
+for path in sorted(glob.glob(os.path.join('report', 'experiments', 'dissoc_1p5s_*.csv'))) if rep_A3 else []:
     with open(path) as f:
         for r in csv.DictReader(f):
             csv_rows[(r['sequence'], r['model'])] = r
@@ -96,8 +105,9 @@ for seq, disp, lab, extra in SEQS:
 table_A3 = tabular('@{}llrrrr@{}',
                    [r'Sequence & Model & err ($^\circ$/s) & dir ($^\circ$) & $\beta$ & $|r|$ \\'],
                    body)
-display(pd.DataFrame(cells, columns=['sequence', 'model', 'err', 'dir', 'beta', 'recon']))
-print(table_A3)
+if rep_A3:
+    display(pd.DataFrame(cells, columns=['sequence', 'model', 'err', 'dir', 'beta', 'recon']))
+    print(table_A3)
 '''),
 
 ('md', A3, r'''
@@ -113,7 +123,7 @@ fixed in the code); Live draws the panel's run against its own reference.
 # step 6 -- fig_tracking, unrolled
 from interacting_maps.style import use_style, save, frame_times, PAPER_WIDTH
 from interacting_maps.viz import draw_omega
-if p['mode'] == 'Redraw':
+if rep_A3:
     seg_fig = ('poster_rotation', 'seg_C', 8.816)
     pp = get_dataset_paths(seg_fig[0])
     ref_fig, _ = reference_and_gyro(seg_fig + ('poster',), 0.02, 75)
@@ -123,7 +133,7 @@ if p['mode'] == 'Redraw':
 else:
     fig_runs = list(runs_A3.items())
     ref_fig, ref_src = tracking(fig_runs[0][1])['gt'], 'groundtruth'
-t = frame_times(0.02 if p['mode'] == 'Redraw' else p['dt'], len(ref_fig))
+t = frame_times(0.02 if rep_A3 else p['dt'], len(ref_fig))
 
 with use_style('paper'):
     fig_A3, axes = plt.subplots(3, 1, figsize=(PAPER_WIDTH, 3.6), sharex=True)
@@ -149,12 +159,12 @@ with use_style('paper'):
 
 ('code', A3, r'''
 %%section A3
-# step 7 -- the text numbers (Redraw only: they read the report's runs)
+# step 7 -- the text numbers (report configuration only: they read the report's runs)
 from report_runs import SYNTHETIC
 REAL = [s for s in SEGMENTS if s[3] not in SYNTHETIC]
 SYN = [s for s in SEGMENTS if s[3] in SYNTHETIC]
 lines_A3 = {'unanchored': [], 'reversal': []}
-if p['mode'] == 'Redraw':
+if rep_A3:
     L = lines_A3['unanchored']          # text_numbers.unanchored: cook and thesis
     for seg in REAL + SYN:
         for m in ('cook', 'thesis'):
@@ -194,7 +204,7 @@ if p['mode'] == 'Redraw':
     for k_, ls in lines_A3.items():
         print(f'== {k_}'); print('\n'.join(ls) or '(no runs)')
 else:
-    print('Live: the text numbers read the report runs; switch to Redraw to see them.')
+    print('[skip] report-only step')
 '''),
 
 ('code', A3, r'''
@@ -203,7 +213,9 @@ else:
 # No runs: ground truth and IMU only, 75 frames of 20 ms on every Table II and beta segment.
 from interacting_maps import eval_io as eio_A3
 L = lines_A3['reference'] = []
-if p['mode'] == 'Redraw':
+if not rep_A3:
+    print('[skip] report-only step')
+else:
     segs = REAL + [s + ('',) for s in BETA_SEGMENTS if s not in [r[:3] for r in REAL]] + SYN
     for seg in segs:
         ds_, sid_, t0_ = seg[:3]
@@ -234,7 +246,9 @@ if p['mode'] == 'Redraw':
 # step 9 -- text_numbers.intensity, its first part: I std and |r| along the poster track
 # of the anchored and the unanchored network (the rest of that function reads A8, A1, A16)
 L = lines_A3['intensity'] = []
-if p['mode'] == 'Redraw':
+if not rep_A3:
+    print('[skip] report-only step')
+else:
     FIVE = ('cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2')
     poster = [s for s in SEGMENTS if s[3] == 'poster'][0]
     c, t_ = run_tn(poster, 'thesis_cmax'), run_tn(poster, 'thesis')
@@ -276,7 +290,7 @@ from interacting_maps.network_dissertation import solve_poisson_exact
 from interacting_maps.viz import draw_map
 from report_runs import aps_frame, track_stats
 fig_dis_A3 = None
-if p['mode'] == 'Redraw':
+if rep_A3:
     D = make_figures.DISSOC
     nf_ = int(round(D['duration'] / 0.02))
     seqs = [s for s in SEGMENTS if s[3] in D['sequences']]
@@ -311,7 +325,7 @@ if p['mode'] == 'Redraw':
                     a.set_xlabel(f"$|r|={st[0]:.2f}$,  $\\omega$ err $={st[1]:.1f}$ °/s")
         save(fig_dis_A3, os.path.join(walk_dir('A3'), 'fig_dissociation.png'), show=True)
 else:
-    print("Live: fig_dissociation reads the report's runs; switch to Redraw to see it.")
+    print('[skip] report-only step')
 '''),
 
 ('code', A3, r'''
@@ -319,7 +333,10 @@ else:
 # same-code check
 import io
 if p['mode'] == 'Live':
-    check_live_main(p, 'A3', nf_A3, runs_A3, rows_A3)
+    for m_ in runs_A3:
+        check_live_main({**p, 'model': m_}, 'A3', nf_A3, runs_A3, rows_A3)
+if not rep_A3:
+    print('[skip] not the report configuration')
 else:
     for m, row in rows_A3.items():      # the rows against dissoc_1p5s_<seq>_<model>.csv
         path = os.path.join('report', 'experiments', f'dissoc_1p5s_{p["segment"]}_{m}.csv')

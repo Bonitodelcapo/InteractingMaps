@@ -60,14 +60,26 @@ def test_A4_redraw():
     _common('A4_redraw', nb, t, before, A4_CHECKS)
 
 
+def test_A4_form_non_report():
+    nb = execute('Redraw', {'delta_curl': 0.0}, sections=['A2-defs', 'A4'],
+                 extra=["print('CURL', params('A4')['delta_curl'])"])
+    t = text(nb)
+    if 'CURL 0.0' not in t:
+        print('   (A4_form_non_report: no saved run at delta_curl 0 for the A4 form; not applicable)')
+        return
+    check('A4_form_non_report: no errors', not errors(nb), errors(nb))
+    check('A4_form_non_report: skips', '[skip] not the report configuration' in t
+          or 'no saved run matches the A4 form' in t, t[-600:])
+    check('A4_form_non_report: no DIFF', '[DIFF]' not in t, t[-600:])
+
+
 def test_A4_live():
     before = snapshot()
     nb = execute('Live', {'model': 'thesis_cmax', 'segment': 'poster', 'n_frames': 3},
                  sections=['A2-defs', 'A4'])
     t = text(nb)
     check('A4_live: no cell errors', not errors(nb), errors(nb))
-    check('A4_live: sets curl 0.6', 'delta_curl 0.6' in t, t[:800])
     check('A4_live: config check ok', '[ok] config' in t, t[-800:])
     check('A4_live: writes walkthrough dir',
-          os.path.isdir(os.path.join(ROOT, 'experiments', 'walkthrough', 'A4', 'poster_rotation')))
+          os.path.isdir(os.path.join(ROOT, 'experiments', 'walkthrough', 'poster_rotation', 'thesis_cmax')))
     check('A4_live: report folders untouched', snapshot() == before)
