@@ -171,11 +171,8 @@ def test_live_missing_dataset_skips():
 def test_redraw_note():
     nb = execute('Redraw', {'delta_FR': 0.3, 'n_frames': 10}, sections=['A2'])
     t = text(nb)
-    check('redraw_says_rerun_needed',
-          "No saved run has the panel's delta_FR 0.3, n_frames 10 (saved: 150): "
-          "rerun it in Live mode." in t, t[:600])
-    nb = execute('Redraw', {'n_frames': 150}, sections=['A2'])
-    check('redraw_quiet_when_saved', 'No saved run' not in text(nb))
+    check('redraw_says_report_runs', "Redraw: the report's saved runs" in t, t[:600])
+    check('redraw_no_rerun_line', 'rerun it in Live mode' not in t, t[:600])
 
 
 # ------------------------------------------------------------------- Task 3
@@ -291,7 +288,167 @@ def test_live_missing_dataset_skips_more():
         check(f'{ID} live_missing_dataset: reported', 'missing:' in text(nb), text(nb)[-300:])
 
 
+# ------------------------------------------------------- run registry (lookup + Live guard)
+def _readable_runs():
+    import glob, json
+    n = 0
+    for f in glob.glob('results/**/run.json', recursive=True) + \
+             glob.glob('experiments/**/run.json', recursive=True):
+        try:
+            n += 'config' in json.load(open(f))
+        except (OSError, ValueError):
+            pass
+    return n
+
+
+def test_registry_scan():
+    nb = execute('Redraw', extra=[
+        "print('NROWS', len(REG)); print('COLS', sorted(REG.columns));"
+        "print('NANS', int(REG[['model', 'dataset']].isna().sum().sum()))"])
+    t = text(nb)
+    check('registry_scan: no errors', not errors(nb), errors(nb))
+    check('registry_scan: one row per run.json', f'NROWS {_readable_runs()}' in t, t[-400:])
+    for col in ('folder', 'root', 'model', 'segment', 'segment_id', 'dt', 'n_frames',
+                'n_iters', 'poisson', 'delta_FR', 'err_deg_s', 'dir_err_deg', 'beta'):
+        check(f'registry_scan: column {col}', f"'{col}'" in t)
+    check('registry_scan: model/dataset filled', 'NANS 0' in t, t[-200:])
+
+
+def test_registry_cascade():
+    nb = execute('Redraw', extra=[
+        "a = available(REG, {'model': 'thesis_cmax'})\n"
+        "b = available(REG, {'model': 'thesis_cmax', 'segment': 'poster_rotation seg_C'})\n"
+        "print('SUBSET', set(b['delta_FR']) <= set(a['delta_FR']))\n"
+        "print('HAS01', 0.1 in b['delta_FR'])\n"
+        "print('OWNKEPT', len(b['segment']) == len(a['segment']) > 1)"])
+    t = text(nb)
+    check('registry_cascade: no errors', not errors(nb), errors(nb))
+    for k in ('SUBSET True', 'HAS01 True', 'OWNKEPT True'):
+        check(f'registry_cascade: {k}', k in t, t[-300:])
+
+
+def test_registry_no_match():
+    nb = execute('Redraw', extra=[
+        "print('EMPTY', matching(REG, {'model': 'cook', 'delta_FR': 123.0}).empty)\n"
+        "LOOK['model'].value = 'cook'\n"
+        "print(show_matches({'model': 'cook', 'delta_FR': 123.0}))"])
+    t = text(nb)
+    check('registry_no_match: no errors', not errors(nb), errors(nb))
+    check('registry_no_match: empty', 'EMPTY True' in t, t[-300:])
+    check('registry_no_match: said', 'no saved run matches' in t, t[-300:])
+
+
+def test_registry_empty_roots():
+    nb = execute('Redraw', extra=[
+        "e = scan_runs(('nonexistent_root',)); print('EMPTYREG', e.empty, 'delta_FR' in e.columns)"])
+    check('registry_empty_roots', 'EMPTYREG True True' in text(nb) and not errors(nb),
+          text(nb)[-300:] + str(errors(nb)))
+
+
+def test_registry_old_config():
+    import json, shutil
+    base = os.path.join('experiments', 'walkthrough', '_reg_test')
+    d = os.path.join(base, 'poster_rotation', 'cook', 'seg_C_old')
+    os.makedirs(d, exist_ok=True)
+    json.dump({'config': {'dataset': 'poster_rotation', 'model': 'cook', 't_start': 8.816,
+                          'frame_duration': 0.02, 'n_frames': 5, 'n_iters': 75,
+                          'distortion_mode': 'C_full', 'params': {'delta_FR': 0.1}},
+               'summary': {}}, open(os.path.join(d, 'run.json'), 'w'))
+    try:
+        nb = execute('Redraw', extra=[
+            "r = REG[REG.folder.str.contains('_reg_test')].iloc[0]\n"
+            "print('OLD', r.poisson, r.delta_curl, r.segment_id, r.root.replace(os.sep, '/'))"])
+    finally:
+        shutil.rmtree(base)
+    t = text(nb)
+    check('registry_old_config', 'OLD iterative 0.0 seg_C experiments/walkthrough/_reg_test' in t,
+          t[-300:] + str(errors(nb)))
+
+
+def test_model_prints_dict():
+    nb = execute('Redraw', extra=["LOOK['model'].value = 'thesis_cmax'; print(INFO.value)"])
+    t = text(nb)
+    check('model_prints_dict', "'delta_FR': [" in t and "'n_frames': [" in t and not errors(nb),
+          t[-400:] + str(errors(nb)))
+
+
+GUARD_RC = ("import types\n"
+            "r = REG[REG.root == 'results'].iloc[0]\n"
+            "rc = types.SimpleNamespace(dataset=r.dataset, model=r.model, segment_id=r.segment_id,\n"
+            "    n_frames=int(r.n_frames), frame_duration=r['dt'], t_start=r.t_start, n_iters=int(r.n_iters),\n"
+            "    poisson=r.poisson, distortion_mode=r.distortion_mode, out_root='experiments/walkthrough/_none',\n"
+            "    params={k: float(r[k]) for k in DELTAS if k in experiment_tracking.read_config(r.folder).get('params', {})})\n"
+            "TRACK0 = lambda *a, **k: print('RAN')\n")
+
+
+def test_guard_stops_saved():
+    nb = execute('Live', extra=[GUARD_RC + "E.experiment_tracking(rc, save_frames=False)"])
+    t = text(nb)
+    check('guard_stops_saved: said', 'already saved:' in t, t[-400:])
+    check('guard_stops_saved: not run', 'RAN' not in t, t[-400:])
+    check('guard_stops_saved: no traceback', 'Traceback' not in t and not errors(nb),
+          t[-400:] + str(errors(nb)))
+
+
+def test_guard_runs_new():
+    nb = execute('Live', extra=[GUARD_RC + "rc.n_frames = 7\nE.experiment_tracking(rc, save_frames=False)"])
+    t = text(nb)
+    check('guard_runs_new', 'RAN' in t and 'already saved' not in t, t[-400:] + str(errors(nb)))
+
+
+def test_guard_unstored_delta():
+    nb = execute('Live', extra=[
+        GUARD_RC.replace("REG.root == 'results'", "(REG.root == 'results') & (REG.delta_curl == 0)") +
+        "rc.params = {**rc.params, 'delta_curl': 0.0}; print('ZERO', bool(saved_runs(rc)))\n"
+        "rc.params = {**rc.params, 'delta_curl': 0.6}; print('SIX', bool(saved_runs(rc)))"])
+    t = text(nb)
+    check('guard_unstored_delta', 'ZERO True' in t and 'SIX False' in t, t[-300:] + str(errors(nb)))
+
+
+def test_redirect_bypasses_guard():
+    nb = execute('Live', extra=[GUARD_RC +
+        "with redirect(run_experiments, _run=lambda *a: print('REC')):\n"
+        "    run_experiments._run(E, rc, False, 1)"])
+    t = text(nb)
+    check('redirect_bypasses_guard', 'REC' in t and 'already saved' not in t, t[-300:])
+
+
+def test_guard_incomplete_and_new_root():
+    """A run.json without a summary (crashed run) is not 'saved'; a complete run in
+    a root the registry has not scanned yet (rc.out_root) is."""
+    import json, shutil
+    base = os.path.join('experiments', 'walkthrough', '_reg_test')
+    cfg = {'dataset': 'poster_rotation', 'model': 'cook', 'segment_id': 'seg_C', 't_start': 8.816,
+           'frame_duration': 0.02, 'n_frames': 4, 'n_iters': 75, 'distortion_mode': 'C_full',
+           'poisson': 'iterative', 'params': {'delta_FR': 0.1}}
+    d = os.path.join(base, 'poster_rotation', 'cook', 'seg_C_x')
+    rc = ("import types\nrc = types.SimpleNamespace(dataset='poster_rotation', model='cook', segment_id='seg_C',"
+          " n_frames=4, frame_duration=0.02, t_start=8.816, n_iters=75, poisson='iterative',"
+          " distortion_mode='C_full', params={'delta_FR': 0.1}, out_root=%r)\n" % base)
+    try:
+        os.makedirs(d, exist_ok=True)
+        json.dump({'config': cfg, 'summary': None}, open(os.path.join(d, 'run.json'), 'w'))
+        nb = execute('Live', extra=[rc + "print('CRASHED', bool(saved_runs(rc)))"])
+        json.dump({'config': cfg, 'summary': {'mean_err_deg_s': 1.0}}, open(os.path.join(d, 'run.json'), 'w'))
+        nb2 = execute('Live', extra=["REG = REG[~REG.folder.str.contains('_reg_test')]\n" + rc +
+                                     "print('NEWROOT', bool(saved_runs(rc)))"])
+    finally:
+        shutil.rmtree(base)
+    check('guard_crashed_run_not_saved', 'CRASHED False' in text(nb), text(nb)[-300:] + str(errors(nb)))
+    check('guard_new_root_found', 'NEWROOT True' in text(nb2), text(nb2)[-300:] + str(errors(nb2)))
+
+
+def test_redraw_shows_segment():
+    nb = execute('Redraw', extra=["print('SEGSHOWN', W['segment'] in TOP.children)"])
+    check('redraw_shows_segment', 'SEGSHOWN True' in text(nb), text(nb)[-300:] + str(errors(nb)))
+
+
 TESTS = {'setup': [test_setup],
+         'registry': [test_registry_scan, test_registry_cascade, test_registry_no_match,
+                      test_registry_empty_roots, test_registry_old_config, test_model_prints_dict,
+                      test_guard_stops_saved, test_guard_runs_new, test_guard_unstored_delta,
+                      test_redirect_bypasses_guard, test_guard_incomplete_and_new_root,
+                      test_redraw_shows_segment],
          'fixes': [test_redraw_ignores_dt, test_check_empty_is_skip, test_fig_tracking_runs_missing,
                    test_section_raises, test_sections_stand_alone, test_cook_keeps_changed_delta],
          'A3': [test_A3_redraw],
