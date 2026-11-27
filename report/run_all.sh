@@ -124,6 +124,40 @@ runs() {   # one line per independent run: "name|group|command"
   for i in $(seq 0 20); do
     case " $skip " in *" $i "*) ;; *) echo "beta_$i|REPORT|$R --what beta --index $i" ;; esac
   done
+  # sweep2 (not in the report): wider one-axis sweeps of thesis and thesis+IMU,
+  # two grids, the ratio law, and CMax-anchor's missing points; 1.5 s, into
+  # experiments/sweep2/. Every axis leaves out the adopted value (config.py),
+  # which only the dt job runs, and every grid only its off-axis points, so no
+  # two jobs write one run directory.
+  S2="$R --what sweep --name sweep2 --duration 1.5"
+  for s in boxes poster dynamic bicycle street; do
+    for m in thesis thesis_imu; do
+      for av in dt:'dt=0.005,0.01,0.02,0.04' iters:'n_iters=25,150,300' \
+                VFG:'delta_VFG=0.03,0.06,0.24,0.48' IG:'delta_IG=0.03,0.2,0.4' \
+                GI:'delta_GI=0.02,0.1,0.2' RF:'delta_RF=0.01,0.02,0.1,0.2' \
+                FR:'delta_FR=0.02,0.05,0.3,0.5,0.9' poisson:'poisson=fft,dct' \
+                reg:'delta_curl=0.2,0.6,1.0;delta_shrinkI=1;delta_map=0.01,0.03'; do
+        a=${av%%:*}
+        echo "sweep2_${m}_${s}_$a|REPORT|$S2 --mode coord --model $m --sequences $s --vary '${av#*:}' --out sweep2_${m}_${s}_$a.csv"
+      done
+    done
+    echo "sweep2_thesis_imu_${s}_IMU|REPORT|$S2 --mode coord --model thesis_imu --sequences $s --vary 'delta_IMU=0.1,0.3,0.7,0.9' --out sweep2_thesis_imu_${s}_IMU.csv"
+    # instability law on real data: error vs |F|/b ~ dt*sqrt(delta_VFG)
+    echo "sweep2_thesis_${s}_dtxVFG|REPORT|$S2 --mode grid --model thesis --sequences $s --vary 'dt=0.005,0.01,0.04;delta_VFG=0.06,0.24' --out sweep2_thesis_${s}_dtxVFG.csv"
+    # (delta_FR, delta_IMU) grid for thesis+IMU, one delta_FR row per job (A9 has CMax-anchor's)
+    for fr in 0.02 0.05 0.3 0.5; do
+      echo "sweep2_thesis_imu_${s}_grid_FR$fr|REPORT|$S2 --mode grid --model thesis_imu --sequences $s --vary 'delta_FR=$fr;delta_IMU=0.1,0.3,0.7,0.9' --out sweep2_thesis_imu_${s}_grid_FR$fr.csv"
+    done
+    # ratio law: delta_FR/delta_IMU = 0.2 at other sizes, 75 and 300 iterations
+    # (the adopted 0.1/0.5 at 300 is the iters job's point)
+    for m in thesis_imu thesis_cmax; do
+      for b in 'delta_FR=0.05,delta_IMU=0.25' 'delta_FR=0.15,delta_IMU=0.75'; do
+        k=$(echo "$b" | sed 's/delta_//g; s/[=,]/_/g')
+        echo "sweep2_${m}_${s}_ratio_$k|REPORT|$S2 --mode coord --model $m --sequences $s --base '$b' --vary 'n_iters=75,300' --out sweep2_${m}_${s}_ratio_$k.csv"
+      done
+    done
+    echo "sweep2_thesis_cmax_${s}_more|REPORT|$S2 --mode coord --model thesis_cmax --sequences $s --vary 'n_iters=300;poisson=fft,dct' --out sweep2_thesis_cmax_${s}_more.csv"
+  done
   # OFCE step-instability diagnostic (not in the report): one job per variant.
   for v in $OFCE_VARIANTS; do
     echo "ofce_$v|DIAG|python diag_omega_ladder.py --mode ofce --variant $v"
