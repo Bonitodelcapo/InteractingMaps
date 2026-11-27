@@ -10,12 +10,31 @@ Each cells file holds CELLS = [(kind, tags, src)]; NN orders the sections.
 import glob
 import importlib.util
 import os
+import re
 import sys
 
 import nbformat
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.join(os.path.dirname(HERE), 'experiments_walkthrough.ipynb')
+
+
+def overview_md(ids, path=os.path.join(os.path.dirname(HERE), 'experiments.md')):
+    """experiments.md as the notebook's overview; the IDs with a section link to it."""
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    text = re.sub(r'^\| ([A-E]\d+) \|', lambda m: (f'| [{m[1]}](#{m[1]}) |' if m[1] in ids
+                                                    else m[0]), text, flags=re.M)
+    return '<a id="overview"></a>\n\n' + text
+
+
+def anchored(src):
+    """'## A3 · title' -> anchor + title + back link to the overview."""
+    m = re.match(r'## ([A-E]\d+) ·', src)
+    if not m:
+        return src
+    first, _, rest = src.partition('\n')
+    return f'<a id="{m[1]}"></a>\n\n{first} · [↑ overview](#overview)\n{rest}'
 
 
 def build(out=REPO, only=None):
@@ -29,10 +48,15 @@ def build(out=REPO, only=None):
         spec.loader.exec_module(mod)
         for kind, tags, src in mod.CELLS:
             src = src.strip('\n')
-            c = (nbformat.v4.new_markdown_cell(src) if kind == 'md'
+            c = (nbformat.v4.new_markdown_cell(anchored(src)) if kind == 'md'
                  else nbformat.v4.new_code_cell(src))
             c.metadata['tags'] = list(tags)
             cells.append(c)
+    ids = {m[1] for c in cells if c.cell_type == 'markdown'
+           for m in [re.search(r'<a id="([A-E]\d+)"></a>', c.source)] if m}
+    for c in cells:
+        if 'overview' in c.metadata['tags']:
+            c.source = overview_md(ids)
     nb = nbformat.v4.new_notebook(cells=cells)
     nb.metadata['kernelspec'] = {'name': 'python3', 'display_name': 'Python 3', 'language': 'python'}
     nbformat.write(nb, out)

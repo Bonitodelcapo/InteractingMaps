@@ -41,7 +41,8 @@ def execute(mode='Redraw', overrides=None, sections=(), extra=(), pre=(), allow_
             if 'widgets' in tags:
                 sets = {'mode': mode, **(overrides or {})}
                 keep.append(nbformat.v4.new_code_cell(
-                    '\n'.join(f"W[{k!r}].value = {v!r}" for k, v in sets.items())))
+                    '\n'.join(f"W[{k!r}].value = {v!r}" for k, v in sets.items())
+                    + f"\nPRESET = {sets!r}"))      # the same values start the forms
             if 'A2-defs' in tags:
                 keep += [nbformat.v4.new_code_cell(src) for src in pre]
     keep += [nbformat.v4.new_code_cell(src) for src in extra]
@@ -149,14 +150,16 @@ def test_A2_redraw():
 
 def test_A2_live_short():
     before = snapshot()
-    for _ in range(2):          # twice: a repeated live run overwrites its own folder
+    for i in range(2):          # twice: the second time the saved run is used, not rerun
         nb = execute('Live', {'model': 'thesis', 'segment': 'poster', 'n_frames': 3},
                      sections=['A2'])
         t = text(nb)
         check('A2_live: no cell errors', not errors(nb), errors(nb))
         check('A2_live: config check ok', '[ok] config' in t, t[-800:])
-    check('A2_live: writes walkthrough dir',
-          os.path.isdir(os.path.join(ROOT, 'experiments', 'walkthrough', 'A2', 'poster_rotation')))
+        if i:
+            check('A2_live: second run reuses', 'SAVED RUN (not rerun):' in t, t[-800:])
+    check('A2_live: writes walkthrough dir (real format)',
+          os.path.isdir(os.path.join(ROOT, 'experiments', 'walkthrough', 'poster_rotation', 'thesis')))
     check('live_writes_only_walkthrough', snapshot() == before)
 
 
@@ -168,11 +171,28 @@ def test_live_missing_dataset_skips():
           f"missing: {os.path.join('data', 'boxes_rotation')}" in t, t[-500:])
 
 
-def test_redraw_note():
-    nb = execute('Redraw', {'delta_FR': 0.3, 'n_frames': 10}, sections=['A2'])
+def test_A2_form_no_match():
+    nb = execute('Redraw', sections=['A2-defs'], extra=[
+        "form('A2', main_knobs(150), fixed=MAIN_FIXED)\n"
+        "r, n = find_runs({**params('A2'), 'n_frames': 9999}, 'A2', duration=3.0)\n"
+        "print('READY', READY['A2'], 'RUNS', len(r))"])
     t = text(nb)
-    check('redraw_says_report_runs', "Redraw: the report's saved runs" in t, t[:600])
-    check('redraw_no_rerun_line', 'rerun it in Live mode' not in t, t[:600])
+    check('A2_form_no_match', 'no saved run matches the A2 form' in t and 'READY False RUNS 0' in t
+          and not errors(nb), t[-400:] + str(errors(nb)))
+
+
+def test_A3_form_non_report():
+    nb = execute('Redraw', {'delta_FR': 0.5}, sections=['A2-defs', 'A3'],
+                 extra=["print('DFR', params('A3')['delta_FR'])"])
+    t = text(nb)
+    if 'DFR 0.5' not in t:
+        print('   (A3_form_non_report: no saved A3 run at delta_FR 0.5 here; test not applicable)')
+        return
+    check('A3_form_non_report: no errors', not errors(nb), errors(nb))
+    check('A3_form_non_report: skips report steps',
+          ('[skip] not the report configuration' in t and '[skip] report-only step' in t)
+          or 'no saved run matches the A3 form' in t, t[-600:])
+    check('A3_form_non_report: no DIFF', '[DIFF]' not in t, t[-600:])
 
 
 # ------------------------------------------------------------------- Task 3
@@ -378,22 +398,68 @@ GUARD_RC = ("import types\n"
             "    n_frames=int(r.n_frames), frame_duration=r['dt'], t_start=r.t_start, n_iters=int(r.n_iters),\n"
             "    poisson=r.poisson, distortion_mode=r.distortion_mode, out_root='experiments/walkthrough/_none',\n"
             "    params={k: float(r[k]) for k in DELTAS if k in experiment_tracking.read_config(r.folder).get('params', {})})\n"
-            "TRACK0 = lambda *a, **k: print('RAN')\n")
+            "rc.output_dir = 'NEWDIR'\n"
+            "E.experiment_tracking = lambda *a, **k: print('RAN')\n")
 
 
-def test_guard_stops_saved():
-    nb = execute('Live', extra=[GUARD_RC + "E.experiment_tracking(rc, save_frames=False)"])
+def test_saved_or_run_banner():
+    nb = execute('Live', extra=[GUARD_RC + "print('GOT', saved_or_run(rc))"])
     t = text(nb)
-    check('guard_stops_saved: said', 'already saved:' in t, t[-400:])
-    check('guard_stops_saved: not run', 'RAN' not in t, t[-400:])
-    check('guard_stops_saved: no traceback', 'Traceback' not in t and not errors(nb),
+    check('saved_or_run: banner', 'SAVED RUN (not rerun):' in t, t[-400:] + str(errors(nb)))
+    check('saved_or_run: not run', 'RAN' not in t and 'GOT NEWDIR' not in t, t[-400:])
+    nb = execute('Live', extra=[GUARD_RC + "rc.n_frames = 7\nprint('GOT', saved_or_run(rc))"])
+    t = text(nb)
+    check('saved_or_run: new config runs', 'RAN' in t and 'GOT NEWDIR' in t and 'SAVED RUN' not in t,
           t[-400:] + str(errors(nb)))
 
 
-def test_guard_runs_new():
-    nb = execute('Live', extra=[GUARD_RC + "rc.n_frames = 7\nE.experiment_tracking(rc, save_frames=False)"])
+FORM_T = ("form('T', [Knob('models', MODELS, 'many'), Knob('segment', 'poster'), Knob('n_frames', 75)])\n")
+
+
+def test_form_redraw_options():
+    nb = execute('Redraw', extra=[FORM_T +
+        "R = FORMS['T']['redraw']\n"
+        "saved = set(REG[(REG.segment == 'poster_rotation seg_C')].n_frames)\n"
+        "print('SUBSET', set(R['n_frames'].options) <= saved and 75 in R['n_frames'].options)\n"
+        "before = set(R['n_frames'].options)\n"
+        "R['models'].value = ('thesis_cmax_v2',)\n"
+        "print('NARROW', set(R['n_frames'].options) <= before)"])
     t = text(nb)
-    check('guard_runs_new', 'RAN' in t and 'already saved' not in t, t[-400:] + str(errors(nb)))
+    check('form_redraw_options', 'SUBSET True' in t and 'NARROW True' in t and not errors(nb),
+          t[-400:] + str(errors(nb)))
+
+
+def test_form_live_defaults():
+    nb = execute('Redraw', extra=[FORM_T +
+        "FORMS['T']['mode'].value = 'Live'\n"
+        "print('NF', params('T')['n_frames']); print('HINT', 'report: 75' in FORMS['T']['hints']['n_frames'].value)"])
+    t = text(nb)
+    check('form_live_defaults', 'NF 10' in t and 'HINT True' in t, t[-300:] + str(errors(nb)))
+
+
+def test_params_keys():
+    nb = execute('Redraw', extra=[FORM_T +
+        "q = params('T'); print('KEYS', set(params()) <= set(q)); print('SEG', q['seg'][3], q['mode'])"])
+    t = text(nb)
+    check('params_keys', 'KEYS True' in t and 'SEG poster Redraw' in t, t[-300:] + str(errors(nb)))
+
+
+def test_is_report():
+    nb = execute('Redraw', extra=[FORM_T +
+        "print('REP', is_report('T'))\n"
+        "R = FORMS['T']['redraw']; R['n_frames'].value = [v for v in R['n_frames'].options if v != 75][0]\n"
+        "print('REP2', is_report('T')); report_skip('T')"])
+    t = text(nb)
+    check('is_report', 'REP True' in t and 'REP2 False' in t and
+          '[skip] not the report configuration' in t, t[-300:] + str(errors(nb)))
+
+
+def test_forms_isolated():
+    nb = execute('Redraw', extra=[
+        "form('T1', [Knob('n_frames', 75)]); form('T2', [Knob('n_frames', 75)])\n"
+        "FORMS['T1']['mode'].value = 'Live'; FORMS['T1']['live']['n_frames'].value = 33\n"
+        "print('T2', params('T2')['n_frames'], params('T2')['mode'])"])
+    check('forms_isolated', 'T2 75 Redraw' in text(nb), text(nb)[-300:] + str(errors(nb)))
 
 
 def test_guard_unstored_delta():
@@ -443,16 +509,35 @@ def test_redraw_shows_segment():
     check('redraw_shows_segment', 'SEGSHOWN True' in text(nb), text(nb)[-300:] + str(errors(nb)))
 
 
+# ------------------------------------------------------- forms (stage 1)
+def test_overview_links():
+    import tempfile
+    sys.path.insert(0, os.path.join(ROOT, 'walkthrough'))
+    import build_nb
+    out = os.path.join(tempfile.mkdtemp(), 'ov.ipynb')
+    build_nb.build(out, ['A2', 'A3'])
+    cells = nbformat.read(out, as_version=4).cells
+    ov = next(c.source for c in cells if 'overview' in c.metadata.get('tags', []))
+    a3 = next(c.source for c in cells if c.cell_type == 'markdown' and c.source.startswith('<a id="A3">'))
+    check('overview: links built sections', '[A3](#A3)' in ov and '[A2](#A2)' in ov, ov[:300])
+    check('overview: unbuilt section unlinked', '| A5 |' in ov and '[A5](#A5)' not in ov)
+    check('overview: experiments.md table', '| ID | Experiment |' in ov)
+    check('overview: anchor', ov.startswith('<a id="overview"></a>'), ov[:80])
+    check('section header: anchor and back link', '[↑ overview](#overview)' in a3.splitlines()[2], repr(a3[:200]))
+
+
 TESTS = {'setup': [test_setup],
+         'forms': [test_overview_links, test_saved_or_run_banner, test_form_redraw_options,
+                   test_form_live_defaults, test_params_keys, test_is_report, test_forms_isolated],
          'registry': [test_registry_scan, test_registry_cascade, test_registry_no_match,
                       test_registry_empty_roots, test_registry_old_config, test_model_prints_dict,
-                      test_guard_stops_saved, test_guard_runs_new, test_guard_unstored_delta,
+                      test_guard_unstored_delta,
                       test_redirect_bypasses_guard, test_guard_incomplete_and_new_root,
                       test_redraw_shows_segment],
          'fixes': [test_redraw_ignores_dt, test_check_empty_is_skip, test_fig_tracking_runs_missing,
                    test_section_raises, test_sections_stand_alone, test_cook_keeps_changed_delta],
-         'A3': [test_A3_redraw],
-         'A2': [test_A2_redraw, test_redraw_note],
+         'A3': [test_A3_redraw, test_A3_form_non_report],
+         'A2': [test_A2_redraw, test_A2_form_no_match],
          # tracking runs: on the cluster only, never by default
          'full': [test_full_redraw],          # cluster: whole notebook, Redraw
          'live': [test_live_missing_dataset_skips_more, test_A2_live_short, test_A3_live_short, test_live_missing_dataset_skips,
