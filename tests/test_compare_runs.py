@@ -139,7 +139,79 @@ def test_outputs():
         check('read_maps', set(outputs.read_maps(d, 'final')) == {'I', 'G', 'F'})
 
 
-TESTS = [test_catalog, test_outputs]
+# ---------------------------------------------------------------- Task 3: bands
+def make_runs(root, specs):
+    """specs: [(rel, cfg kwargs, tracking kwargs, maps kwargs or None)] -> list of bands.Run."""
+    from interacting_maps.compare_runs import bands, catalog
+    for rel, ck, tk, mk in specs:
+        d = make_run(root, rel, cfg(**ck), {'mean_err_deg_s': 1.0, 'mean_beta': 1.0})
+        write_tracking(d, **tk)
+        if mk is not None:
+            write_maps(d, **mk)
+    cat = catalog.scan([root])
+    rows = [cat[cat.folder == os.path.normpath(os.path.join(root, s[0]))].iloc[0] for s in specs]
+    return [bands.Run(i + 1, bands.SLOT_COLORS[i], r, set()) for i, r in enumerate(rows)]
+
+
+def test_bands():
+    from interacting_maps.compare_runs import bands
+    print('bands')
+    check('20 slot colours, distinct', len(set(bands.SLOT_COLORS)) == 20)
+    with tempfile.TemporaryDirectory() as root:
+        runs = make_runs(root, [('a', dict(dt=0.02), dict(extra={'beta': 1.0}), {}),
+                                ('b', dict(dt=0.01), dict(est_wz=2.0), dict(scale=2.0))])
+        lab = bands.labels(runs)
+        check('labels show what differs', lab == {1: '#1 dt=20ms', 2: '#2 dt=10ms'}, str(lab))
+        check('one segment: no warning', bands.segment_warning(runs) is None)
+
+        fig, missing = bands.curve_figure(runs, 'beta')
+        check('run without the column is reported', missing == [2], str(missing))
+        check('it is not drawn', len(fig.axes[0].lines) == 1)
+
+        fig, missing = bands.curve_figure(runs, 'omega')
+        ax_z = fig.axes[2]
+        est = [l for l in ax_z.lines if l.get_color() == runs[0].color][0]
+        check('omega in deg/s', np.allclose(est.get_ydata(), np.degrees(1.0)))
+        check('x = time since start', np.allclose(est.get_xdata(), [0.01, 0.03, 0.05, 0.07]))
+        est2 = [l for l in ax_z.lines if l.get_color() == runs[1].color][0]
+        check('x of dt=10ms run', np.allclose(est2.get_xdata(), [0.005, 0.015, 0.025, 0.035]))
+        check('one reference for one segment',
+              sum(l.get_color() == 'k' for l in ax_z.lines) == 1)
+
+        html = bands.table_html(runs, only_diff=False)
+        check('table highlights differing dt', bands.DIFF_STYLE in html and '20' in html)
+        check('only_diff drops constant model column',
+              'model' in html and 'model' not in bands.table_html(runs, only_diff=True))
+
+        fig = bands.map_figure(runs, 'final:I')
+        a, b = (ax.images[0].get_array() for ax in fig.axes[:2])
+        check('shared map scale (×2 map brighter than ×1)', float(np.mean(a)) < float(np.mean(b)))
+
+        write_maps(runs[0].row.folder, which='center')
+        fig = bands.map_figure(runs[:1], 'center:aps')
+        check('center without t_mid: no guessed APS',
+              'no t_mid saved' in fig.axes[0].get_title())
+
+        write_png(os.path.join(runs[0].row.folder, 'video_frames', 'frame_0000.png'))
+        write_png(os.path.join(runs[0].row.folder, 'video_frames', 'frame_0001.png'))
+        cells = bands.image_cells(runs, 'video_frames', frame=5)
+        check('frame beyond the run: empty cell', cells == [(1, None), (2, None)], str(cells))
+        cells = bands.image_cells(runs, 'video_frames', frame=1)
+        check('frame k path', cells[0][1].endswith('frame_0001.png') and cells[1][1] is None)
+        cells = bands.image_cells(runs, 'tracking_plot.png')
+        check('figure missing: None', cells == [(1, None), (2, None)])
+
+    with tempfile.TemporaryDirectory() as root:
+        runs = make_runs(root, [('a', dict(seg='seg_A'), {}, None),
+                                ('b', dict(seg='seg_B'), {}, None)])
+        w = bands.segment_warning(runs) or ''
+        check('two segments: warning', '2 segments' in w and 'does not make sense' in w, w)
+        fig, _ = bands.curve_figure(runs, 'omega')
+        check('one reference per segment',
+              sum(l.get_color() == 'k' for l in fig.axes[2].lines) == 2)
+
+
+TESTS = [test_catalog, test_outputs, test_bands]
 
 if __name__ == '__main__':
     only = sys.argv[1:]
