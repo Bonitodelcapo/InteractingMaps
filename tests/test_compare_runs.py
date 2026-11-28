@@ -70,6 +70,7 @@ def test_catalog():
         check('missing delta is MISSING', leg.delta_FR == catalog.MISSING, str(leg.delta_FR))
         check('dt values', set(cat.dt) == {0.02, 0.01})
         check('root column', set(cat.root) == {root})
+        check('no r_init stored = gyro', set(cat.r_init) == {'gyro'}, str(set(cat.r_init)))
         keys = catalog.choice_keys(cat)
         check('choice keys: base then params',
               keys[:len(catalog.BASE_KEYS)] == catalog.BASE_KEYS
@@ -82,6 +83,15 @@ def test_catalog():
         hit = catalog.matches(cat, {'model': 'thesis'})
         check('matches best error first', list(hit.folder) == [b, a])
         check('any = no filter', len(catalog.matches(cat, {'model': 'any'})) == 3)
+    with tempfile.TemporaryDirectory() as root:
+        three_runs(root)
+        make_run(root, 'boxes_rotation/thesis/seg_A_rrand', {**cfg(), 'r_init': 'random',
+                                                             'r_sigma': 2.0, 'r_seed': 42})
+        cat = catalog.scan([root])
+        rnd = cat[cat.r_init == 'random']
+        check('r_init / r_sigma / r_seed read', len(rnd) == 1 and rnd.iloc[0].r_seed == 42
+              and catalog.options(cat, {})['r_init'] == ['gyro', 'random'])
+        check('r_sigma MISSING without it', cat[cat.r_init == 'gyro'].r_sigma.eq(catalog.MISSING).all())
 
 
 TRACK_COLS = ['frame', 'time', 'est_wx', 'est_wy', 'est_wz', 'gt_wx', 'gt_wy', 'gt_wz',

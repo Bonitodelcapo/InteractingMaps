@@ -15,7 +15,7 @@ import experiment_tracking
 
 MISSING = '—'
 BASE_KEYS = ['model', 'dataset', 'segment_id', 't_start', 'dt', 'n_frames', 'n_iters',
-             'poisson', 'distortion_mode', 'root']
+             'poisson', 'distortion_mode', 'r_init', 'r_sigma', 'r_seed', 'root']
 _RECORDS = ('run.json', 'params.json')
 
 
@@ -51,6 +51,9 @@ def _row(folder, root):
                dt=c.get('frame_duration'), n_frames=c.get('n_frames'),
                n_iters=c.get('n_iters'), poisson=c.get('poisson', 'iterative'),
                distortion_mode=c.get('distortion_mode'),
+               # frame-0 R: earlier runs stored none, they are the gyro warm start
+               r_init=c.get('r_init', 'gyro'), r_sigma=c.get('r_sigma'),
+               r_seed=c.get('r_seed'),
                err_deg_s=s.get('mean_err_deg_s', np.nan))
     row = {k: (MISSING if v is None else v) for k, v in row.items()}
     row.update(c.get('params') or {})
