@@ -125,15 +125,15 @@ runs() {   # one line per independent run: "name|group|command"
     case " $skip " in *" $i "*) ;; *) echo "beta_$i|REPORT|$R --what beta --index $i" ;; esac
   done
   # noinit (not in the report): the main-table runs with no gyro warm start at
-  # frame 0 -- R = 0, or Cook's small random R (2 deg/s per axis, seeds 42, 43);
+  # frame 0 -- R = 0, or a random R (90 deg/s per axis, seeds 42, 43);
   # R carries over as always. 75 frames = the dissoc_1p5s runs, 150 = main_base.
-  # The folder suffix (_r0, _rrand2_s<seed>) keeps them apart in results/.
+  # The folder suffix (_r0, _rrand90_s<seed>) keeps them apart in results/.
   for s in boxes poster dynamic bicycle street; do
     for m in cook thesis thesis_imu thesis_cmax thesis_cmax_v2; do
       for d in 1.5 3.0; do
         for ri in zero random:42 random:43; do
           k=${ri/:/_s}; init="--r-init ${ri%%:*}"
-          [ "$ri" != "${ri#*:}" ] && init="$init --r-seed ${ri#*:}"
+          [ "$ri" != "${ri#*:}" ] && { init="$init --r-sigma 90 --r-seed ${ri#*:}"; k=${k/random/random90}; }
           echo "noinit_${s}_${m}_${d/./p}s_$k|REPORT|$R --what main --duration $d $init --sequences $s --models $m --out noinit_${s}_${m}_${d/./p}s_$k.csv"
         done
       done
