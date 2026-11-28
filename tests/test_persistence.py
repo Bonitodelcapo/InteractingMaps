@@ -22,7 +22,9 @@ from interacting_maps.camera import build_kinematic_matrix
 from interacting_maps.data_loader import CameraCalibration
 from interacting_maps.rotation_warp import (Camera, pixel_rays, rotation_matrix,
                                             compose, warp_coords, warp_jacobian,
-                                            bilinear_sample)
+                                            bilinear_sample, solve_rotation_gn)
+from interacting_maps.eval_io import load_aps_list, nearest_aps
+from scipy.ndimage import gaussian_filter
 
 H, W = 180, 240
 DATASET = 'poster_rotation'
@@ -105,12 +107,56 @@ def check_warp_outside_masked():
     assert (vals[~valid] == 0).all(), "invalid samples not zeroed"
 
 
+# --------------------------------------------------- Task 2: Gauss–Newton solve
+def _poster_frame():
+    """First poster APS frame, grey in [0, 1], blurred like a network I."""
+    imgs = load_aps_list(get_dataset_paths(DATASET)['data_dir'])
+    img = np.asarray(nearest_aps(imgs, imgs[0][0]), np.float64)
+    img = (img - img.min()) / (img.max() - img.min())
+    return gaussian_filter(img, sigma=1.0)
+
+
+def _gn(I, Ic, cam, R0, mask=None):
+    rays = pixel_rays(H, W, cam)
+    gy, gx = np.gradient(Ic)
+    return solve_rotation_gn(I, Ic, (gx, gy), rays, cam, np.asarray(R0, float), mask=mask)
+
+
+def check_gn_known_rotation():
+    _, camd = _cams()
+    Ic = _poster_frame()
+    R_true = np.array([0.002, -0.003, 0.002])
+    I, valid = bilinear_sample(Ic, *warp_coords(pixel_rays(H, W, camd), R_true, camd))
+    for R0 in (np.zeros(3), 2 * R_true):
+        R = _gn(I, Ic, camd, R0, mask=valid)
+        err = np.linalg.norm(R - R_true)
+        assert err < 1e-4, f"from R0={R0}: |R - R_true| = {err:.2e} rad"
+
+
+def check_gn_identical_images():
+    _, camd = _cams()
+    Ic = _poster_frame()
+    R = _gn(Ic, Ic, camd, [0.003, 0.002, -0.002])
+    assert np.linalg.norm(R) < 1e-4, f"I == Ǐ should give R* ≈ 0, got {R}"
+
+
+def check_gn_flat_reference():
+    _, camd = _cams()
+    flat = np.ones((H, W))
+    R0 = np.array([0.001, 0.0, 0.0])
+    R = _gn(flat, flat, camd, R0)
+    assert np.isfinite(R).all() and np.abs(R - R0).max() < 1e-12, f"flat Ǐ moved R: {R}"
+
+
 CHECKS = [
     check_warp_identity,
     check_warp_matches_C,
     check_compose,
     check_warp_jacobian_fd,
     check_warp_outside_masked,
+    check_gn_known_rotation,
+    check_gn_identical_images,
+    check_gn_flat_reference,
 ]
 
 

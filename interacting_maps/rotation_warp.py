@@ -156,3 +156,38 @@ def bilinear_sample(img, u, v):
     vals = ((1 - fx) * (1 - fy) * img[y0, x0] + fx * (1 - fy) * img[y0, x0 + 1]
             + (1 - fx) * fy * img[y0 + 1, x0] + fx * fy * img[y0 + 1, x0 + 1])
     return np.where(valid, vals, 0.0), valid
+
+
+def solve_rotation_gn(I, Icheck, grad_Icheck, rays, cam, R0, n_max=20, tol=1e-8,
+                      mask=None):
+    """Gauss–Newton on Σ ρ_i², ρ_i(R) = I(p_i) − Ǐ(T_R(p_i))  (Eqs. 6.72–6.98).
+
+    Starts at R0 and iterates to convergence (|Δ| < tol) or n_max steps, each
+    step linearised in so(3) and applied as R ← compose(Δ, R). grad_Icheck is
+    (gx, gy) of Ǐ, precomputed by the caller (Ǐ is fixed within a frame).
+    Pixels whose warped position leaves the image, or outside `mask`, are
+    excluded. A rank-deficient system (e.g. a textureless Ǐ) gives the
+    minimum-norm step, so R does not move along unobserved directions; with
+    fewer than 3 usable pixels, or a non-finite result, R0 is returned.
+    """
+    gx, gy = grad_Icheck
+    R = np.asarray(R0, np.float64).copy()
+    for _ in range(n_max):
+        u, v = warp_coords(rays, R, cam)
+        Iw, valid = bilinear_sample(Icheck, u, v)
+        if mask is not None:
+            valid &= mask
+        if valid.sum() < 3:
+            return np.asarray(R0, np.float64).copy()
+        gxw, _ = bilinear_sample(gx, u, v)
+        gyw, _ = bilinear_sample(gy, u, v)
+        Jt = warp_jacobian(rays, R, cam)                       # (H, W, 2, 3)
+        J = -(gxw[..., None] * Jt[..., 0, :] + gyw[..., None] * Jt[..., 1, :])
+        rho = (I - Iw)[valid]
+        delta = np.linalg.lstsq(J[valid], -rho, rcond=1e-10)[0]
+        R = compose(delta, R)
+        if not np.isfinite(R).all():
+            return np.asarray(R0, np.float64).copy()
+        if np.linalg.norm(delta) < tol:
+            break
+    return R
