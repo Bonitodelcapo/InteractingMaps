@@ -191,3 +191,33 @@ def solve_rotation_gn(I, Icheck, grad_Icheck, rays, cam, R0, n_max=20, tol=1e-8,
         if np.linalg.norm(delta) < tol:
             break
     return R
+
+
+def block_match(I, Icheck, half_block=3, radius=4):
+    """Block-matching flow F′ of I against Ǐ (Eq. 6.138) → (F_prime, valid).
+
+    For each pixel p, the integer d = (dx, dy), |dx|, |dy| ≤ radius, minimising
+    the sum of absolute differences between the (2·half_block+1)² block of I at
+    p and the block of Ǐ at p − d — the flow convention of F, I(p) ≈ Ǐ(p − F).
+    Candidates are visited in order of |d| with a strict '<', so ties (flat
+    regions) keep the smallest shift, zero first. valid is False within
+    half_block + radius of the border, where block or search leave the image.
+    """
+    from scipy.ndimage import uniform_filter
+    H, W = I.shape
+    size = 2 * half_block + 1
+    cands = [(dx, dy) for dy in range(-radius, radius + 1)
+             for dx in range(-radius, radius + 1)]
+    cands.sort(key=lambda d: d[0] ** 2 + d[1] ** 2)
+    best = np.full((H, W), np.inf)
+    F = np.zeros((H, W, 2))
+    for dx, dy in cands:
+        shifted = np.roll(Icheck, shift=(dy, dx), axis=(0, 1))   # Ǐ(p − d)
+        sad = uniform_filter(np.abs(I - shifted), size=size, mode='nearest')
+        better = sad < best
+        best[better] = sad[better]
+        F[better] = (dx, dy)
+    m = half_block + radius
+    valid = np.zeros((H, W), bool)
+    valid[m:H - m, m:W - m] = True
+    return F, valid

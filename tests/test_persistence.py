@@ -22,7 +22,8 @@ from interacting_maps.camera import build_kinematic_matrix
 from interacting_maps.data_loader import CameraCalibration
 from interacting_maps.rotation_warp import (Camera, pixel_rays, rotation_matrix,
                                             compose, warp_coords, warp_jacobian,
-                                            bilinear_sample, solve_rotation_gn)
+                                            bilinear_sample, solve_rotation_gn,
+                                            block_match)
 from interacting_maps.eval_io import load_aps_list, nearest_aps
 from scipy.ndimage import gaussian_filter
 
@@ -148,6 +149,21 @@ def check_gn_flat_reference():
     assert np.isfinite(R).all() and np.abs(R - R0).max() < 1e-12, f"flat Ǐ moved R: {R}"
 
 
+# --------------------------------------------------------- Task 3: block match
+def check_bm_shift():
+    Ic = _poster_frame()
+    I = np.roll(Ic, shift=(2, -3), axis=(0, 1))        # dy = 2, dx = -3
+    Fp, valid = block_match(I, Ic, half_block=3, radius=4)
+    hit = np.all(Fp[valid] == np.array([-3.0, 2.0]), axis=-1).mean()
+    assert hit >= 0.99, f"only {hit:.3f} of valid pixels found the shift (-3, 2)"
+
+
+def check_bm_flat_zero():
+    flat = np.ones((H, W))
+    Fp, valid = block_match(flat, flat, half_block=3, radius=4)
+    assert valid.any() and (Fp[valid] == 0).all(), "flat image gave non-zero F'"
+
+
 CHECKS = [
     check_warp_identity,
     check_warp_matches_C,
@@ -157,6 +173,8 @@ CHECKS = [
     check_gn_known_rotation,
     check_gn_identical_images,
     check_gn_flat_reference,
+    check_bm_shift,
+    check_bm_flat_zero,
 ]
 
 
