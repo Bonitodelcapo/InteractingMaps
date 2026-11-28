@@ -164,6 +164,61 @@ def check_bm_flat_zero():
     assert valid.any() and (Fp[valid] == 0).all(), "flat image gave non-zero F'"
 
 
+# ------------------------------------------------------------ Task 4: network
+from config import THESIS_PARAMS
+from interacting_maps import network_dissertation as ND
+
+_THESIS_INIT, _THESIS_STEP = ND.InteractingMapsThesis.__init__, ND.InteractingMapsThesis.step
+from interacting_maps.network_persistence import InteractingMapsPersist
+
+R_INIT = np.array([0.002, -0.001, 0.001])
+VARIANTS = [(True, False), (False, True), (True, True)]
+
+
+def _V():
+    rng = np.random.default_rng(0)
+    return (rng.random((H, W)) < 0.1) * rng.choice([-1.0, 1.0], (H, W))
+
+
+def _net(cls, **kw):
+    _, camd = _cams()
+    net = cls(H=H, W=W, fx=camd.fx, fy=camd.fy, cx=camd.cx, cy=camd.cy,
+              frame_duration=0.02, dist_coeffs=camd.dist, **THESIS_PARAMS, **kw)
+    net.initialize_from_rotation(R_INIT)
+    return net
+
+
+def check_frame0_equals_thesis():
+    V = _V()
+    ref = _net(ND.InteractingMapsThesis)
+    ref.step(V, n_iters=10)
+    for up, ub in VARIANTS:
+        net = _net(InteractingMapsPersist, use_persistence=up, use_block_matching=ub)
+        net.step(V, n_iters=10)
+        for name in ('I', 'G', 'F', 'R'):
+            assert np.array_equal(getattr(net, name), getattr(ref, name)),                 f"frame 0 differs from thesis in {name} (persist={up}, bm={ub})"
+
+
+def check_frame1_reference():
+    V = _V()
+    for up, ub in VARIANTS:
+        net = _net(InteractingMapsPersist, use_persistence=up, use_block_matching=ub)
+        net.step(V, n_iters=2)
+        I1 = net.I.copy()
+        net.step(V, n_iters=1)
+        assert np.array_equal(net.q_Icheck.value, I1), "Ǐ is not the previous frame's I"
+        for c in net.persist_costs:
+            assert c.active, f"{type(c).__name__} inactive on frame 1"
+        assert len(net.persist_costs) == up + ub, "wrong set of enabled costs"
+        for name in ('I', 'G', 'F', 'R'):
+            assert np.isfinite(getattr(net, name)).all(), f"non-finite {name}"
+
+
+def check_thesis_untouched():
+    assert ND.InteractingMapsThesis.__init__ is _THESIS_INIT
+    assert ND.InteractingMapsThesis.step is _THESIS_STEP
+
+
 CHECKS = [
     check_warp_identity,
     check_warp_matches_C,
@@ -175,6 +230,9 @@ CHECKS = [
     check_gn_flat_reference,
     check_bm_shift,
     check_bm_flat_zero,
+    check_frame0_equals_thesis,
+    check_frame1_reference,
+    check_thesis_untouched,
 ]
 
 
