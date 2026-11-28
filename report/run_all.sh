@@ -186,15 +186,13 @@ runs() {   # one line per independent run: "name|group|command"
     for m in thesis thesis_imu thesis_cmax; do
       echo "persist_ref_${m}_$s|REPORT|$PS --mode coord --model $m --sequences $s --vary 'n_iters=75' --out persist_ref_${m}_$s.csv"
     done
-    for m in thesis_persist thesis_bm thesis_persist_bm; do
+    for m in thesis_persist; do   # block matching (thesis_bm, thesis_persist_bm) later: slow
       echo "persist_${m}_${s}_iters|REPORT|$PS --mode coord --model $m --sequences $s --vary 'n_iters=75,300' --out persist_${m}_${s}_iters.csv"
       echo "persist_${m}_${s}_dt|REPORT|$PS --mode coord --model $m --sequences $s --vary 'dt=0.01,0.04' --out persist_${m}_${s}_dt.csv"
     done
     # persistence: R pull and I pull (eta=0: R side only, I free of Ǐ)
     echo "persist_thesis_persist_${s}_R|REPORT|$PS --mode coord --model thesis_persist --sequences $s --vary 'delta_persist_R=0.03,0.3,1.0' --out persist_thesis_persist_${s}_R.csv"
     echo "persist_thesis_persist_${s}_I|REPORT|$PS --mode coord --model thesis_persist --sequences $s --vary 'eta_persist_I=0,0.02,0.2' --out persist_thesis_persist_${s}_I.csv"
-    # block matching: F pull
-    echo "persist_thesis_bm_${s}_BM|REPORT|$PS --mode coord --model thesis_bm --sequences $s --vary 'delta_BM=0.02,0.2,0.5' --out persist_thesis_bm_${s}_BM.csv"
   done
   # OFCE step-instability diagnostic (not in the report): one job per variant.
   for v in $OFCE_VARIANTS; do
