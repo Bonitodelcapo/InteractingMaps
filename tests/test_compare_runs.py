@@ -275,10 +275,20 @@ def test_app():
         # final review: a run that did not tick an output keeps its (empty) column
         s2.check['tracking_plot.png'].value = False
         app.render()
-        cells = [w for w in walk(app.view) if isinstance(w, wd.VBox)
-                 and w.children and isinstance(w.children[0], wd.HTML)
-                 and w.children[0].value.endswith('</b>') and len(w.children) == 2]
-        check('unticked run keeps its empty cell', len(cells) == 2, str(len(cells)))
+        cells = lambda: [w for w in walk(app.view) if isinstance(w, wd.VBox)
+                         and w.layout.width in ('24%', '100%')]
+        check('unticked run keeps its empty cell', len(cells()) == 2, str(len(cells())))
+
+        # enlarge: a toggle on each image cell widens it to the full row and back
+        btns = [w for w in walk(app.view) if isinstance(w, wd.Button) and w.description == '⤢']
+        check('one enlarge toggle per image (none on empty cells)', len(btns) == 1, str(len(btns)))
+        btns[0].click()
+        check('click enlarges to full width', cells()[0].layout.width == '100%'
+              and btns[0].description == '⤡')
+        app.render()
+        check('stays enlarged after a redraw', cells()[0].layout.width == '100%')
+        [b for b in walk(app.view) if isinstance(b, wd.Button) and b.description == '⤡'][0].click()
+        check('second click shrinks back', cells()[0].layout.width == '24%')
 
         # final review: removing a slot redraws the comparison
         app.remove()

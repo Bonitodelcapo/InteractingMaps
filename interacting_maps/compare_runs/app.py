@@ -15,6 +15,7 @@ from . import bands, catalog, outputs
 
 BANDS = ['curves', 'table', 'figures', 'maps', 'frames']
 CELL_WIDTH = '24%'                       # figure / frame cells: four per row
+BIG_WIDTH = '100%'                       # an enlarged cell: the full row
 
 
 def _fig_image(fig):
@@ -140,6 +141,7 @@ class CompareApp:
         self.info = wd.HTML()
         self.slots_box, self.view, self.frames_box = wd.VBox(), wd.VBox(), wd.VBox()
         self.slots = []
+        self._big = set()                    # (output key, slot) of enlarged image cells
         self.rescan_btn.on_click(lambda _: self.rescan())
         self.add_btn.on_click(lambda _: self.add())
         self.remove_btn.on_click(lambda _: self.remove())
@@ -206,9 +208,28 @@ class CompareApp:
                 path = frame = None
             body = _file_widget(path) if path else wd.HTML(
                 '—' if frame is None else f'no frame {frame}')
-            cells.append(wd.VBox([_head(lab[slot], r.color), body],
-                                 layout=wd.Layout(width=CELL_WIDTH)))
+            head = _head(lab[slot], r.color)
+            cell = wd.VBox([head, body], layout=wd.Layout(width=CELL_WIDTH))
+            if path:
+                cell.children = [wd.HBox([self._enlarge_button(cell, (key, slot)), head]), body]
+            cells.append(cell)
         return wd.Box(cells, layout=wd.Layout(flex_flow='row wrap'))
+
+    def _enlarge_button(self, cell, which):
+        """⤢ widens the cell to the full row, ⤡ puts it back; remembered across redraws."""
+        btn = wd.Button(layout=wd.Layout(width='32px'))
+
+        def show():
+            big = which in self._big
+            cell.layout.width = BIG_WIDTH if big else CELL_WIDTH
+            btn.description, btn.tooltip = ('⤡', 'smaller') if big else ('⤢', 'enlarge')
+
+        def toggle(_):
+            self._big ^= {which}
+            show()
+        btn.on_click(toggle)
+        show()
+        return btn
 
     def _band(self, runs, band, lab):
         out = []
