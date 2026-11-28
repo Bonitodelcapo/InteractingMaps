@@ -53,6 +53,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
+from run_config import R_INITS
 from interacting_maps.style import PAPER_WIDE, use_style, save
 from interacting_maps.viz import draw_map, map_scale, net_maps
 from interacting_maps.metrics import abs_corr, crop_interior
@@ -238,7 +239,8 @@ def cmd_main(E, args):
         for model in models:
             try:
                 rc = run_cfg(ds, sid, t0, model, args.dt, nf,
-                          poisson=poisson, deltas=dict(extra))
+                          poisson=poisson, deltas=dict(extra), r_init=args.r_init,
+                          r_sigma=args.r_sigma, r_seed=args.r_seed)
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                 wr.writerow([ds, sid, model, round(s['mean_err_deg_s'], 2),
                              round(s['median_err_deg_s'], 2),
@@ -665,6 +667,11 @@ def main():
     ap.add_argument('--what', required=True, choices=sorted(COMMANDS))
     ap.add_argument('--dt', type=float, default=0.02, help='frame_duration (s)')
     ap.add_argument('--duration', type=float, default=3.0, help='track length (s)')
+    ap.add_argument('--r-init', default='gyro', choices=R_INITS,
+                    help='main: frame-0 R (gyro warm start, zero, or random); R carries over')
+    ap.add_argument('--r-sigma', type=float, default=2.0,
+                    help='main, --r-init random: spread of R per axis (deg/s)')
+    ap.add_argument('--r-seed', type=int, default=42, help='main, --r-init random: seed')
     ap.add_argument('--model', default='thesis_cmax')
     ap.add_argument('--no-frames', action='store_true',
                     help='skip video_frames (they are the slow part)')

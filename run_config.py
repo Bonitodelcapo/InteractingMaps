@@ -22,12 +22,16 @@ from interacting_maps.network_dissertation import InteractingMapsThesis
 # RUN CONFIGURATION (override via CLI args)
 # ===========================================================================
 
+#: frame-0 R choices of RunConfig(r_init=...)
+R_INITS = ('gyro', 'zero', 'random')
+
 class RunConfig:
     """All parameters for a single evaluation run."""
     def __init__(self, dataset='boxes_rotation', model='thesis_imu',
                  segment=None, t_start=None, frame_duration=None, n_frames=None,
                  n_iters=None, delta_IMU=None, delta_FR=None, distortion_mode=None,
-                 poisson=None, deltas=None, out_root=None):
+                 poisson=None, deltas=None, out_root=None,
+                 r_init='gyro', r_sigma=2.0, r_seed=42):
 
         # Where this run's directory goes. 'results' holds the runs behind the
         # reported tables; a sweep passes e.g. 'experiments/sweep_deltas' so its
@@ -124,7 +128,12 @@ class RunConfig:
         # Paths
         self.paths = get_dataset_paths(dataset)
 
-        # Initial R from IMU
+        # Frame-0 R: 'gyro' (warm start, every report run), 'zero', or
+        # 'random' (Cook's random start: N(0, r_sigma deg/s) per axis, seeded).
+        # R is carried from frame to frame in every case.
+        if r_init not in R_INITS:
+            raise ValueError(f"r_init {r_init!r}: choose from {R_INITS}")
+        self.r_init, self.r_sigma, self.r_seed = r_init, r_sigma, r_seed
         self.initial_R = self._compute_initial_R()
 
     @property
@@ -161,6 +170,7 @@ class RunConfig:
             folder_name += '_' + '-'.join(extra)
         if self.use_thesis and self.poisson != 'iterative':
             folder_name += f"_{self.poisson}"
+        folder_name += self.r_init_tag
         return os.path.join(self.out_root, self.dataset, self.model, folder_name)
 
     def to_dict(self):
@@ -180,6 +190,7 @@ class RunConfig:
             'sensor_size': list(self.sensor_size),
             'initial_R': self.initial_R.tolist(),
             'params': self.params,
+            **self.r_init_config,
         }
 
     def save_run(self, summary=None):
@@ -201,8 +212,30 @@ class RunConfig:
                 f"t={self.t_start:.3f}, dt={self.frame_duration*1000:.0f}ms, "
                 f"n={self.n_frames}, iters={self.n_iters})")
 
+    @property
+    def r_init_tag(self):
+        """Folder-name suffix of a non-gyro start ('' for the warm start)."""
+        return {'gyro': '', 'zero': '_r0',
+                'random': f'_rrand{self.r_sigma:g}_s{self.r_seed}'}[self.r_init]
+
+    @property
+    def r_init_config(self):
+        """run.json keys of a non-gyro start (none for the warm start, so the
+        stored config of every earlier run stays as it was)."""
+        if self.r_init == 'gyro':
+            return {}
+        out = {'r_init': self.r_init}
+        if self.r_init == 'random':
+            out.update(r_sigma=self.r_sigma, r_seed=self.r_seed)
+        return out
+
     def _compute_initial_R(self):
-        """Compute initial R from IMU at THIS segment's t_start."""
+        """Frame-0 R (rad/frame) of this run's r_init."""
+        if self.r_init == 'zero':
+            return np.zeros(3)
+        if self.r_init == 'random':
+            sd = np.radians(self.r_sigma) * self.frame_duration   # deg/s → rad/frame
+            return np.random.default_rng(self.r_seed).normal(0.0, sd, 3)
         omega = get_gyro_for_frame(load_imu(self.paths['imu']), self.t_start,
                                    self.t_start + self.frame_duration)
         return omega * self.frame_duration  # rad/s → rad/frame

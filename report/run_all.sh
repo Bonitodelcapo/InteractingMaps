@@ -124,6 +124,21 @@ runs() {   # one line per independent run: "name|group|command"
   for i in $(seq 0 20); do
     case " $skip " in *" $i "*) ;; *) echo "beta_$i|REPORT|$R --what beta --index $i" ;; esac
   done
+  # noinit (not in the report): the main-table runs with no gyro warm start at
+  # frame 0 -- R = 0, or Cook's small random R (2 deg/s per axis, seeds 42, 43);
+  # R carries over as always. 75 frames = the dissoc_1p5s runs, 150 = main_base.
+  # The folder suffix (_r0, _rrand2_s<seed>) keeps them apart in results/.
+  for s in boxes poster dynamic bicycle street; do
+    for m in cook thesis thesis_imu thesis_cmax thesis_cmax_v2; do
+      for d in 1.5 3.0; do
+        for ri in zero random:42 random:43; do
+          k=${ri/:/_s}; init="--r-init ${ri%%:*}"
+          [ "$ri" != "${ri#*:}" ] && init="$init --r-seed ${ri#*:}"
+          echo "noinit_${s}_${m}_${d/./p}s_$k|REPORT|$R --what main --duration $d $init --sequences $s --models $m --out noinit_${s}_${m}_${d/./p}s_$k.csv"
+        done
+      done
+    done
+  done
   # sweep2 (not in the report): wider one-axis sweeps of thesis and thesis+IMU,
   # two grids, the ratio law, and CMax-anchor's missing points; 1.5 s, into
   # experiments/sweep2/. Every axis leaves out the adopted value (config.py),

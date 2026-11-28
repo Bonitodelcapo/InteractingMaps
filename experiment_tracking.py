@@ -140,7 +140,7 @@ def read_config(output_dir):
 
 
 def find_run(root, dataset, model, segment_id, n_frames, params, dt=0.02, t_start=None,
-             n_iters=75, poisson='iterative', distortion_mode='C_full'):
+             n_iters=75, poisson='iterative', distortion_mode='C_full', r_init=None):
     """The run folder under root/dataset/model whose stored config matches.
 
     Matched on the stored config (run.json, or params.json for older runs), not
@@ -150,7 +150,9 @@ def find_run(root, dataset, model, segment_id, n_frames, params, dt=0.02, t_star
     a step size the run did not store counts as 0.0 (the regularisers were added
     later, off by default). Older runs store no segment_id or poisson; those
     come from the folder name and the default ('iterative'). An ambiguous match
-    is reported and the first folder is used.
+    is reported and the first folder is used. `r_init` is the frame-0 R config
+    of RunConfig.r_init_config ({} or None = the gyro warm start, which earlier
+    runs never stored).
     """
     import glob
     hits = []
@@ -167,6 +169,8 @@ def find_run(root, dataset, model, segment_id, n_frames, params, dt=0.02, t_star
                 and c.get('poisson', 'iterative') == poisson
                 and abs(c.get('frame_duration', 0) - dt) < 1e-9
                 and (t_start is None or abs(c.get('t_start', -1) - t_start) < 1e-9)
+                and all(c.get(k) == v for k, v in (r_init or {}).items())
+                and c.get('r_init', 'gyro') == (r_init or {}).get('r_init', 'gyro')
                 and all(abs(float(pr.get(k) or 0.0) - v) < 1e-9 for k, v in params.items())):
             hits.append(d)
     if len(hits) > 1:
