@@ -131,6 +131,12 @@ class InteractingMapsPersist(InteractingMapsThesis):
         self._n_frames_seen = 0
 
     def step(self, V, n_iters=50, omega_imu=None, events=None):
+        """One FRAME: Ǐ ← I (from the second call on), then n_iters iterations.
+
+        Unlike the base network, every call starts a new frame. Do not step this
+        network one iteration per call (`step(V, n_iters=1)` in a loop, as the
+        iteration-snapshot diagnostics do): Ǐ would be reset every iteration.
+        """
         if self._n_frames_seen > 0:
             # Martel: Ǐ = I(t − δt); I is NOT pre-warped — at the first
             # iteration of a frame I equals Ǐ, then the events and the costs

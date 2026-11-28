@@ -166,31 +166,39 @@ def solve_rotation_gn(I, Icheck, grad_Icheck, rays, cam, R0, n_max=20, tol=1e-8,
     step linearised in so(3) and applied as R ← compose(Δ, R). grad_Icheck is
     (gx, gy) of Ǐ, precomputed by the caller (Ǐ is fixed within a frame).
     Pixels whose warped position leaves the image, or outside `mask`, are
-    excluded. A rank-deficient system (e.g. a textureless Ǐ) gives the
-    minimum-norm step, so R does not move along unobserved directions; with
-    fewer than 3 usable pixels, or a non-finite result, R0 is returned.
+    excluded. A step that does not lower the mean squared residual is rejected
+    and the solve stops there (so unrelated, noise-like images cannot drag R
+    to an arbitrary rotation, and do not cost n_max iterations). A
+    rank-deficient system (e.g. a textureless Ǐ) gives the minimum-norm step,
+    so R does not move along unobserved directions; with fewer than 3 usable
+    pixels, or a non-finite result, R0 is returned.
     """
     gx, gy = grad_Icheck
-    R = np.asarray(R0, np.float64).copy()
-    for _ in range(n_max):
+    R0 = np.asarray(R0, np.float64)
+    R, best_R, best_cost = R0.copy(), R0.copy(), np.inf
+    for _ in range(n_max + 1):
         u, v = warp_coords(rays, R, cam)
         Iw, valid = bilinear_sample(Icheck, u, v)
         if mask is not None:
             valid &= mask
-        if valid.sum() < 3:
-            return np.asarray(R0, np.float64).copy()
-        gxw, _ = bilinear_sample(gx, u, v)
-        gyw, _ = bilinear_sample(gy, u, v)
+        if valid.sum() < 3 or not np.isfinite(R).all():
+            return best_R if np.isfinite(best_cost) else R0.copy()
+        rho = (I - Iw)[valid]
+        cost = np.mean(rho ** 2)
+        if cost >= best_cost:
+            return best_R                       # step did not help: reject it
+        best_R, best_cost = R, cost
+        if _ == n_max:
+            break
+        gxw, _g = bilinear_sample(gx, u, v)
+        gyw, _g = bilinear_sample(gy, u, v)
         Jt = warp_jacobian(rays, R, cam)                       # (H, W, 2, 3)
         J = -(gxw[..., None] * Jt[..., 0, :] + gyw[..., None] * Jt[..., 1, :])
-        rho = (I - Iw)[valid]
         delta = np.linalg.lstsq(J[valid], -rho, rcond=1e-10)[0]
-        R = compose(delta, R)
-        if not np.isfinite(R).all():
-            return np.asarray(R0, np.float64).copy()
         if np.linalg.norm(delta) < tol:
             break
-    return R
+        R = compose(delta, R)
+    return best_R
 
 
 def block_match(I, Icheck, half_block=3, radius=4):

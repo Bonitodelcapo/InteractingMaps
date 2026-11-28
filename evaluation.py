@@ -51,7 +51,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from config import DATASET_SEGMENTS, get_dataset_paths
+from config import DATASET_SEGMENTS, PERSIST_MODELS, get_dataset_paths
 from interacting_maps.data_loader import EventFrameSequence
 import experiment_tracking as run_store
 
@@ -547,6 +547,12 @@ def experiment_make_videos_batch(base_dir='results', fps=15):
 def experiment_basin_of_attraction(rc: RunConfig, frame_idx=0):
     """Initialize R at various distances from GT — does it converge?"""
     print("\n" + "="*70)
+    if rc.model in PERSIST_MODELS:
+        # Each perturbation steps a fresh network ONCE, i.e. frame 0, where the
+        # persistence / block-matching costs are off by design (no previous
+        # image). Running it would report the thesis basin under a new label.
+        raise ValueError(f"exp 6 does not apply to {rc.model!r}: its basin runs "
+                         f"one frame, where the cross-frame costs are inactive")
     print("EXPERIMENT 6: Basin of Attraction")
     print(f"  Config: {rc}")
     print("="*70)

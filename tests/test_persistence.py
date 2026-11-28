@@ -141,6 +141,24 @@ def check_gn_identical_images():
     assert np.linalg.norm(R) < 1e-4, f"I == Ǐ should give R* ≈ 0, got {R}"
 
 
+def _mean_cost(I, Ic, cam, R):
+    vals, valid = bilinear_sample(Ic, *warp_coords(pixel_rays(H, W, cam), R, cam))
+    return np.mean((I - vals)[valid] ** 2)
+
+
+def check_gn_noise_no_cost_increase():
+    """Unrelated, noise-like images (a network I early in a frame): the solve
+    must not end at a rotation with a higher cost than where it started."""
+    _, camd = _cams()
+    rng = np.random.default_rng(3)
+    I = gaussian_filter(rng.random((H, W)), 1.0)
+    Ic = gaussian_filter(rng.random((H, W)), 1.0)
+    R0 = np.array([0.002, -0.001, 0.001])
+    R = _gn(I, Ic, camd, R0)
+    c0, c1 = _mean_cost(I, Ic, camd, R0), _mean_cost(I, Ic, camd, R)
+    assert c1 <= c0 + 1e-15, f"cost rose {c0:.6e} -> {c1:.6e}, R moved {np.linalg.norm(R - R0):.2e}"
+
+
 def check_gn_flat_reference():
     _, camd = _cams()
     flat = np.ones((H, W))
@@ -287,6 +305,21 @@ def check_sweep_columns():
     assert X._sweep_columns('thesis_persist') == want, "persist sweep header wrong"
 
 
+def check_exp6_refuses_persist():
+    """The basin test steps a fresh network once: frame 0, where the new costs
+    are off by design. It must refuse rather than report the thesis basin."""
+    import evaluation as E
+    from run_config import RunConfig
+    for m in PERSIST_MODELS:
+        try:
+            E.experiment_basin_of_attraction(RunConfig(model=m, **_RC), frame_idx=1)
+        except ValueError:
+            continue
+        finally:
+            shutil.rmtree(OUT_ROOT, ignore_errors=True)
+        raise AssertionError(f"exp 6 ran {m} (new costs never active)")
+
+
 def check_smoke_runs():
     import evaluation as E
     from run_config import RunConfig
@@ -310,6 +343,7 @@ CHECKS = [
     check_gn_known_rotation,
     check_gn_identical_images,
     check_gn_flat_reference,
+    check_gn_noise_no_cost_increase,
     check_bm_shift,
     check_bm_flat_zero,
     check_frame0_equals_thesis,
@@ -319,6 +353,7 @@ CHECKS = [
     check_old_model_rejects_persist_delta,
     check_old_output_dir_unchanged,
     check_sweep_columns,
+    check_exp6_refuses_persist,
     check_smoke_runs,
 ]
 
