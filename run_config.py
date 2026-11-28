@@ -11,11 +11,12 @@ import numpy as np
 
 from config import (DATASET_CONFIGS, DATASET_SEGMENTS, THESIS_PARAMS, COOK_PARAMS,
                     ITERS_PER_FRAME, DISTORTION_MODE, POISSON_MODE,
-                    get_dataset_paths)
+                    PERSIST_MODELS, PERSIST_PARAMS, get_dataset_paths)
 import experiment_tracking
 from interacting_maps.eval_io import load_imu, get_gyro_for_frame, load_aps_list
 from interacting_maps.network import InteractingMaps
 from interacting_maps.network_dissertation import InteractingMapsThesis
+from interacting_maps.network_persistence import InteractingMapsPersist
 
 
 # ===========================================================================
@@ -74,6 +75,9 @@ class RunConfig:
         self.cmax_lr = 1e-4         # V2 ascent step. STABLE range ~[1e-5, 1e-4];
                                     # ≳5e-4 diverges. Scales with event count² —
                                     # lower it for denser streams (see cmax.md).
+        # Persistence network (third type): which of Martel's cross-frame costs.
+        self.use_persistence = model in ('thesis_persist', 'thesis_persist_bm')
+        self.use_block_matching = model in ('thesis_bm', 'thesis_persist_bm')
         if model == 'cook':
             self.params = COOK_PARAMS.copy()
             self.use_thesis = False
@@ -91,6 +95,11 @@ class RunConfig:
             self.use_thesis = True
             self.use_imu = True     # Cost_IMU is the anchor; target = ω_cmax
             self.use_cmax = True
+        elif model in PERSIST_MODELS:
+            # Thesis network + persistence and/or block matching, no anchor.
+            self.params = {**THESIS_PARAMS, **PERSIST_PARAMS}
+            self.use_thesis = True
+            self.use_imu = False
         elif model == 'thesis_cmax_v2':
             # V2: CMax is the per-iteration R update INSIDE the message passing.
             # Kinematics updates F only; no IMU. Events loaded per frame (B1).
@@ -153,7 +162,9 @@ class RunConfig:
         # Any OTHER relaxation rate that deviates from this model's defaults,
         # so a sweep over the remaining deltas cannot overwrite a run that
         # differs only in a parameter the name above does not carry.
-        base = COOK_PARAMS if self.model == 'cook' else THESIS_PARAMS
+        base = (COOK_PARAMS if self.model == 'cook' else
+                {**THESIS_PARAMS, **PERSIST_PARAMS} if self.model in PERSIST_MODELS
+                else THESIS_PARAMS)
         extra = [f"{k.replace('delta_', '')}{v:g}"
                  for k, v in sorted(self.params.items())
                  if k not in ('delta_FR', 'delta_IMU') and base.get(k) != v]
@@ -223,7 +234,18 @@ def make_network(rc: RunConfig, H, W, fx, fy, cx, cy):
     else:
         raise ValueError(f"Unknown distortion_mode: {mode}")
 
-    if rc.use_thesis:
+    if rc.model in PERSIST_MODELS:
+        net = InteractingMapsPersist(
+            H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
+            frame_duration=rc.frame_duration,
+            dist_coeffs=dist_coeffs,
+            poisson=getattr(rc, 'poisson', 'iterative'),
+            use_persistence=rc.use_persistence,
+            use_block_matching=rc.use_block_matching,
+            **rc.params
+        )
+        net.initialize_from_rotation(rc.initial_R)
+    elif rc.use_thesis:
         net = InteractingMapsThesis(
             H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy,
             frame_duration=rc.frame_duration,

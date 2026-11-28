@@ -638,7 +638,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--model', type=str, default='thesis_imu',
                         choices=['cook', 'thesis', 'thesis_imu', 'thesis_cmax',
-                                 'thesis_cmax_v2', 'all'])
+                                 'thesis_cmax_v2', 'thesis_persist', 'thesis_bm',
+                                 'thesis_persist_bm', 'all'])
     parser.add_argument('--segment', type=str, default=None,       # ← NEU
                         help='Segment ID (z.B. seg_A, seg_B)')
     parser.add_argument('--n_frames', type=int, default=None)

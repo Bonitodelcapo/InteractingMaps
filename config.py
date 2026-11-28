@@ -205,6 +205,23 @@ COOK_PARAMS = dict(
     delta_curl=0.0,     # integrability prior on G (ours); 0 = as published
 )
 
+# Persistence / block-matching network (Martel 2019 §6.5, §6.8.3), a third
+# network type: interacting_maps/network_persistence.py. Spec:
+# docs/superpowers/specs/2026-11-28-persistence-block-matching-design.md.
+# Merged on top of THESIS_PARAMS for these models only.
+PERSIST_MODELS = ('thesis_persist', 'thesis_bm', 'thesis_persist_bm')
+PERSIST_PARAMS = dict(
+    delta_persist_R=0.10,  # R toward the Gauss-Newton rotation R* (like delta_FR)
+    eta_persist_I=0.05,    # I toward Ǐ warped by R (Eq. 6.100)
+    delta_BM=0.05,         # F toward the block-matching flow F' (Fig. 6.17)
+    bm_half_block=3,       # 7x7 blocks
+    bm_radius=4,           # search +-4 px/frame (flow is a few px at 20 ms)
+    gn_iters=20,           # Gauss-Newton cap per network iteration
+    gn_tol=1e-8,           # Gauss-Newton stop: |step| in rad
+)
+#: the PERSIST_PARAMS a sweep may vary (columns only for PERSIST_MODELS)
+PERSIST_DELTAS = ['delta_persist_R', 'eta_persist_I', 'delta_BM']
+
 ITERS_PER_FRAME = 75   # Thesis use 50-75; 
 
 # Distortion handling (ablation switch):

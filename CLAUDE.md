@@ -37,7 +37,9 @@ command of `report/run_experiments.py` instead (see the report workflow below):
 python evaluation.py --exp 2 --dataset boxes_rotation --model thesis_imu --segment seg_A
 ```
 
-- `--model`: `cook`, `thesis`, `thesis_imu`, `thesis_cmax`, `thesis_cmax_v2`, `all`.
+- `--model`: `cook`, `thesis`, `thesis_imu`, `thesis_cmax`, `thesis_cmax_v2`, `all`;
+  plus the persistence network (Martel §6.5/§6.8.3, `interacting_maps/network_persistence.py`):
+  `thesis_persist`, `thesis_bm`, `thesis_persist_bm` (`config.PERSIST_PARAMS`).
 - `--exp 2` = multi-frame tracking (the core experiment → `tracking.csv`,
   `run.json`, `tracking_plot.png`, per-frame panels unless `--no-frames`);
   `5` = MP4s from saved frames; `6` = basin of attraction; `9` = distortion ablation.

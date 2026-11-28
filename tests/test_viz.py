@@ -26,10 +26,11 @@ def check(name, ok, detail=''):
 
 def test_style():
     print('style.py')
-    check('five models with name and colour',
-          set(style.MODELS) == {'cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2'})
+    check('eight models with name and colour',
+          set(style.MODELS) == {'cook', 'thesis', 'thesis_imu', 'thesis_cmax', 'thesis_cmax_v2',
+                                'thesis_persist', 'thesis_bm', 'thesis_persist_bm'})
     check('thesis_imu is thesis+IMU', style.MODELS['thesis_imu'][0] == 'thesis+IMU')
-    check('model colours are distinct', len({c for _, c in style.MODELS.values()}) == 5)
+    check('model colours are distinct', len({c for _, c in style.MODELS.values()}) == len(style.MODELS))
     check('frame_times are midpoints',
           np.allclose(style.frame_times(0.02, 3), [0.01, 0.03, 0.05]))
     check('to_deg_s converts pi rad/s', np.isclose(style.to_deg_s(np.pi), 180.0))

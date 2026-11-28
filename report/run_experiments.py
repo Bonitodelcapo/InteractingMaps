@@ -53,6 +53,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import experiment_tracking  # merged run.json reader (after sys.path points at ROOT)
+from config import PERSIST_DELTAS, PERSIST_MODELS
 from interacting_maps.style import PAPER_WIDE, use_style, save
 from interacting_maps.viz import draw_map, map_scale, net_maps
 from interacting_maps.metrics import abs_corr, crop_interior
@@ -96,12 +97,26 @@ def _parse_vary(spec):
             axes.append((name, [v.strip() for v in vals.split(',')]))
         elif name == 'n_iters':
             axes.append((name, [int(v) for v in vals.split(',')]))
-        elif name in ALL_DELTAS + ['dt']:
+        elif name in ALL_DELTAS + PERSIST_DELTAS + ['dt']:
             axes.append((name, [float(v) for v in vals.split(',')]))
         else:
             raise SystemExit(f"unknown sweep axis {name!r}; choose from "
-                             f"{ALL_DELTAS + ['dt', 'n_iters', 'poisson']}")
+                             f"{ALL_DELTAS + PERSIST_DELTAS + ['dt', 'n_iters', 'poisson']}")
     return axes
+
+
+def _sweep_deltas(model):
+    """The delta columns of a sweep: the persistence ones only for its models,
+    so the csvs of the other models keep exactly their columns."""
+    return ALL_DELTAS + (PERSIST_DELTAS if model in PERSIST_MODELS else [])
+
+
+def _sweep_columns(model):
+    """Header of cmd_sweep's csv for `model`."""
+    return (['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'n_iters',
+             'poisson'] + _sweep_deltas(model) + ['err', 'median', 'dir', 'beta',
+            'low_freq', 'contrast', 'curl', 'recon_mean', 'recon_min',
+            'recon_inloop', 'recon_inloop_min', 'blowup', 'secs'])
 
 
 def _points(axes, mode, base):
@@ -360,11 +375,7 @@ def cmd_sweep(E, args):
     path = os.path.join(root, args.out or 'sweep.csv')
     f = open(path, 'w', newline='', encoding='utf-8')
     wr = csv.writer(f)
-    cols = ['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'n_iters',
-            'poisson'] + ALL_DELTAS + ['err', 'median', 'dir', 'beta',
-            'low_freq', 'contrast', 'curl', 'recon_mean', 'recon_min',
-            'recon_inloop', 'recon_inloop_min', 'blowup', 'secs']
-    wr.writerow(cols)
+    wr.writerow(_sweep_columns(args.model))
     print(f"{len(pts)} configs x {len(seqs)} sequences = {len(pts)*len(seqs)} runs "
           f"| {args.duration:.1f}s tracked, C_full, {args.model}", flush=True)
     for i, pt in enumerate(pts):
@@ -382,7 +393,7 @@ def cmd_sweep(E, args):
                 s, secs = _run(E, rc, not args.no_frames, args.frame_stride)
                 wr.writerow([ds, sid, args.model, round(dt*1000, 1), nfr,
                              rc.n_iters, rc.poisson]
-                            + [rc.params.get(d, '') for d in ALL_DELTAS]
+                            + [rc.params.get(d, '') for d in _sweep_deltas(args.model)]
                             + [round(s['mean_err_deg_s'], 2),
                                round(s['median_err_deg_s'], 2),
                                round(s['mean_dir_err_deg'], 2),

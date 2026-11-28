@@ -23,6 +23,9 @@ MODELS = {
     'thesis_imu':     ('thesis+IMU',  '#009E73'),
     'thesis_cmax':    ('CMax-anchor', '#0072B2'),
     'thesis_cmax_v2': ('CMax-inloop', '#CC79A7'),
+    'thesis_persist':    ('persistence', '#56B4E9'),
+    'thesis_bm':         ('block-match', '#F0E442'),
+    'thesis_persist_bm': ('persist+BM',  '#000000'),
 }
 OMEGA_AXIS_COLORS = ('#4e79a7', '#f28e2b', '#e15759')
 REF_STYLE = dict(color='k', lw=1.2, ls='-')

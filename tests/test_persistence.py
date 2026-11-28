@@ -219,6 +219,88 @@ def check_thesis_untouched():
     assert ND.InteractingMapsThesis.step is _THESIS_STEP
 
 
+# ------------------------------------------------------ Task 5: harness wiring
+import shutil
+from config import PERSIST_MODELS, PERSIST_DELTAS
+
+OUT_ROOT = 'experiments/persist_test'
+_RC = dict(dataset=DATASET, segment='seg_C', n_frames=3, n_iters=10, out_root=OUT_ROOT)
+
+# Captured from the code before the wiring (commit ed90de0); must not change.
+OLD_DIRS = {
+    'thesis': os.path.join(OUT_ROOT, DATASET, 'thesis',
+                           'seg_C_t8.816_dt20ms_n3_i10_dFR0.10_C_full'),
+    'thesis_imu': os.path.join(OUT_ROOT, DATASET, 'thesis_imu',
+                               'seg_C_t8.816_dt20ms_n3_i10_dimu0.50_dFR0.10_C_full'),
+}
+OLD_SWEEP_COLS = (['sequence', 'segment', 'model', 'dt_ms', 'n_frames', 'n_iters', 'poisson',
+                   'delta_VFG', 'delta_IG', 'delta_GI', 'delta_RF', 'delta_FR',
+                   'delta_IMU', 'delta_curl', 'delta_map', 'delta_shrinkI']
+                  + ['err', 'median', 'dir', 'beta', 'low_freq', 'contrast', 'curl',
+                     'recon_mean', 'recon_min', 'recon_inloop', 'recon_inloop_min',
+                     'blowup', 'secs'])
+
+
+def _run_experiments():
+    sys.path.insert(0, 'report')
+    import run_experiments
+    return run_experiments
+
+
+def check_runconfig_models():
+    from run_config import RunConfig
+    for m in PERSIST_MODELS:
+        rc = RunConfig(model=m, **_RC)
+        assert rc.use_thesis and not rc.use_imu, f"{m}: wrong thesis/imu flags"
+        assert rc.use_persistence == ('persist' in m), f"{m}: use_persistence"
+        assert rc.use_block_matching == m.endswith('bm'), f"{m}: use_block_matching"
+        name = os.path.basename(rc.output_dir)
+        assert name == 'seg_C_t8.816_dt20ms_n3_i10_dFR0.10_C_full', f"{m}: suffix in {name}"
+        assert rc.output_dir.startswith('experiments'), rc.output_dir
+    for m in ('thesis', 'thesis_imu', 'cook'):
+        rc = RunConfig(model=m, **_RC)
+        assert not rc.use_persistence and not rc.use_block_matching, f"{m}: flags set"
+
+
+def check_old_model_rejects_persist_delta():
+    from run_config import RunConfig
+    try:
+        RunConfig(model='thesis', deltas={'delta_BM': 0.1}, **_RC)
+    except ValueError:
+        return
+    raise AssertionError("thesis accepted delta_BM")
+
+
+def check_old_output_dir_unchanged():
+    from run_config import RunConfig
+    for m, d in OLD_DIRS.items():
+        got = RunConfig(model=m, **_RC).output_dir
+        assert got == d, f"{m}: {got} != {d}"
+
+
+def check_sweep_columns():
+    X = _run_experiments()
+    assert X._parse_vary('delta_BM=0.1,0.2') == [('delta_BM', [0.1, 0.2])]
+    assert X._sweep_columns('thesis') == OLD_SWEEP_COLS, "old sweep header changed"
+    i = OLD_SWEEP_COLS.index('delta_shrinkI') + 1
+    want = OLD_SWEEP_COLS[:i] + PERSIST_DELTAS + OLD_SWEEP_COLS[i:]
+    assert X._sweep_columns('thesis_persist') == want, "persist sweep header wrong"
+
+
+def check_smoke_runs():
+    import evaluation as E
+    from run_config import RunConfig
+    try:
+        for m in PERSIST_MODELS:
+            rc = RunConfig(model=m, **_RC)
+            s = E.experiment_tracking(rc, save_frames=False)
+            assert np.isfinite(s['mean_err_deg_s']), f"{m}: non-finite error"
+            for f in ('run.json', 'tracking.csv'):
+                assert os.path.exists(os.path.join(rc.output_dir, f)), f"{m}: no {f}"
+    finally:
+        shutil.rmtree(OUT_ROOT, ignore_errors=True)
+
+
 CHECKS = [
     check_warp_identity,
     check_warp_matches_C,
@@ -233,6 +315,11 @@ CHECKS = [
     check_frame0_equals_thesis,
     check_frame1_reference,
     check_thesis_untouched,
+    check_runconfig_models,
+    check_old_model_rejects_persist_delta,
+    check_old_output_dir_unchanged,
+    check_sweep_columns,
+    check_smoke_runs,
 ]
 
 
