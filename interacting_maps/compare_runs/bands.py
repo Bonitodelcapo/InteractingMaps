@@ -79,10 +79,14 @@ def _t(df, dt):
 
 
 def _references(ax, runs, axis):
-    """Reference and IMU of ω_axis, once per distinct segment."""
+    """Reference and IMU of ω_axis, once per distinct segment, from its longest run."""
+    def span(r):
+        return len(outputs.read_tracking(r.row.folder)) * r.row['dt']
     first = {}
     for r in runs:
-        first.setdefault(_segment(r), r)
+        seg = _segment(r)
+        if seg not in first or span(r) > span(first[seg]):
+            first[seg] = r
     for i, (seg, r) in enumerate(first.items()):
         df = outputs.read_tracking(r.row.folder)
         t = _t(df, r.row['dt'])
