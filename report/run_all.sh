@@ -173,6 +173,29 @@ runs() {   # one line per independent run: "name|group|command"
       echo "stale_basin_${d% *}_$it|REPORT|python evaluation.py --exp 6 --model thesis --dataset ${d% *} --segment ${d#* } --frame 20 --n_iters $it --out-root experiments/stale_basin"
     done
   done
+  # persist (not in the report): Martel's persistence / block-matching network
+  # (interacting_maps/network_persistence.py) vs the existing models, 1.5 s,
+  # into experiments/persist/. ref_*: the existing models at the adopted
+  # params (n_iters=75 is the default, so it is the reference point) in the
+  # same root, for a like-for-like comparison. iters_*: each new model at its
+  # defaults (75) and at 300. The delta axes leave out the defaults
+  # (config.PERSIST_PARAMS), so no two jobs write one run directory.
+  # exp 6 refuses these models (its basin runs one frame, costs inactive).
+  PS="$R --what sweep --name persist --duration 1.5"
+  for s in boxes poster dynamic bicycle street; do
+    for m in thesis thesis_imu thesis_cmax; do
+      echo "persist_ref_${m}_$s|REPORT|$PS --mode coord --model $m --sequences $s --vary 'n_iters=75' --out persist_ref_${m}_$s.csv"
+    done
+    for m in thesis_persist thesis_bm thesis_persist_bm; do
+      echo "persist_${m}_${s}_iters|REPORT|$PS --mode coord --model $m --sequences $s --vary 'n_iters=75,300' --out persist_${m}_${s}_iters.csv"
+      echo "persist_${m}_${s}_dt|REPORT|$PS --mode coord --model $m --sequences $s --vary 'dt=0.01,0.04' --out persist_${m}_${s}_dt.csv"
+    done
+    # persistence: R pull and I pull (eta=0: R side only, I free of Ǐ)
+    echo "persist_thesis_persist_${s}_R|REPORT|$PS --mode coord --model thesis_persist --sequences $s --vary 'delta_persist_R=0.03,0.3,1.0' --out persist_thesis_persist_${s}_R.csv"
+    echo "persist_thesis_persist_${s}_I|REPORT|$PS --mode coord --model thesis_persist --sequences $s --vary 'eta_persist_I=0,0.02,0.2' --out persist_thesis_persist_${s}_I.csv"
+    # block matching: F pull
+    echo "persist_thesis_bm_${s}_BM|REPORT|$PS --mode coord --model thesis_bm --sequences $s --vary 'delta_BM=0.02,0.2,0.5' --out persist_thesis_bm_${s}_BM.csv"
+  done
   # OFCE step-instability diagnostic (not in the report): one job per variant.
   for v in $OFCE_VARIANTS; do
     echo "ofce_$v|DIAG|python diag_omega_ladder.py --mode ofce --variant $v"
